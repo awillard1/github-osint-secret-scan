@@ -44,17 +44,22 @@ def recommended_install_command(package_manager: str | None, commands: tuple[str
     return f"Install manually: {package_list}"
 
 
-def bootstrap(settings: Settings, create_venv: bool = False, install_dev: bool = False) -> dict[str, object]:
+def bootstrap(
+    settings: Settings,
+    create_venv: bool = False,
+    install_dev: bool = False,
+    verify_only: bool = False,
+) -> dict[str, object]:
     settings.ensure_data_dir()
     package_manager = detect_package_manager()
     repo_root = Path(__file__).resolve().parents[2]
     venv_path = repo_root / ".venv"
 
-    if create_venv and not venv_path.exists():
+    if create_venv and not verify_only and not venv_path.exists():
         venv.EnvBuilder(with_pip=True).create(venv_path)
 
     install_result = None
-    if install_dev:
+    if install_dev and not verify_only:
         python_bin = venv_path / "bin" / "python"
         if not python_bin.exists():
             python_bin = Path(sys.executable)
@@ -74,7 +79,14 @@ def bootstrap(settings: Settings, create_venv: bool = False, install_dev: bool =
         "recommended_install": recommended_install_command(package_manager, REQUIRED_COMMANDS),
         "optional_install_notes": OPTIONAL_INSTALL_NOTES,
         "venv_path": str(venv_path),
+        "venv_exists": venv_path.exists(),
         "install_returncode": None if install_result is None else install_result.returncode,
+        "mode": "verify-only" if verify_only else "install",
         "database_url": settings.database_url,
         "data_dir": str(settings.data_dir),
+        "next_steps": [
+            "Create and activate the virtual environment." if not venv_path.exists() else "Activate the existing virtual environment.",
+            "Install the package with development dependencies." if not verify_only else "Install missing dependencies, then rerun verification.",
+            "Run `orgscan init-db` or `orgscan setup --init-db` to initialize local storage.",
+        ],
     }

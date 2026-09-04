@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from datetime import date
+from hashlib import sha256
 from pathlib import Path
 from enum import StrEnum
 
@@ -16,6 +18,7 @@ from orgscan.logging_config import setup_logging
 from orgscan.models import Finding
 from orgscan.repositories import Storage
 from orgscan.reporting import build_summary, finding_rows, write_csv, write_html, write_json
+from orgscan.scoring import calculate_risk_score
 from orgscan.schemas import CanonicalFinding
 from orgscan.scanners import ScannerExecutionError, get_scanner
 
@@ -36,12 +39,21 @@ class ScanTargetType(StrEnum):
 class DiscoverTargetType(StrEnum):
     REPOSITORY = "repository"
     ORGANIZATION = "organization"
+    DOMAIN = "domain"
 
 
 class ExportFormat(StrEnum):
     JSON = "json"
     CSV = "csv"
     HTML = "html"
+
+
+class FindingWorkflowStatus(StrEnum):
+    OPEN = "open"
+    TRIAGED = "triaged"
+    RESOLVED = "resolved"
+    SUPPRESSED = "suppressed"
+    ACCEPTED_RISK = "accepted_risk"
 
 
 def _settings() -> Settings:
@@ -66,18 +78,12 @@ def _serialize_finding(finding: Finding) -> dict[str, object]:
         "fingerprint": finding.fingerprint,
         "repository_id": finding.repository_id,
         "scan_job_id": finding.scan_job_id,
+        "triage_state": finding.triage_state,
+        "triage_owner": finding.triage_owner,
+        "triage_notes": finding.triage_notes,
+        "remediation_due_date": finding.remediation_due_date.isoformat() if finding.remediation_due_date else None,
         "detected_at": finding.detected_at.isoformat(),
     }
-
-
-def _risk_score_for_severity(severity: str) -> float:
-    return {
-        "critical": 95.0,
-        "high": 80.0,
-        "medium": 55.0,
-        "low": 25.0,
-        "info": 10.0,
-    }.get(severity, 10.0)
 
 
 def _write_export(output_path: Path, export_format: ExportFormat, summary: dict[str, object], rows: list[dict[str, object]]) -> Path:
@@ -88,13 +94,29 @@ def _write_export(output_path: Path, export_format: ExportFormat, summary: dict[
     return write_html(output_path, summary, rows)
 
 
+def _domain_hash(*parts: str) -> str:
+    return sha256("::".join(parts).encode("utf-8")).hexdigest()
+
+
+def _parse_due_date(value: str | None) -> date | None:
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise typer.BadParameter("Due dates must use YYYY-MM-DD format.") from exc
+
+
 @app.command("setup")
 def setup(
     init_database: bool = typer.Option(False, "--init-db", help="Initialize the configured database."),
+    create_venv: bool = typer.Option(False, "--create-venv", help="Create a local virtual environment."),
+    install_dev: bool = typer.Option(False, "--install-dev", help="Install the editable package with development dependencies."),
+    verify_only: bool = typer.Option(False, "--verify-only", help="Only verify dependencies and print next steps."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
-    details = bootstrap(settings)
+    details = bootstrap(settings, create_venv=create_venv, install_dev=install_dev, verify_only=verify_only)
     if init_database:
         init_db(settings.database_url)
         details["database_initialized"] = True
@@ -117,6 +139,9 @@ def setup(
     typer.echo("optional_install_notes:")
     for command, note in details["optional_install_notes"].items():
         typer.echo(f"  - {command}: {note}")
+    typer.echo("next_steps:")
+    for step in details["next_steps"]:
+        typer.echo(f"  - {step}")
     if init_database:
         typer.echo("database initialized")
 
@@ -199,6 +224,64 @@ def discover(
     client = GitHubDiscoveryClient(settings)
     session_factory = create_session_factory(settings.database_url)
 
+    with session_factory() as session:
+        storage = Storage(session)
+        discovered_repositories: list[str] = []
+        discovered_accounts: list[str] = []
+        organization_names: set[str] = set()
+        discovered_domain_exposures: list[str] = []
+        discovered_identity_correlations: list[str] = []
+
+        if target_type == DiscoverTargetType.DOMAIN:
+            domain_record, _ = storage.get_or_create_domain(value)
+            needle = value.lower()
+            for repository in storage.list_repositories():
+                haystacks = [
+                    repository.full_name.lower(),
+                    (repository.url or "").lower(),
+                    json.dumps(repository.metadata_json).lower(),
+                ]
+                if any(needle in haystack for haystack in haystacks):
+                    summary = f"Repository metadata references domain {value}: {repository.full_name}"
+                    storage.create_domain_exposure(
+                        domain_record.id,
+                        source="github-metadata",
+                        source_name="discover-domain",
+                        result_summary=summary,
+                        normalized_hash=_domain_hash("repo", value, repository.full_name),
+                        source_class="free",
+                        confidence="likely",
+                        severity="low",
+                    )
+                    discovered_domain_exposures.append(summary)
+            for account in storage.list_accounts():
+                if account.email and account.email.lower().endswith(f"@{needle}"):
+                    storage.create_identity_correlation(
+                        domain_record.id,
+                        source="github-metadata",
+                        relation_type="email-domain-match",
+                        email=account.email,
+                        username=account.username,
+                        confidence="likely",
+                        evidence_reference=account.email,
+                    )
+                    discovered_identity_correlations.append(account.username)
+            session.commit()
+            result = {
+                "target_type": target_type.value,
+                "value": value,
+                "domain_exposures": discovered_domain_exposures,
+                "identity_correlations": discovered_identity_correlations,
+            }
+            if json_output:
+                typer.echo(json.dumps(result, indent=2))
+            else:
+                typer.echo(
+                    f"Correlated domain {value}: "
+                    f"{len(discovered_domain_exposures)} exposure(s), {len(discovered_identity_correlations)} identity correlation(s)."
+                )
+            return
+
     try:
         records = (
             [client.fetch_repository(value)]
@@ -211,9 +294,9 @@ def discover(
 
     with session_factory() as session:
         storage = Storage(session)
-        discovered_repositories: list[str] = []
-        discovered_accounts: list[str] = []
-        organization_names: set[str] = set()
+        discovered_repositories = []
+        discovered_accounts = []
+        organization_names = set()
 
         for record in records:
             organization_id = None
@@ -292,6 +375,9 @@ def discover(
 def findings(
     limit: int = typer.Option(50, "--limit", min=1, help="Maximum number of findings to display."),
     status: str | None = typer.Option(None, "--status", help="Optional finding status filter."),
+    category: str | None = typer.Option(None, "--category", help="Optional finding category filter."),
+    severity: str | None = typer.Option(None, "--severity", help="Optional finding severity filter."),
+    confidence: str | None = typer.Option(None, "--confidence", help="Optional finding confidence filter."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
@@ -300,7 +386,13 @@ def findings(
 
     with session_factory() as session:
         storage = Storage(session)
-        rows = storage.list_findings(limit=limit, status=status)
+        rows = storage.list_findings(
+            limit=limit,
+            status=status,
+            category=category,
+            severity=severity,
+            confidence=confidence,
+        )
 
     if json_output:
         typer.echo(json.dumps([_serialize_finding(row) for row in rows], indent=2, default=str))
@@ -313,8 +405,123 @@ def findings(
     for row in rows:
         typer.echo(
             f"[{row.severity}/{row.confidence}] {row.title} "
-            f"(id={row.id}, category={row.category}, status={row.status})"
+            f"(id={row.id}, category={row.category}, status={row.status}, triage={row.triage_state})"
         )
+
+
+@app.command("triage")
+def triage(
+    finding_id: int,
+    status: FindingWorkflowStatus = typer.Option(..., "--status", help="Updated workflow status for the finding."),
+    triage_state: str = typer.Option("reviewed", "--triage-state", help="Free-form triage state label."),
+    owner: str | None = typer.Option(None, "--owner", help="Assigned owner for remediation."),
+    note: str | None = typer.Option(None, "--note", help="Triage notes for the finding."),
+    due_date: str | None = typer.Option(None, "--due-date", help="Optional remediation due date (YYYY-MM-DD)."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        try:
+            finding = storage.update_finding_triage(
+                finding_id,
+                status=status.value,
+                triage_state=triage_state,
+                triage_owner=owner,
+                triage_notes=note,
+                remediation_due_date=_parse_due_date(due_date),
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        session.commit()
+
+    typer.echo(
+        f"Updated finding {finding.id}: status={finding.status}, triage_state={finding.triage_state}, "
+        f"owner={finding.triage_owner or 'unassigned'}"
+    )
+
+
+@app.command("suppress")
+def suppress(
+    finding_id: int,
+    reason: str = typer.Option(..., "--reason", help="Reason for suppressing the finding."),
+    owner: str | None = typer.Option(None, "--owner", help="Owner recording the suppression."),
+    note: str | None = typer.Option(None, "--note", help="Additional suppression notes."),
+    due_date: str | None = typer.Option(None, "--due-date", help="Optional review date (YYYY-MM-DD)."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        try:
+            finding = storage.suppress_finding(
+                finding_id,
+                reason=reason,
+                owner=owner,
+                deadline=_parse_due_date(due_date),
+                notes=note,
+                status=FindingWorkflowStatus.SUPPRESSED.value,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        session.commit()
+
+    typer.echo(f"Suppressed finding {finding.id}")
+
+
+@app.command("accept-risk")
+def accept_risk(
+    finding_id: int,
+    reason: str = typer.Option(..., "--reason", help="Reason for accepting the risk."),
+    owner: str | None = typer.Option(None, "--owner", help="Owner accepting the risk."),
+    note: str | None = typer.Option(None, "--note", help="Additional acceptance notes."),
+    due_date: str | None = typer.Option(None, "--due-date", help="Optional review date (YYYY-MM-DD)."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        try:
+            finding = storage.suppress_finding(
+                finding_id,
+                reason=reason,
+                owner=owner,
+                deadline=_parse_due_date(due_date),
+                notes=note,
+                status="accepted_risk",
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        session.commit()
+
+    typer.echo(f"Accepted risk for finding {finding.id}")
+
+
+@app.command("unsuppress")
+def unsuppress(
+    finding_id: int,
+    note: str | None = typer.Option(None, "--note", help="Optional note explaining why the finding was reopened."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        try:
+            finding = storage.update_finding_triage(
+                finding_id,
+                status=FindingWorkflowStatus.OPEN.value,
+                triage_state="reopened",
+                triage_notes=note,
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        session.commit()
+
+    typer.echo(f"Reopened finding {finding.id}")
 
 
 @app.command("report")
@@ -405,7 +612,11 @@ def scan(
                         severity=match.severity,
                         confidence=match.confidence,
                         remediation_hint=match.remediation_hint,
-                        risk_score=_risk_score_for_severity(match.severity),
+                        risk_score=calculate_risk_score(
+                            severity=str(match.severity),
+                            confidence=str(match.confidence),
+                            source_class="internal",
+                        ),
                         raw_payload=match.raw_payload,
                         metadata=match.metadata,
                         organization_id=organization_id,
@@ -423,6 +634,15 @@ def scan(
                     extracted_indicator=match.indicator,
                     confidence=match.confidence,
                     source_class="internal",
+                )
+                storage.create_risk_score(
+                    "finding",
+                    str(finding.id),
+                    finding.risk_score or 0,
+                    finding_id=finding.id,
+                    severity=finding.severity,
+                    confidence=finding.confidence,
+                    rationale=f"Calculated from severity={finding.severity}, confidence={finding.confidence}, source_class=internal.",
                 )
                 finding_ids.append(finding.id)
             storage.mark_scan_job_completed(scan_job)
@@ -491,7 +711,7 @@ def verify_deps(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
-    details = bootstrap(settings)
+    details = bootstrap(settings, verify_only=True)
     missing_required = sorted(command for command, present in details["required"].items() if not present)
     result = {
         **details,

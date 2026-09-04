@@ -1,6 +1,6 @@
 # orgscan
 
-`orgscan` is the Phase 0/1 foundation plus the first operator workflow slice for the OSINT Security Platform described in [`projectspec.md`](./projectspec.md). It currently provides:
+`orgscan` is the Phase 0/1 foundation plus the first operator workflow slices for the OSINT Security Platform described in [`projectspec.md`](./projectspec.md). The repository roadmap is tracked in [`docs/roadmap.md`](./docs/roadmap.md). It currently provides:
 
 - a Python package and CLI
 - environment-based configuration loading with `.env` support
@@ -27,9 +27,11 @@ Or use the bootstrap helper from a fresh clone:
 
 ```bash
 python scripts/bootstrap.py
+python scripts/bootstrap.py --verify-only
+python scripts/bootstrap.py --install-only
 ```
 
-The bootstrap helper creates `.venv`, installs the editable package with development dependencies, initializes the default SQLite database, and reports dependency status.
+The bootstrap helper creates `.venv`, installs the editable package with development dependencies, initializes the default SQLite database, and reports dependency status. Use `--verify-only` to print dependency status and next steps without modifying the environment, or `--install-only` to prepare the Python environment without initializing the database.
 
 ## Configuration
 
@@ -47,7 +49,7 @@ ORGSCAN_LOG_LEVEL=INFO
 Initialize local directories and inspect dependency status:
 
 ```bash
-orgscan setup --init-db
+orgscan setup --create-venv --install-dev --init-db
 ```
 
 Initialize the database explicitly:
@@ -75,6 +77,15 @@ List stored findings:
 orgscan findings --limit 20
 ```
 
+Update finding triage fields:
+
+```bash
+orgscan triage 1 --status triaged --triage-state reviewing --owner alice --note "validated and assigned" --due-date 2026-09-30
+orgscan suppress 1 --reason "false positive"
+orgscan accept-risk 1 --reason "compensating controls in place" --owner alice
+orgscan unsuppress 1 --note "reopened after new evidence"
+```
+
 Run the built-in custom pattern scanner against a file or directory:
 
 ```bash
@@ -92,6 +103,7 @@ Discover public GitHub repository metadata and persist it locally:
 
 ```bash
 orgscan discover repository psf/requests
+orgscan discover domain example.com
 ```
 
 Print a stored summary report:
@@ -127,3 +139,4 @@ pytest
 - The bootstrap helper recommends package-manager installation only for base OS dependencies; use official upstream install methods for tools such as Gitleaks and TruffleHog.
 - The initial `scan` command uses the built-in `custom-patterns` scanner and stores scan jobs, findings, and evidence in SQLite for later reporting.
 - The `discover` command uses the public GitHub REST API and can use `ORGSCAN_GITHUB_TOKEN` when configured for higher rate limits.
+- The current roadmap status and remaining gaps relative to the full project spec are documented in `docs/roadmap.md`.

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -32,6 +32,7 @@ class FindingStatus(StrEnum):
     TRIAGED = "triaged"
     RESOLVED = "resolved"
     SUPPRESSED = "suppressed"
+    ACCEPTED_RISK = "accepted_risk"
 
 
 class ScanJobStatus(StrEnum):
@@ -91,6 +92,8 @@ class Domain(TimestampMixin, Base):
     risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     organization: Mapped[Organization | None] = relationship(back_populates="domains")
+    exposures: Mapped[list[DomainExposure]] = relationship(back_populates="domain")
+    identity_correlations: Mapped[list[IdentityCorrelation]] = relationship(back_populates="domain")
 
 
 class Repository(TimestampMixin, Base):
@@ -162,6 +165,9 @@ class Finding(TimestampMixin, Base):
     description: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default=FindingStatus.OPEN.value)
     triage_state: Mapped[str] = mapped_column(String(32), default="new")
+    triage_owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    triage_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remediation_due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     fingerprint: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     normalized_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     remediation_hint: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -176,6 +182,7 @@ class Finding(TimestampMixin, Base):
     scan_job: Mapped[ScanJob | None] = relationship(back_populates="findings")
     evidence_items: Mapped[list[Evidence]] = relationship(back_populates="finding")
     risk_scores: Mapped[list[RiskScore]] = relationship(back_populates="finding")
+    suppressions: Mapped[list[Suppression]] = relationship(back_populates="finding")
 
 
 class Evidence(TimestampMixin, Base):
@@ -239,3 +246,53 @@ class RiskScore(TimestampMixin, Base):
     calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     finding: Mapped[Finding | None] = relationship(back_populates="risk_scores")
+
+
+class DomainExposure(TimestampMixin, Base):
+    __tablename__ = "domain_exposures"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    domain_id: Mapped[int] = mapped_column(ForeignKey("domains.id"), index=True)
+    source: Mapped[str] = mapped_column(String(255))
+    source_class: Mapped[str] = mapped_column(String(32), default=SourceClass.FREE.value)
+    source_name: Mapped[str] = mapped_column(String(255))
+    query_used: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    result_summary: Mapped[str] = mapped_column(Text)
+    confidence: Mapped[str] = mapped_column(String(32), default=ConfidenceLevel.UNVERIFIED.value)
+    severity: Mapped[str] = mapped_column(String(32), default=SeverityLevel.INFO.value)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    evidence_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    normalized_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+
+    domain: Mapped[Domain] = relationship(back_populates="exposures")
+
+
+class IdentityCorrelation(TimestampMixin, Base):
+    __tablename__ = "identity_correlations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    domain_id: Mapped[int] = mapped_column(ForeignKey("domains.id"), index=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    person_reference: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    source: Mapped[str] = mapped_column(String(255))
+    confidence: Mapped[str] = mapped_column(String(32), default=ConfidenceLevel.UNVERIFIED.value)
+    relation_type: Mapped[str] = mapped_column(String(64))
+    evidence_reference: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+
+    domain: Mapped[Domain] = relationship(back_populates="identity_correlations")
+
+
+class Suppression(TimestampMixin, Base):
+    __tablename__ = "suppressions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    finding_id: Mapped[int] = mapped_column(ForeignKey("findings.id"), index=True)
+    status: Mapped[str] = mapped_column(String(32))
+    reason: Mapped[str] = mapped_column(Text)
+    owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    deadline: Mapped[date | None] = mapped_column(Date, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    finding: Mapped[Finding] = relationship(back_populates="suppressions")

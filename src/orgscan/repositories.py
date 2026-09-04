@@ -11,13 +11,16 @@ from sqlalchemy.orm import Session
 from orgscan.models import (
     Account,
     Domain,
+    DomainExposure,
     Evidence,
     Finding,
+    IdentityCorrelation,
     Organization,
     Relationship,
     Repository,
     RiskScore,
     ScanJob,
+    Suppression,
 )
 from orgscan.schemas import CanonicalFinding
 
@@ -38,6 +41,10 @@ class Storage:
     def get_or_create_organization(self, name: str, **kwargs: Any) -> tuple[Organization, bool]:
         existing = self.get_organization_by_name(name)
         if existing:
+            for key, value in kwargs.items():
+                if value is not None:
+                    setattr(existing, key, value)
+            self.session.flush()
             return existing, False
         return self.create_organization(name, **kwargs), True
 
@@ -53,6 +60,10 @@ class Storage:
     def get_or_create_domain(self, name: str, **kwargs: Any) -> tuple[Domain, bool]:
         existing = self.get_domain_by_name(name)
         if existing:
+            for key, value in kwargs.items():
+                if value is not None:
+                    setattr(existing, key, value)
+            self.session.flush()
             return existing, False
         return self.create_domain(name, **kwargs), True
 
@@ -68,6 +79,10 @@ class Storage:
     def get_or_create_repository(self, full_name: str, **kwargs: Any) -> tuple[Repository, bool]:
         existing = self.get_repository_by_full_name(full_name)
         if existing:
+            for key, value in kwargs.items():
+                if value is not None:
+                    setattr(existing, key, value)
+            self.session.flush()
             return existing, False
         return self.create_repository(full_name, **kwargs), True
 
@@ -83,6 +98,10 @@ class Storage:
     def get_or_create_account(self, username: str, **kwargs: Any) -> tuple[Account, bool]:
         existing = self.get_account_by_username(username)
         if existing:
+            for key, value in kwargs.items():
+                if value is not None:
+                    setattr(existing, key, value)
+            self.session.flush()
             return existing, False
         return self.create_account(username, **kwargs), True
 
@@ -119,6 +138,9 @@ class Storage:
             existing.last_seen_at = finding.last_seen_at
             existing.raw_payload = finding.raw_payload
             existing.metadata_json = finding.metadata
+            existing.scan_job_id = finding.scan_job_id
+            existing.status = finding.status
+            existing.triage_state = "reopened" if existing.status != "resolved" else existing.triage_state
             self.session.flush()
             return existing
 
@@ -132,6 +154,55 @@ class Storage:
         self.session.add(evidence)
         self.session.flush()
         return evidence
+
+    def create_domain_exposure(self, domain_id: int, source: str, source_name: str, result_summary: str, normalized_hash: str, **kwargs: Any) -> DomainExposure:
+        existing = self.session.scalar(select(DomainExposure).where(DomainExposure.normalized_hash == normalized_hash))
+        if existing:
+            for key, value in kwargs.items():
+                if value is not None:
+                    setattr(existing, key, value)
+            existing.result_summary = result_summary
+            existing.last_seen = datetime.now(UTC)
+            self.session.flush()
+            return existing
+        exposure = DomainExposure(
+            domain_id=domain_id,
+            source=source,
+            source_name=source_name,
+            result_summary=result_summary,
+            normalized_hash=normalized_hash,
+            **kwargs,
+        )
+        self.session.add(exposure)
+        self.session.flush()
+        return exposure
+
+    def create_identity_correlation(
+        self,
+        domain_id: int,
+        source: str,
+        relation_type: str,
+        **kwargs: Any,
+    ) -> IdentityCorrelation:
+        existing = self.session.scalar(
+            select(IdentityCorrelation).where(
+                IdentityCorrelation.domain_id == domain_id,
+                IdentityCorrelation.source == source,
+                IdentityCorrelation.relation_type == relation_type,
+                IdentityCorrelation.email == kwargs.get("email"),
+                IdentityCorrelation.username == kwargs.get("username"),
+            )
+        )
+        if existing:
+            for key, value in kwargs.items():
+                if value is not None:
+                    setattr(existing, key, value)
+            self.session.flush()
+            return existing
+        correlation = IdentityCorrelation(domain_id=domain_id, source=source, relation_type=relation_type, **kwargs)
+        self.session.add(correlation)
+        self.session.flush()
+        return correlation
 
     def create_relationship(
         self,
@@ -192,17 +263,108 @@ class Storage:
         self.session.flush()
         return risk_score
 
-    def list_findings(self, limit: int = 50, status: str | None = None) -> Sequence[Finding]:
+    def create_suppression(self, finding_id: int, status: str, reason: str, **kwargs: Any) -> Suppression:
+        suppression = Suppression(finding_id=finding_id, status=status, reason=reason, **kwargs)
+        self.session.add(suppression)
+        self.session.flush()
+        return suppression
+
+    def list_findings(
+        self,
+        limit: int = 50,
+        status: str | None = None,
+        category: str | None = None,
+        severity: str | None = None,
+        confidence: str | None = None,
+    ) -> Sequence[Finding]:
         query = select(Finding).order_by(Finding.detected_at.desc(), Finding.id.desc()).limit(limit)
         if status:
             query = query.where(Finding.status == status)
+        if category:
+            query = query.where(Finding.category == category)
+        if severity:
+            query = query.where(Finding.severity == severity)
+        if confidence:
+            query = query.where(Finding.confidence == confidence)
         return list(self.session.scalars(query))
+
+    def get_finding(self, finding_id: int) -> Finding | None:
+        return self.session.get(Finding, finding_id)
+
+    def update_finding_triage(
+        self,
+        finding_id: int,
+        *,
+        status: str | None = None,
+        triage_state: str | None = None,
+        triage_owner: str | None = None,
+        triage_notes: str | None = None,
+        remediation_due_date: Any | None = None,
+    ) -> Finding:
+        finding = self.session.get(Finding, finding_id)
+        if finding is None:
+            raise ValueError(f"Finding {finding_id} does not exist")
+        if status is not None:
+            finding.status = status
+        if triage_state is not None:
+            finding.triage_state = triage_state
+        if triage_owner is not None:
+            finding.triage_owner = triage_owner
+        if triage_notes is not None:
+            finding.triage_notes = triage_notes
+        if remediation_due_date is not None:
+            finding.remediation_due_date = remediation_due_date
+        self.session.flush()
+        return finding
+
+    def suppress_finding(
+        self,
+        finding_id: int,
+        *,
+        reason: str,
+        owner: str | None = None,
+        deadline: Any | None = None,
+        notes: str | None = None,
+        status: str = "suppressed",
+    ) -> Finding:
+        finding = self.update_finding_triage(
+            finding_id,
+            status=status,
+            triage_state=status,
+            triage_owner=owner,
+            triage_notes=notes,
+            remediation_due_date=deadline,
+        )
+        self.create_suppression(
+            finding_id,
+            status=status,
+            reason=reason,
+            owner=owner,
+            deadline=deadline,
+            notes=notes,
+        )
+        return finding
 
     def list_organizations(self) -> Sequence[Organization]:
         return list(self.session.scalars(select(Organization).order_by(Organization.name.asc())))
 
     def list_repositories(self) -> Sequence[Repository]:
         return list(self.session.scalars(select(Repository).order_by(Repository.full_name.asc())))
+
+    def list_accounts(self) -> Sequence[Account]:
+        return list(self.session.scalars(select(Account).order_by(Account.username.asc())))
+
+    def list_domain_exposures(self, domain_id: int | None = None) -> Sequence[DomainExposure]:
+        query = select(DomainExposure).order_by(DomainExposure.last_seen.desc(), DomainExposure.id.desc())
+        if domain_id is not None:
+            query = query.where(DomainExposure.domain_id == domain_id)
+        return list(self.session.scalars(query))
+
+    def list_identity_correlations(self, domain_id: int | None = None) -> Sequence[IdentityCorrelation]:
+        query = select(IdentityCorrelation).order_by(IdentityCorrelation.id.desc())
+        if domain_id is not None:
+            query = query.where(IdentityCorrelation.domain_id == domain_id)
+        return list(self.session.scalars(query))
 
     def list_scan_jobs(self, limit: int = 25) -> Sequence[ScanJob]:
         query = select(ScanJob).order_by(ScanJob.created_at.desc(), ScanJob.id.desc()).limit(limit)
@@ -229,8 +391,11 @@ class Storage:
             "scan_jobs": ScanJob,
             "findings": Finding,
             "evidence": Evidence,
+            "domain_exposures": DomainExposure,
+            "identity_correlations": IdentityCorrelation,
             "relationships": Relationship,
             "risk_scores": RiskScore,
+            "suppressions": Suppression,
         }
         return {
             name: self.session.scalar(select(func.count()).select_from(model)) or 0

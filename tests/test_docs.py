@@ -1,0 +1,10 @@
+from pathlib import Path
+
+
+def test_roadmap_documents_completed_and_remaining_phases() -> None:
+    roadmap = Path(__file__).resolve().parents[1] / "docs" / "roadmap.md"
+    content = roadmap.read_text(encoding="utf-8")
+
+    assert "Phase 0" in content
+    assert "Phase 1" in content
+    assert "Not yet implemented" in content

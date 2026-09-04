@@ -5,7 +5,7 @@ from typer.testing import CliRunner
 from orgscan.cli import app
 from orgscan.config import get_settings
 from orgscan.discovery import GitHubRepositoryRecord
-from orgscan.db import create_session_factory
+from orgscan.db import create_session_factory, init_db
 from orgscan.repositories import Storage
 from orgscan.schemas import CanonicalFinding
 
@@ -26,6 +26,10 @@ def test_cli_init_db_and_status(monkeypatch, tmp_path: Path) -> None:
     assert status_result.exit_code == 0
     assert f"database_url: {database_url}" in status_result.stdout
     assert "organizations: 0" in status_result.stdout
+
+    setup_result = runner.invoke(app, ["setup", "--verify-only"])
+    assert setup_result.exit_code == 0
+    assert "next_steps:" in setup_result.stdout
 
     get_settings.cache_clear()
 
@@ -70,6 +74,10 @@ def test_cli_add_target_and_findings(monkeypatch, tmp_path: Path) -> None:
     assert findings_result.exit_code == 0
     assert "Public domain reference" in findings_result.stdout
 
+    filtered_result = runner.invoke(app, ["findings", "--category", "domain-exposure", "--json"])
+    assert filtered_result.exit_code == 0
+    assert "Public domain reference" in filtered_result.stdout
+
     get_settings.cache_clear()
 
 
@@ -79,7 +87,7 @@ def test_cli_verify_deps_json(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr(
         "orgscan.cli.bootstrap",
-        lambda settings: {
+        lambda settings, **kwargs: {
             "required": {"git": True, "curl": True, "openssl": True},
             "optional": {},
             "platform": "test",
@@ -87,9 +95,12 @@ def test_cli_verify_deps_json(monkeypatch, tmp_path: Path) -> None:
             "recommended_install": "sudo apt install -y git curl openssl",
             "optional_install_notes": {},
             "venv_path": ".venv",
+            "venv_exists": False,
             "install_returncode": None,
+            "mode": "verify-only",
             "database_url": settings.database_url,
             "data_dir": str(settings.data_dir),
+            "next_steps": ["Install deps"],
         },
     )
     get_settings.cache_clear()
@@ -193,6 +204,10 @@ def test_cli_discover_report_export_and_dashboard(monkeypatch, tmp_path: Path) -
     assert dashboard_path.exists()
     assert "orgscan dashboard" in dashboard_path.read_text(encoding="utf-8")
 
+    domain_result = runner.invoke(app, ["discover", "domain", "example.org", "--json"])
+    assert domain_result.exit_code == 0
+    assert "domain_exposures" in domain_result.stdout
+
     get_settings.cache_clear()
 
 
@@ -213,5 +228,98 @@ def test_cli_scan_reports_missing_external_scanner(monkeypatch, tmp_path: Path) 
     assert status_result.exit_code == 0
     assert "scan_jobs: 1" in status_result.stdout
     assert "findings: 0" in status_result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_cli_triage_updates_finding(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'triage.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+    init_db(database_url)
+
+    session_factory = create_session_factory(database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        finding = storage.create_finding(
+            CanonicalFinding(
+                source_tool="custom-patterns",
+                source_name="custom-patterns",
+                category="secret",
+                title="Needs triage",
+                description="Pending review",
+            )
+        )
+        session.commit()
+
+    result = runner.invoke(
+        app,
+        [
+            "triage",
+            str(finding.id),
+            "--status",
+            "triaged",
+            "--triage-state",
+            "reviewing",
+            "--owner",
+            "alice",
+            "--note",
+            "validated",
+            "--due-date",
+            "2026-09-30",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Updated finding" in result.stdout
+
+    findings_result = runner.invoke(app, ["findings", "--json"])
+    assert findings_result.exit_code == 0
+    assert '"triage_owner": "alice"' in findings_result.stdout
+    assert '"remediation_due_date": "2026-09-30"' in findings_result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_cli_suppress_and_accept_risk(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'suppress.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+    init_db(database_url)
+
+    session_factory = create_session_factory(database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        finding = storage.create_finding(
+            CanonicalFinding(
+                source_tool="custom-patterns",
+                source_name="custom-patterns",
+                category="secret",
+                title="Needs decision",
+                description="Pending suppression",
+            )
+        )
+        session.commit()
+
+    suppress_result = runner.invoke(app, ["suppress", str(finding.id), "--reason", "false positive"])
+    assert suppress_result.exit_code == 0
+    assert "Suppressed finding" in suppress_result.stdout
+
+    accept_result = runner.invoke(
+        app,
+        ["accept-risk", str(finding.id), "--reason", "documented compensating controls", "--owner", "alice"],
+    )
+    assert accept_result.exit_code == 0
+    assert "Accepted risk" in accept_result.stdout
+
+    reopen_result = runner.invoke(app, ["unsuppress", str(finding.id), "--note", "needs follow-up"])
+    assert reopen_result.exit_code == 0
+    assert "Reopened finding" in reopen_result.stdout
+
+    findings_result = runner.invoke(app, ["findings", "--json"])
+    assert findings_result.exit_code == 0
+    assert '"status": "open"' in findings_result.stdout
+    assert '"triage_state": "reopened"' in findings_result.stdout
 
     get_settings.cache_clear()

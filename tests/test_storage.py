@@ -83,8 +83,11 @@ def test_storage_crud_round_trip(tmp_path: Path) -> None:
         "scan_jobs": 1,
         "findings": 1,
         "evidence": 1,
+        "domain_exposures": 0,
+        "identity_correlations": 0,
         "relationships": 1,
         "risk_scores": 1,
+        "suppressions": 0,
     }
 
 
@@ -124,3 +127,70 @@ def test_storage_deduplicates_findings_by_normalized_hash(tmp_path: Path) -> Non
 
     assert len(findings) == 1
     assert findings[0].raw_payload == {"updated": True}
+
+
+def test_get_or_create_updates_existing_repository_metadata(tmp_path: Path) -> None:
+    db_path = tmp_path / "update.db"
+    database_url = f"sqlite:///{db_path}"
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+
+    with session_factory() as session:
+        storage = Storage(session)
+        repository, created = storage.get_or_create_repository("example-org/app", provider="github")
+        assert created is True
+        repository, created = storage.get_or_create_repository(
+            "example-org/app",
+            url="https://github.com/example-org/app",
+            default_branch="main",
+            metadata_json={"description": "Example"},
+        )
+        session.commit()
+
+    assert created is False
+    assert repository.url == "https://github.com/example-org/app"
+    assert repository.default_branch == "main"
+    assert repository.metadata_json == {"description": "Example"}
+
+
+def test_storage_suppression_and_domain_correlation_entities(tmp_path: Path) -> None:
+    db_path = tmp_path / "entities.db"
+    database_url = f"sqlite:///{db_path}"
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+
+    with session_factory() as session:
+        storage = Storage(session)
+        domain = storage.create_domain("example.com")
+        finding = storage.create_finding(
+            CanonicalFinding(
+                source_tool="custom-patterns",
+                source_name="custom-patterns",
+                category="secret",
+                title="Suppressed finding",
+                description="Needs suppression",
+            )
+        )
+        storage.create_domain_exposure(
+            domain.id,
+            source="github-metadata",
+            source_name="discover-domain",
+            result_summary="Repository metadata references the domain",
+            normalized_hash="domain-exposure-hash",
+        )
+        storage.create_identity_correlation(
+            domain.id,
+            source="github-metadata",
+            relation_type="email-domain-match",
+            email="alice@example.com",
+            username="alice",
+        )
+        storage.suppress_finding(finding.id, reason="false positive", owner="alice", status="suppressed")
+        session.commit()
+
+    with session_factory() as session:
+        counts = Storage(session).counts()
+
+    assert counts["domain_exposures"] == 1
+    assert counts["identity_correlations"] == 1
+    assert counts["suppressions"] == 1
