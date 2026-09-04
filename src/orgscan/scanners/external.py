@@ -1,0 +1,149 @@
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Any
+
+from orgscan.models import ConfidenceLevel, SeverityLevel
+from orgscan.scanners.base import ScanMatch
+
+
+class ScannerExecutionError(RuntimeError):
+    pass
+
+
+def _redact(value: str) -> str:
+    if not value:
+        return "<redacted>"
+    if len(value) <= 8:
+        return "<redacted>"
+    return f"{value[:4]}...{value[-4:]}"
+
+
+def _redact_in_line(line: str, value: str, label: str) -> str:
+    return line.replace(value, f"<redacted:{label}>") if value else line
+
+
+class GitleaksScanner:
+    name = "gitleaks"
+
+    def scan_path(self, target: Path) -> list[ScanMatch]:
+        if not shutil.which(self.name):
+            raise ScannerExecutionError("gitleaks is not installed; run orgscan verify-deps or install the official binary.")
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
+            report_path = Path(handle.name)
+
+        try:
+            completed = subprocess.run(
+                [
+                    self.name,
+                    "detect",
+                    "--no-git",
+                    "--source",
+                    str(target),
+                    "--report-format",
+                    "json",
+                    "--report-path",
+                    str(report_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode not in (0, 1):
+                raise ScannerExecutionError(completed.stderr.strip() or "gitleaks execution failed")
+            content = report_path.read_text(encoding="utf-8").strip() or "[]"
+            return self.parse_output(json.loads(content))
+        finally:
+            report_path.unlink(missing_ok=True)
+
+    @staticmethod
+    def parse_output(payload: list[dict[str, Any]]) -> list[ScanMatch]:
+        results: list[ScanMatch] = []
+        for item in payload:
+            match_value = str(item.get("Secret") or item.get("Match") or "")
+            line = str(item.get("Match") or match_value or "")
+            results.append(
+                ScanMatch(
+                    path=Path(str(item.get("File") or "")),
+                    line_start=int(item.get("StartLine") or 1),
+                    line_end=int(item.get("EndLine") or item.get("StartLine") or 1),
+                    category="secret",
+                    title=f"Gitleaks: {item.get('RuleID') or 'secret detected'}",
+                    description=str(item.get("Description") or "Gitleaks identified a potential secret."),
+                    severity=SeverityLevel.HIGH,
+                    confidence=ConfidenceLevel.LIKELY,
+                    indicator=_redact(match_value),
+                    snippet=_redact_in_line(line, match_value, "gitleaks"),
+                    remediation_hint="Rotate the exposed secret and remove it from source control.",
+                    raw_payload={
+                        "rule_id": item.get("RuleID"),
+                        "commit": item.get("Commit"),
+                        "match": _redact(match_value),
+                    },
+                    metadata={
+                        "path": str(item.get("File") or ""),
+                        "rule_id": item.get("RuleID"),
+                    },
+                )
+            )
+        return results
+
+
+class TruffleHogScanner:
+    name = "trufflehog"
+
+    def scan_path(self, target: Path) -> list[ScanMatch]:
+        if not shutil.which(self.name):
+            raise ScannerExecutionError("trufflehog is not installed; run orgscan verify-deps or install the official binary.")
+
+        completed = subprocess.run(
+            [self.name, "filesystem", "--json", str(target)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode not in (0, 183):
+            raise ScannerExecutionError(completed.stderr.strip() or "trufflehog execution failed")
+        lines = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
+        return self.parse_output(lines)
+
+    @staticmethod
+    def parse_output(payload: list[dict[str, Any]]) -> list[ScanMatch]:
+        results: list[ScanMatch] = []
+        for item in payload:
+            source_metadata = item.get("SourceMetadata") if isinstance(item.get("SourceMetadata"), dict) else {}
+            data = source_metadata.get("Data") if isinstance(source_metadata.get("Data"), dict) else {}
+            filesystem = data.get("Filesystem") if isinstance(data.get("Filesystem"), dict) else {}
+            match_value = str(item.get("Raw") or item.get("RawV2") or "")
+            detector_name = str(item.get("DetectorName") or "secret")
+            line = str(item.get("Raw") or match_value or "")
+            results.append(
+                ScanMatch(
+                    path=Path(str(filesystem.get("file") or "")),
+                    line_start=int(filesystem.get("line") or 1),
+                    line_end=int(filesystem.get("line") or 1),
+                    category="secret",
+                    title=f"TruffleHog: {detector_name}",
+                    description="TruffleHog identified a potential secret.",
+                    severity=SeverityLevel.HIGH,
+                    confidence=ConfidenceLevel.VERIFIED if item.get("Verified") else ConfidenceLevel.LIKELY,
+                    indicator=_redact(match_value),
+                    snippet=_redact_in_line(line, match_value, "trufflehog"),
+                    remediation_hint="Rotate the exposed secret and remove it from source control.",
+                    raw_payload={
+                        "detector": detector_name,
+                        "verified": bool(item.get("Verified")),
+                        "match": _redact(match_value),
+                    },
+                    metadata={
+                        "path": str(filesystem.get("file") or ""),
+                        "detector": detector_name,
+                    },
+                )
+            )
+        return results

@@ -17,7 +17,7 @@ from orgscan.models import Finding
 from orgscan.repositories import Storage
 from orgscan.reporting import build_summary, finding_rows, write_csv, write_html, write_json
 from orgscan.schemas import CanonicalFinding
-from orgscan.scanners import get_scanner
+from orgscan.scanners import ScannerExecutionError, get_scanner
 
 app = typer.Typer(help="OSINT Security Platform CLI foundation")
 
@@ -360,7 +360,10 @@ def scan(
     settings = _settings()
     init_db(settings.database_url)
     session_factory = create_session_factory(settings.database_url)
-    scanner_impl = get_scanner(scanner)
+    try:
+        scanner_impl = get_scanner(scanner)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     resolved_target = target.resolve()
 
     with session_factory() as session:
@@ -424,6 +427,11 @@ def scan(
                 finding_ids.append(finding.id)
             storage.mark_scan_job_completed(scan_job)
             session.commit()
+        except ScannerExecutionError as exc:
+            storage.mark_scan_job_failed(scan_job, str(exc))
+            session.commit()
+            typer.echo(f"Scan failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
         except Exception as exc:
             storage.mark_scan_job_failed(scan_job, str(exc))
             session.commit()

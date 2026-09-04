@@ -81,6 +81,13 @@ Run the built-in custom pattern scanner against a file or directory:
 orgscan scan path ./path/to/scan --organization example-org --repository example-org/app
 ```
 
+If `gitleaks` or `trufflehog` are installed locally, you can run them through the same workflow:
+
+```bash
+orgscan scan path ./path/to/scan --scanner gitleaks
+orgscan scan path ./path/to/scan --scanner trufflehog
+```
+
 Discover public GitHub repository metadata and persist it locally:
 
 ```bash

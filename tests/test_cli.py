@@ -194,3 +194,24 @@ def test_cli_discover_report_export_and_dashboard(monkeypatch, tmp_path: Path) -
     assert "orgscan dashboard" in dashboard_path.read_text(encoding="utf-8")
 
     get_settings.cache_clear()
+
+
+def test_cli_scan_reports_missing_external_scanner(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'missing-scanner.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+
+    sample = tmp_path / "config.py"
+    sample.write_text('token = "example-not-real-123456789"\n', encoding="utf-8")
+
+    result = runner.invoke(app, ["scan", "path", str(sample), "--scanner", "gitleaks"])
+    assert result.exit_code == 1
+    assert "Scan failed: gitleaks is not installed" in result.stderr
+
+    status_result = runner.invoke(app, ["status"])
+    assert status_result.exit_code == 0
+    assert "scan_jobs: 1" in status_result.stdout
+    assert "findings: 0" in status_result.stdout
+
+    get_settings.cache_clear()
