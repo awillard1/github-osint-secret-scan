@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     data_dir: Path = Field(default_factory=lambda: Path("./data"))
     database_url: str = "sqlite:///./data/orgscan.db"
+    github_api_base_url: str = "https://api.github.com"
+    github_token: str | None = None
+    http_timeout_seconds: int = 15
 
     def ensure_data_dir(self) -> Path:
         self.data_dir.mkdir(parents=True, exist_ok=True)

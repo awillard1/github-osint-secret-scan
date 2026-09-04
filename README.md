@@ -8,7 +8,7 @@
 - normalized core storage models for organizations, domains, repositories, accounts, scan jobs, findings, evidence, relationships, and risk scores
 - a SQLite-first persistence layer built on SQLAlchemy for future PostgreSQL support
 - target intake commands for organizations, domains, repositories, and accounts
-- finding inspection, local scanning, and dependency verification commands
+- finding inspection, GitHub metadata discovery, local scanning, reporting, export, dashboard generation, and dependency verification commands
 - tests for config, validation, storage, and CLI flows
 
 ## Requirements
@@ -81,6 +81,25 @@ Run the built-in custom pattern scanner against a file or directory:
 orgscan scan path ./path/to/scan --organization example-org --repository example-org/app
 ```
 
+Discover public GitHub repository metadata and persist it locally:
+
+```bash
+orgscan discover repository psf/requests
+```
+
+Print a stored summary report:
+
+```bash
+orgscan report
+```
+
+Export findings and generate a static HTML dashboard:
+
+```bash
+orgscan export ./data/findings.json --format json
+orgscan dashboard ./data/dashboard.html
+```
+
 Verify required local dependencies:
 
 ```bash
@@ -100,3 +119,4 @@ pytest
 - Canonical scanner output should be normalized through `orgscan.schemas.CanonicalFinding` before persistence.
 - The bootstrap helper recommends package-manager installation only for base OS dependencies; use official upstream install methods for tools such as Gitleaks and TruffleHog.
 - The initial `scan` command uses the built-in `custom-patterns` scanner and stores scan jobs, findings, and evidence in SQLite for later reporting.
+- The `discover` command uses the public GitHub REST API and can use `ORGSCAN_GITHUB_TOKEN` when configured for higher rate limits.

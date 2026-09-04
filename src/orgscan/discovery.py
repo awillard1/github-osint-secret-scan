@@ -1,0 +1,78 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+from orgscan.config import Settings
+
+
+class DiscoveryError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class GitHubRepositoryRecord:
+    full_name: str
+    html_url: str
+    default_branch: str | None
+    private: bool
+    owner_login: str
+    owner_type: str
+    description: str | None = None
+
+    @classmethod
+    def from_api_payload(cls, payload: dict[str, object]) -> "GitHubRepositoryRecord":
+        owner = payload.get("owner") or {}
+        if not isinstance(owner, dict):
+            owner = {}
+        return cls(
+            full_name=str(payload["full_name"]),
+            html_url=str(payload.get("html_url") or ""),
+            default_branch=payload.get("default_branch") if isinstance(payload.get("default_branch"), str) else None,
+            private=bool(payload.get("private", False)),
+            owner_login=str(owner.get("login") or ""),
+            owner_type=str(owner.get("type") or "User"),
+            description=payload.get("description") if isinstance(payload.get("description"), str) else None,
+        )
+
+
+class GitHubDiscoveryClient:
+    def __init__(self, settings: Settings) -> None:
+        self.base_url = settings.github_api_base_url.rstrip("/")
+        self.token = settings.github_token
+        self.timeout = settings.http_timeout_seconds
+
+    def fetch_repository(self, full_name: str) -> GitHubRepositoryRecord:
+        payload = self._request_json(f"/repos/{full_name}")
+        if not isinstance(payload, dict):
+            raise DiscoveryError("Expected a repository object from GitHub API")
+        return GitHubRepositoryRecord.from_api_payload(payload)
+
+    def fetch_organization_repositories(self, organization: str, limit: int = 20) -> list[GitHubRepositoryRecord]:
+        payload = self._request_json(f"/orgs/{organization}/repos?per_page={limit}")
+        if not isinstance(payload, list):
+            raise DiscoveryError("Expected a list of repositories from GitHub API")
+        return [GitHubRepositoryRecord.from_api_payload(item) for item in payload if isinstance(item, dict)]
+
+    def _request_json(self, path: str) -> object:
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "orgscan/0.1.0",
+        }
+        if self.token:
+            headers["Authorization"] = "Bearer " + self.token
+
+        request = Request(f"{self.base_url}{path}", headers=headers)
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            if exc.code == 403:
+                raise DiscoveryError(
+                    "GitHub API request was rate limited or forbidden; configure ORGSCAN_GITHUB_TOKEN to raise limits."
+                ) from exc
+            raise DiscoveryError(f"GitHub API request failed with status {exc.code}") from exc
+        except URLError as exc:
+            raise DiscoveryError(f"GitHub API request failed: {exc.reason}") from exc

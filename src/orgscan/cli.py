@@ -11,9 +11,11 @@ from sqlalchemy import text
 from orgscan.bootstrap import bootstrap
 from orgscan.config import Settings, get_settings
 from orgscan.db import create_session_factory, init_db
+from orgscan.discovery import DiscoveryError, GitHubDiscoveryClient
 from orgscan.logging_config import setup_logging
 from orgscan.models import Finding
 from orgscan.repositories import Storage
+from orgscan.reporting import build_summary, finding_rows, write_csv, write_html, write_json
 from orgscan.schemas import CanonicalFinding
 from orgscan.scanners import get_scanner
 
@@ -29,6 +31,17 @@ class TargetType(StrEnum):
 
 class ScanTargetType(StrEnum):
     PATH = "path"
+
+
+class DiscoverTargetType(StrEnum):
+    REPOSITORY = "repository"
+    ORGANIZATION = "organization"
+
+
+class ExportFormat(StrEnum):
+    JSON = "json"
+    CSV = "csv"
+    HTML = "html"
 
 
 def _settings() -> Settings:
@@ -65,6 +78,14 @@ def _risk_score_for_severity(severity: str) -> float:
         "low": 25.0,
         "info": 10.0,
     }.get(severity, 10.0)
+
+
+def _write_export(output_path: Path, export_format: ExportFormat, summary: dict[str, object], rows: list[dict[str, object]]) -> Path:
+    if export_format == ExportFormat.JSON:
+        return write_json(output_path, {"summary": summary, "findings": rows})
+    if export_format == ExportFormat.CSV:
+        return write_csv(output_path, rows)
+    return write_html(output_path, summary, rows)
 
 
 @app.command("setup")
@@ -166,6 +187,107 @@ def status() -> None:
     typer.echo(_format_counts(counts))
 
 
+@app.command("discover")
+def discover(
+    target_type: DiscoverTargetType,
+    value: str,
+    limit: int = typer.Option(10, "--limit", min=1, max=100, help="Maximum repositories to ingest for organization discovery."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    client = GitHubDiscoveryClient(settings)
+    session_factory = create_session_factory(settings.database_url)
+
+    try:
+        records = (
+            [client.fetch_repository(value)]
+            if target_type == DiscoverTargetType.REPOSITORY
+            else client.fetch_organization_repositories(value, limit=limit)
+        )
+    except DiscoveryError as exc:
+        typer.echo(f"Discovery failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    with session_factory() as session:
+        storage = Storage(session)
+        discovered_repositories: list[str] = []
+        discovered_accounts: list[str] = []
+        organization_names: set[str] = set()
+
+        for record in records:
+            organization_id = None
+            if record.owner_type.lower() == "organization":
+                organization_record, _ = storage.get_or_create_organization(
+                    record.owner_login,
+                    github_handle=record.owner_login,
+                )
+                organization_id = organization_record.id
+                organization_names.add(organization_record.name)
+                storage.get_or_create_account(
+                    record.owner_login,
+                    organization_id=organization_id,
+                    provider="github",
+                    account_type="organization",
+                )
+            else:
+                owner_account, _ = storage.get_or_create_account(
+                    record.owner_login,
+                    provider="github",
+                    account_type="user",
+                )
+                discovered_accounts.append(owner_account.username)
+
+            repository_record, _ = storage.get_or_create_repository(
+                record.full_name,
+                organization_id=organization_id,
+                provider="github",
+                url=record.html_url,
+                default_branch=record.default_branch,
+                is_private=record.private,
+                metadata_json={"description": record.description} if record.description else {},
+            )
+            discovered_repositories.append(repository_record.full_name)
+
+            if record.owner_type.lower() == "organization" and organization_id is not None:
+                storage.get_or_create_relationship(
+                    "organization",
+                    str(organization_id),
+                    "repository",
+                    str(repository_record.id),
+                    "owns",
+                    confidence="verified",
+                    source="github-api",
+                )
+            else:
+                owner_account = storage.get_account_by_username(record.owner_login)
+                if owner_account is not None:
+                    storage.get_or_create_relationship(
+                        "account",
+                        str(owner_account.id),
+                        "repository",
+                        str(repository_record.id),
+                        "owns",
+                        confidence="verified",
+                        source="github-api",
+                    )
+        session.commit()
+
+    result = {
+        "target_type": target_type.value,
+        "value": value,
+        "repositories": discovered_repositories,
+        "accounts": discovered_accounts,
+        "organizations": sorted(organization_names),
+    }
+    if json_output:
+        typer.echo(json.dumps(result, indent=2))
+    else:
+        typer.echo(f"Discovered {len(discovered_repositories)} repository record(s).")
+        for repository_name in discovered_repositories:
+            typer.echo(f"  - {repository_name}")
+
+
 @app.command("findings")
 def findings(
     limit: int = typer.Option(50, "--limit", min=1, help="Maximum number of findings to display."),
@@ -193,6 +315,31 @@ def findings(
             f"[{row.severity}/{row.confidence}] {row.title} "
             f"(id={row.id}, category={row.category}, status={row.status})"
         )
+
+
+@app.command("report")
+def report(
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        summary = build_summary(storage)
+
+    if json_output:
+        typer.echo(json.dumps(summary, indent=2, default=str))
+        return
+
+    typer.echo("orgscan summary")
+    typer.echo(_format_counts(summary["counts"]))
+    typer.echo("severity:")
+    for severity, count in summary["severity_breakdown"].items():
+        typer.echo(f"  - {severity}: {count}")
+    typer.echo("categories:")
+    for category, count in summary["category_breakdown"].items():
+        typer.echo(f"  - {category}: {count}")
 
 
 @app.command("scan")
@@ -294,6 +441,41 @@ def scan(
     else:
         typer.echo(f"Completed scan job {scan_job.id} with {len(matches)} finding(s).")
         typer.echo(f"Target: {resolved_target}")
+
+
+@app.command("export")
+def export(
+    output_path: Path,
+    export_format: ExportFormat = typer.Option(ExportFormat.JSON, "--format", help="Output format."),
+    limit: int = typer.Option(500, "--limit", min=1, help="Maximum number of findings to export."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        summary = build_summary(storage)
+        rows = finding_rows(storage, limit=limit)
+
+    output = _write_export(output_path, export_format, summary, rows)
+    typer.echo(f"Wrote {export_format.value} export to {output}")
+
+
+@app.command("dashboard")
+def dashboard(
+    output_path: Path = typer.Argument(..., help="HTML output path for the generated dashboard."),
+    limit: int = typer.Option(100, "--limit", min=1, help="Maximum number of findings to include."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        summary = build_summary(storage)
+        rows = finding_rows(storage, limit=limit)
+
+    output = write_html(output_path, summary, rows)
+    typer.echo(f"Wrote dashboard HTML to {output}")
 
 
 @app.command("verify-deps")

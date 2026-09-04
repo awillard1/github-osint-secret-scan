@@ -154,6 +154,38 @@ class Storage:
         self.session.flush()
         return relationship
 
+    def get_or_create_relationship(
+        self,
+        from_entity_type: str,
+        from_entity_id: str,
+        to_entity_type: str,
+        to_entity_id: str,
+        relation_type: str,
+        **kwargs: Any,
+    ) -> tuple[Relationship, bool]:
+        existing = self.session.scalar(
+            select(Relationship).where(
+                Relationship.from_entity_type == from_entity_type,
+                Relationship.from_entity_id == from_entity_id,
+                Relationship.to_entity_type == to_entity_type,
+                Relationship.to_entity_id == to_entity_id,
+                Relationship.relation_type == relation_type,
+            )
+        )
+        if existing:
+            return existing, False
+        return (
+            self.create_relationship(
+                from_entity_type=from_entity_type,
+                from_entity_id=from_entity_id,
+                to_entity_type=to_entity_type,
+                to_entity_id=to_entity_id,
+                relation_type=relation_type,
+                **kwargs,
+            ),
+            True,
+        )
+
     def create_risk_score(self, entity_type: str, entity_id: str, score: float, **kwargs: Any) -> RiskScore:
         risk_score = RiskScore(entity_type=entity_type, entity_id=entity_id, score=score, **kwargs)
         self.session.add(risk_score)
@@ -165,6 +197,28 @@ class Storage:
         if status:
             query = query.where(Finding.status == status)
         return list(self.session.scalars(query))
+
+    def list_organizations(self) -> Sequence[Organization]:
+        return list(self.session.scalars(select(Organization).order_by(Organization.name.asc())))
+
+    def list_repositories(self) -> Sequence[Repository]:
+        return list(self.session.scalars(select(Repository).order_by(Repository.full_name.asc())))
+
+    def list_scan_jobs(self, limit: int = 25) -> Sequence[ScanJob]:
+        query = select(ScanJob).order_by(ScanJob.created_at.desc(), ScanJob.id.desc()).limit(limit)
+        return list(self.session.scalars(query))
+
+    def finding_counts_by_severity(self) -> Mapping[str, int]:
+        rows = self.session.execute(
+            select(Finding.severity, func.count()).group_by(Finding.severity).order_by(Finding.severity.asc())
+        )
+        return {severity: count for severity, count in rows}
+
+    def finding_counts_by_category(self) -> Mapping[str, int]:
+        rows = self.session.execute(
+            select(Finding.category, func.count()).group_by(Finding.category).order_by(Finding.category.asc())
+        )
+        return {category: count for category, count in rows}
 
     def counts(self) -> Mapping[str, int]:
         tables = {
