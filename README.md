@@ -8,7 +8,7 @@
 - normalized core storage models for organizations, domains, repositories, accounts, scan jobs, findings, evidence, relationships, and risk scores
 - a SQLite-first persistence layer built on SQLAlchemy for future PostgreSQL support
 - target intake commands for organizations, domains, repositories, and accounts
-- finding inspection and dependency verification commands
+- finding inspection, local scanning, and dependency verification commands
 - tests for config, validation, storage, and CLI flows
 
 ## Requirements
@@ -75,6 +75,12 @@ List stored findings:
 orgscan findings --limit 20
 ```
 
+Run the built-in custom pattern scanner against a file or directory:
+
+```bash
+orgscan scan path ./path/to/scan --organization example-org --repository example-org/app
+```
+
 Verify required local dependencies:
 
 ```bash
@@ -93,3 +99,4 @@ pytest
 - Storage code uses SQLAlchemy abstractions so PostgreSQL support can be added in later phases with minimal API churn.
 - Canonical scanner output should be normalized through `orgscan.schemas.CanonicalFinding` before persistence.
 - The bootstrap helper recommends package-manager installation only for base OS dependencies; use official upstream install methods for tools such as Gitleaks and TruffleHog.
+- The initial `scan` command uses the built-in `custom-patterns` scanner and stores scan jobs, findings, and evidence in SQLite for later reporting.

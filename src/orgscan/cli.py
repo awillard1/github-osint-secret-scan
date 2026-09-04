@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from pathlib import Path
 from enum import StrEnum
 
 import typer
@@ -13,6 +14,8 @@ from orgscan.db import create_session_factory, init_db
 from orgscan.logging_config import setup_logging
 from orgscan.models import Finding
 from orgscan.repositories import Storage
+from orgscan.schemas import CanonicalFinding
+from orgscan.scanners import get_scanner
 
 app = typer.Typer(help="OSINT Security Platform CLI foundation")
 
@@ -22,6 +25,10 @@ class TargetType(StrEnum):
     DOMAIN = "domain"
     REPOSITORY = "repository"
     ACCOUNT = "account"
+
+
+class ScanTargetType(StrEnum):
+    PATH = "path"
 
 
 def _settings() -> Settings:
@@ -48,6 +55,16 @@ def _serialize_finding(finding: Finding) -> dict[str, object]:
         "scan_job_id": finding.scan_job_id,
         "detected_at": finding.detected_at.isoformat(),
     }
+
+
+def _risk_score_for_severity(severity: str) -> float:
+    return {
+        "critical": 95.0,
+        "high": 80.0,
+        "medium": 55.0,
+        "low": 25.0,
+        "info": 10.0,
+    }.get(severity, 10.0)
 
 
 @app.command("setup")
@@ -176,6 +193,107 @@ def findings(
             f"[{row.severity}/{row.confidence}] {row.title} "
             f"(id={row.id}, category={row.category}, status={row.status})"
         )
+
+
+@app.command("scan")
+def scan(
+    target_type: ScanTargetType,
+    target: Path,
+    scanner: str = typer.Option("custom-patterns", "--scanner", help="Scanner implementation to run."),
+    organization: str | None = typer.Option(None, "--organization", help="Optional organization association."),
+    repository: str | None = typer.Option(None, "--repository", help="Optional repository association."),
+    provider: str = typer.Option("github", "--provider", help="Provider name for repository records."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    if target_type != ScanTargetType.PATH:
+        raise typer.BadParameter(f"Unsupported scan target type: {target_type}")
+    if not target.exists():
+        raise typer.BadParameter(f"Target does not exist: {target}")
+
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    scanner_impl = get_scanner(scanner)
+    resolved_target = target.resolve()
+
+    with session_factory() as session:
+        storage = Storage(session)
+        organization_id = None
+        repository_id = None
+        if organization:
+            organization_record, _ = storage.get_or_create_organization(organization)
+            organization_id = organization_record.id
+        if repository:
+            repository_record, _ = storage.get_or_create_repository(
+                repository,
+                organization_id=organization_id,
+                provider=provider,
+            )
+            repository_id = repository_record.id
+
+        scan_job = storage.create_scan_job(
+            target_type=target_type.value,
+            target_id=str(resolved_target),
+            scanner_name=scanner_impl.name,
+            status="pending",
+            parameters_json={"path": str(resolved_target)},
+        )
+        storage.mark_scan_job_running(scan_job)
+        session.commit()
+
+        try:
+            matches = scanner_impl.scan_path(resolved_target)
+            finding_ids: list[int] = []
+            for match in matches:
+                finding = storage.create_finding(
+                    CanonicalFinding(
+                        source_tool=scanner_impl.name,
+                        source_name=scanner_impl.name,
+                        category=match.category,
+                        title=match.title,
+                        description=match.description,
+                        severity=match.severity,
+                        confidence=match.confidence,
+                        remediation_hint=match.remediation_hint,
+                        risk_score=_risk_score_for_severity(match.severity),
+                        raw_payload=match.raw_payload,
+                        metadata=match.metadata,
+                        organization_id=organization_id,
+                        repository_id=repository_id,
+                        scan_job_id=scan_job.id,
+                    )
+                )
+                storage.create_evidence(
+                    finding_id=finding.id,
+                    source=scanner_impl.name,
+                    repository_path=str(match.path),
+                    line_start=match.line_start,
+                    line_end=match.line_end,
+                    snippet=match.snippet,
+                    extracted_indicator=match.indicator,
+                    confidence=match.confidence,
+                    source_class="internal",
+                )
+                finding_ids.append(finding.id)
+            storage.mark_scan_job_completed(scan_job)
+            session.commit()
+        except Exception as exc:
+            storage.mark_scan_job_failed(scan_job, str(exc))
+            session.commit()
+            raise
+
+    result = {
+        "scanner": scanner_impl.name,
+        "target": str(resolved_target),
+        "scan_job_id": scan_job.id,
+        "findings": len(matches),
+        "finding_ids": finding_ids,
+    }
+    if json_output:
+        typer.echo(json.dumps(result, indent=2, default=str))
+    else:
+        typer.echo(f"Completed scan job {scan_job.id} with {len(matches)} finding(s).")
+        typer.echo(f"Target: {resolved_target}")
 
 
 @app.command("verify-deps")

@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from datetime import UTC, datetime
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -87,6 +89,25 @@ class Storage:
     def create_scan_job(self, target_type: str, target_id: str, scanner_name: str, **kwargs: Any) -> ScanJob:
         scan_job = ScanJob(target_type=target_type, target_id=target_id, scanner_name=scanner_name, **kwargs)
         self.session.add(scan_job)
+        self.session.flush()
+        return scan_job
+
+    def mark_scan_job_running(self, scan_job: ScanJob) -> ScanJob:
+        scan_job.status = "running"
+        scan_job.started_at = datetime.now(UTC)
+        self.session.flush()
+        return scan_job
+
+    def mark_scan_job_completed(self, scan_job: ScanJob) -> ScanJob:
+        scan_job.status = "completed"
+        scan_job.completed_at = datetime.now(UTC)
+        self.session.flush()
+        return scan_job
+
+    def mark_scan_job_failed(self, scan_job: ScanJob, error_message: str) -> ScanJob:
+        scan_job.status = "failed"
+        scan_job.error_message = error_message
+        scan_job.completed_at = datetime.now(UTC)
         self.session.flush()
         return scan_job
 
