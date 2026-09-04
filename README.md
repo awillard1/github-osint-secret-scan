@@ -1,12 +1,14 @@
 # orgscan
 
-`orgscan` is the Phase 0/1 foundation for the OSINT Security Platform described in [`projectspec.md`](./projectspec.md). It currently provides:
+`orgscan` is the Phase 0/1 foundation plus the first operator workflow slice for the OSINT Security Platform described in [`projectspec.md`](./projectspec.md). It currently provides:
 
 - a Python package and CLI
 - environment-based configuration loading with `.env` support
 - structured logging
 - normalized core storage models for organizations, domains, repositories, accounts, scan jobs, findings, evidence, relationships, and risk scores
 - a SQLite-first persistence layer built on SQLAlchemy for future PostgreSQL support
+- target intake commands for organizations, domains, repositories, and accounts
+- finding inspection and dependency verification commands
 - tests for config, validation, storage, and CLI flows
 
 ## Requirements
@@ -58,6 +60,25 @@ Print application status and entity counts:
 
 ```bash
 orgscan status
+```
+
+Add a target:
+
+```bash
+orgscan add-target organization example-org
+orgscan add-target domain example.com --organization example-org
+```
+
+List stored findings:
+
+```bash
+orgscan findings --limit 20
+```
+
+Verify required local dependencies:
+
+```bash
+orgscan verify-deps
 ```
 
 Run tests:

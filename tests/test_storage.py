@@ -86,3 +86,41 @@ def test_storage_crud_round_trip(tmp_path: Path) -> None:
         "relationships": 1,
         "risk_scores": 1,
     }
+
+
+def test_storage_deduplicates_findings_by_normalized_hash(tmp_path: Path) -> None:
+    db_path = tmp_path / "dedupe.db"
+    database_url = f"sqlite:///{db_path}"
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+
+    with session_factory() as session:
+        storage = Storage(session)
+        first = storage.create_finding(
+            CanonicalFinding(
+                source_tool="gitleaks",
+                source_name="gitleaks",
+                category="secret",
+                title="Exposed token",
+                description="A token was found in history",
+            )
+        )
+        second = storage.create_finding(
+            CanonicalFinding(
+                source_tool="gitleaks",
+                source_name="gitleaks",
+                category="secret",
+                title="Exposed token",
+                description="A token was found in history",
+                raw_payload={"updated": True},
+            )
+        )
+        session.commit()
+
+    assert first.id == second.id
+
+    with session_factory() as session:
+        findings = Storage(session).list_findings()
+
+    assert len(findings) == 1
+    assert findings[0].raw_payload == {"updated": True}

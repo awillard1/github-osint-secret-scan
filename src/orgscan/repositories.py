@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from sqlalchemy import func, select
@@ -33,11 +33,26 @@ class Storage:
     def get_organization_by_name(self, name: str) -> Organization | None:
         return self.session.scalar(select(Organization).where(Organization.name == name))
 
+    def get_or_create_organization(self, name: str, **kwargs: Any) -> tuple[Organization, bool]:
+        existing = self.get_organization_by_name(name)
+        if existing:
+            return existing, False
+        return self.create_organization(name, **kwargs), True
+
     def create_domain(self, name: str, **kwargs: Any) -> Domain:
         domain = Domain(name=name, **kwargs)
         self.session.add(domain)
         self.session.flush()
         return domain
+
+    def get_domain_by_name(self, name: str) -> Domain | None:
+        return self.session.scalar(select(Domain).where(Domain.name == name))
+
+    def get_or_create_domain(self, name: str, **kwargs: Any) -> tuple[Domain, bool]:
+        existing = self.get_domain_by_name(name)
+        if existing:
+            return existing, False
+        return self.create_domain(name, **kwargs), True
 
     def create_repository(self, full_name: str, **kwargs: Any) -> Repository:
         repository = Repository(full_name=full_name, **kwargs)
@@ -45,11 +60,29 @@ class Storage:
         self.session.flush()
         return repository
 
+    def get_repository_by_full_name(self, full_name: str) -> Repository | None:
+        return self.session.scalar(select(Repository).where(Repository.full_name == full_name))
+
+    def get_or_create_repository(self, full_name: str, **kwargs: Any) -> tuple[Repository, bool]:
+        existing = self.get_repository_by_full_name(full_name)
+        if existing:
+            return existing, False
+        return self.create_repository(full_name, **kwargs), True
+
     def create_account(self, username: str, **kwargs: Any) -> Account:
         account = Account(username=username, **kwargs)
         self.session.add(account)
         self.session.flush()
         return account
+
+    def get_account_by_username(self, username: str) -> Account | None:
+        return self.session.scalar(select(Account).where(Account.username == username))
+
+    def get_or_create_account(self, username: str, **kwargs: Any) -> tuple[Account, bool]:
+        existing = self.get_account_by_username(username)
+        if existing:
+            return existing, False
+        return self.create_account(username, **kwargs), True
 
     def create_scan_job(self, target_type: str, target_id: str, scanner_name: str, **kwargs: Any) -> ScanJob:
         scan_job = ScanJob(target_type=target_type, target_id=target_id, scanner_name=scanner_name, **kwargs)
@@ -105,6 +138,12 @@ class Storage:
         self.session.add(risk_score)
         self.session.flush()
         return risk_score
+
+    def list_findings(self, limit: int = 50, status: str | None = None) -> Sequence[Finding]:
+        query = select(Finding).order_by(Finding.detected_at.desc(), Finding.id.desc()).limit(limit)
+        if status:
+            query = query.where(Finding.status == status)
+        return list(self.session.scalars(query))
 
     def counts(self) -> Mapping[str, int]:
         tables = {
