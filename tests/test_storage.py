@@ -87,7 +87,9 @@ def test_storage_crud_round_trip(tmp_path: Path) -> None:
         "identity_correlations": 0,
         "relationships": 1,
         "risk_scores": 1,
+        "scheduled_scans": 0,
         "suppressions": 0,
+        "tool_runs": 0,
     }
 
 
@@ -194,3 +196,25 @@ def test_storage_suppression_and_domain_correlation_entities(tmp_path: Path) -> 
     assert counts["domain_exposures"] == 1
     assert counts["identity_correlations"] == 1
     assert counts["suppressions"] == 1
+
+
+def test_storage_tool_runs_and_scheduled_scans(tmp_path: Path) -> None:
+    db_path = tmp_path / "jobs.db"
+    database_url = f"sqlite:///{db_path}"
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+
+    with session_factory() as session:
+        storage = Storage(session)
+        scan_job = storage.create_scan_job("path", "/tmp/example", "custom-patterns")
+        tool_run = storage.create_tool_run("custom-patterns", "/tmp/example", scan_job_id=scan_job.id)
+        storage.mark_tool_run_running(tool_run)
+        storage.mark_tool_run_completed(tool_run, stdout_log="ok")
+        storage.create_scheduled_scan("path", "/tmp/example", "custom-patterns", scan_job.created_at)
+        session.commit()
+
+    with session_factory() as session:
+        counts = Storage(session).counts()
+
+    assert counts["scheduled_scans"] == 1
+    assert counts["tool_runs"] == 1

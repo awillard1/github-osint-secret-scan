@@ -19,8 +19,10 @@ from orgscan.models import (
     Relationship,
     Repository,
     RiskScore,
+    ScheduledScan,
     ScanJob,
     Suppression,
+    ToolRun,
 )
 from orgscan.schemas import CanonicalFinding
 
@@ -110,6 +112,36 @@ class Storage:
         self.session.add(scan_job)
         self.session.flush()
         return scan_job
+
+    def create_tool_run(self, tool_name: str, target: str, **kwargs: Any) -> ToolRun:
+        tool_run = ToolRun(tool_name=tool_name, target=target, **kwargs)
+        self.session.add(tool_run)
+        self.session.flush()
+        return tool_run
+
+    def mark_tool_run_running(self, tool_run: ToolRun) -> ToolRun:
+        tool_run.status = "running"
+        tool_run.started_at = datetime.now(UTC)
+        self.session.flush()
+        return tool_run
+
+    def mark_tool_run_completed(self, tool_run: ToolRun, *, stdout_log: str | None = None, stderr_log: str | None = None) -> ToolRun:
+        tool_run.status = "completed"
+        tool_run.completed_at = datetime.now(UTC)
+        if stdout_log is not None:
+            tool_run.stdout_log = stdout_log
+        if stderr_log is not None:
+            tool_run.stderr_log = stderr_log
+        self.session.flush()
+        return tool_run
+
+    def mark_tool_run_failed(self, tool_run: ToolRun, *, stderr_log: str | None = None) -> ToolRun:
+        tool_run.status = "failed"
+        tool_run.completed_at = datetime.now(UTC)
+        if stderr_log is not None:
+            tool_run.stderr_log = stderr_log
+        self.session.flush()
+        return tool_run
 
     def mark_scan_job_running(self, scan_job: ScanJob) -> ScanJob:
         scan_job.status = "running"
@@ -269,6 +301,25 @@ class Storage:
         self.session.flush()
         return suppression
 
+    def create_scheduled_scan(
+        self,
+        target_type: str,
+        target_value: str,
+        scanner_name: str,
+        next_run_at: datetime,
+        **kwargs: Any,
+    ) -> ScheduledScan:
+        scheduled_scan = ScheduledScan(
+            target_type=target_type,
+            target_value=target_value,
+            scanner_name=scanner_name,
+            next_run_at=next_run_at,
+            **kwargs,
+        )
+        self.session.add(scheduled_scan)
+        self.session.flush()
+        return scheduled_scan
+
     def list_findings(
         self,
         limit: int = 50,
@@ -370,6 +421,39 @@ class Storage:
         query = select(ScanJob).order_by(ScanJob.created_at.desc(), ScanJob.id.desc()).limit(limit)
         return list(self.session.scalars(query))
 
+    def list_tool_runs(self, limit: int = 25) -> Sequence[ToolRun]:
+        query = select(ToolRun).order_by(ToolRun.created_at.desc(), ToolRun.id.desc()).limit(limit)
+        return list(self.session.scalars(query))
+
+    def list_scheduled_scans(self, enabled_only: bool = False) -> Sequence[ScheduledScan]:
+        query = select(ScheduledScan).order_by(ScheduledScan.next_run_at.asc(), ScheduledScan.id.asc())
+        if enabled_only:
+            query = query.where(ScheduledScan.enabled.is_(True))
+        return list(self.session.scalars(query))
+
+    def list_due_scheduled_scans(self, now: datetime | None = None) -> Sequence[ScheduledScan]:
+        current = now or datetime.now(UTC)
+        query = (
+            select(ScheduledScan)
+            .where(ScheduledScan.enabled.is_(True), ScheduledScan.next_run_at <= current)
+            .order_by(ScheduledScan.next_run_at.asc(), ScheduledScan.id.asc())
+        )
+        return list(self.session.scalars(query))
+
+    def mark_scheduled_scan_run(
+        self,
+        scheduled_scan: ScheduledScan,
+        next_run_at: datetime,
+        *,
+        enabled: bool | None = None,
+    ) -> ScheduledScan:
+        scheduled_scan.last_run_at = datetime.now(UTC)
+        scheduled_scan.next_run_at = next_run_at
+        if enabled is not None:
+            scheduled_scan.enabled = enabled
+        self.session.flush()
+        return scheduled_scan
+
     def finding_counts_by_severity(self) -> Mapping[str, int]:
         rows = self.session.execute(
             select(Finding.severity, func.count()).group_by(Finding.severity).order_by(Finding.severity.asc())
@@ -395,7 +479,9 @@ class Storage:
             "identity_correlations": IdentityCorrelation,
             "relationships": Relationship,
             "risk_scores": RiskScore,
+            "scheduled_scans": ScheduledScan,
             "suppressions": Suppression,
+            "tool_runs": ToolRun,
         }
         return {
             name: self.session.scalar(select(func.count()).select_from(model)) or 0

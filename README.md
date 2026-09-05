@@ -1,6 +1,6 @@
 # orgscan
 
-`orgscan` is the Phase 0/1 foundation plus the first operator workflow slices for the OSINT Security Platform described in [`projectspec.md`](./projectspec.md). The repository roadmap is tracked in [`docs/roadmap.md`](./docs/roadmap.md). It currently provides:
+`orgscan` is the Phase 0/1 foundation plus practical slices through later phases of the OSINT Security Platform described in [`projectspec.md`](./projectspec.md). The repository roadmap is tracked in [`docs/roadmap.md`](./docs/roadmap.md), and OSS/tooling gaps are documented in [`docs/open-source-tooling-gaps.md`](./docs/open-source-tooling-gaps.md). It currently provides:
 
 - a Python package and CLI
 - environment-based configuration loading with `.env` support
@@ -9,6 +9,7 @@
 - a SQLite-first persistence layer built on SQLAlchemy for future PostgreSQL support
 - target intake commands for organizations, domains, repositories, and accounts
 - finding inspection, GitHub metadata discovery, local scanning, reporting, export, dashboard generation, and dependency verification commands
+- repository expansion, scheduled scanning, execution telemetry, and a lightweight JSON API
 - tests for config, validation, storage, and CLI flows
 
 ## Requirements
@@ -106,6 +107,13 @@ orgscan discover repository psf/requests
 orgscan discover domain example.com
 ```
 
+Expand related repositories and contributors:
+
+```bash
+orgscan expand repository psf/requests
+orgscan expand organization psf
+```
+
 Print a stored summary report:
 
 ```bash
@@ -117,6 +125,20 @@ Export findings and generate a static HTML dashboard:
 ```bash
 orgscan export ./data/findings.json --format json
 orgscan dashboard ./data/dashboard.html
+```
+
+Schedule recurring scans and inspect execution history:
+
+```bash
+orgscan schedule-scan ./path/to/scan --repository example-org/app --cadence daily
+orgscan run-scheduled --limit 5
+orgscan jobs --json
+```
+
+Serve the local JSON API:
+
+```bash
+orgscan serve-api --host 127.0.0.1 --port 8000
 ```
 
 Verify required local dependencies:
@@ -140,3 +162,4 @@ pytest
 - The initial `scan` command uses the built-in `custom-patterns` scanner and stores scan jobs, findings, and evidence in SQLite for later reporting.
 - The `discover` command uses the public GitHub REST API and can use `ORGSCAN_GITHUB_TOKEN` when configured for higher rate limits.
 - The current roadmap status and remaining gaps relative to the full project spec are documented in `docs/roadmap.md`.
+- Additional open-source tools that can close current capability gaps are documented in `docs/open-source-tooling-gaps.md`.

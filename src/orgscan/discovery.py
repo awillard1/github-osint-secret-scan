@@ -38,6 +38,21 @@ class GitHubRepositoryRecord:
         )
 
 
+@dataclass(frozen=True)
+class GitHubAccountRecord:
+    login: str
+    account_type: str
+    html_url: str | None = None
+
+    @classmethod
+    def from_api_payload(cls, payload: dict[str, object]) -> "GitHubAccountRecord":
+        return cls(
+            login=str(payload.get("login") or ""),
+            account_type=str(payload.get("type") or "User"),
+            html_url=payload.get("html_url") if isinstance(payload.get("html_url"), str) else None,
+        )
+
+
 class GitHubDiscoveryClient:
     def __init__(self, settings: Settings) -> None:
         self.base_url = settings.github_api_base_url.rstrip("/")
@@ -54,6 +69,18 @@ class GitHubDiscoveryClient:
         payload = self._request_json(f"/orgs/{organization}/repos?per_page={limit}")
         if not isinstance(payload, list):
             raise DiscoveryError("Expected a list of repositories from GitHub API")
+        return [GitHubRepositoryRecord.from_api_payload(item) for item in payload if isinstance(item, dict)]
+
+    def fetch_repository_contributors(self, full_name: str, limit: int = 20) -> list[GitHubAccountRecord]:
+        payload = self._request_json(f"/repos/{full_name}/contributors?per_page={limit}")
+        if not isinstance(payload, list):
+            raise DiscoveryError("Expected a list of contributors from GitHub API")
+        return [GitHubAccountRecord.from_api_payload(item) for item in payload if isinstance(item, dict)]
+
+    def fetch_repository_forks(self, full_name: str, limit: int = 20) -> list[GitHubRepositoryRecord]:
+        payload = self._request_json(f"/repos/{full_name}/forks?per_page={limit}")
+        if not isinstance(payload, list):
+            raise DiscoveryError("Expected a list of forks from GitHub API")
         return [GitHubRepositoryRecord.from_api_payload(item) for item in payload if isinstance(item, dict)]
 
     def _request_json(self, path: str) -> object:

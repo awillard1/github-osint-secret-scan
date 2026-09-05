@@ -4,7 +4,7 @@ from typer.testing import CliRunner
 
 from orgscan.cli import app
 from orgscan.config import get_settings
-from orgscan.discovery import GitHubRepositoryRecord
+from orgscan.discovery import GitHubAccountRecord, GitHubRepositoryRecord
 from orgscan.db import create_session_factory, init_db
 from orgscan.repositories import Storage
 from orgscan.schemas import CanonicalFinding
@@ -207,6 +207,57 @@ def test_cli_discover_report_export_and_dashboard(monkeypatch, tmp_path: Path) -
     domain_result = runner.invoke(app, ["discover", "domain", "example.org", "--json"])
     assert domain_result.exit_code == 0
     assert "domain_exposures" in domain_result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_cli_expand_schedule_and_jobs(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'ops.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    sample = tmp_path / "sample.py"
+    sample.write_text('api_key = "example-not-real-123456789"\n', encoding="utf-8")
+    monkeypatch.setattr(
+        "orgscan.cli.GitHubDiscoveryClient.fetch_repository_contributors",
+        lambda self, full_name, limit=20: [
+            GitHubAccountRecord(login="alice", account_type="User", html_url="https://github.com/alice")
+        ],
+    )
+    monkeypatch.setattr(
+        "orgscan.cli.GitHubDiscoveryClient.fetch_repository_forks",
+        lambda self, full_name, limit=20: [
+            GitHubRepositoryRecord(
+                full_name="alice/example-repo-fork",
+                html_url="https://github.com/alice/example-repo-fork",
+                default_branch="main",
+                private=False,
+                owner_login="alice",
+                owner_type="User",
+                description="Fork",
+            )
+        ],
+    )
+    get_settings.cache_clear()
+
+    expand_result = runner.invoke(app, ["expand", "repository", "example/example-repo", "--json"])
+    assert expand_result.exit_code == 0
+    assert "alice/example-repo-fork" in expand_result.stdout
+
+    schedule_result = runner.invoke(
+        app,
+        ["schedule-scan", str(sample), "--repository", "example/example-repo", "--cadence", "manual"],
+    )
+    assert schedule_result.exit_code == 0
+    assert "Scheduled scan" in schedule_result.stdout
+
+    run_result = runner.invoke(app, ["run-scheduled", "--json"])
+    assert run_result.exit_code == 0
+    assert '"findings": 1' in run_result.stdout
+
+    jobs_result = runner.invoke(app, ["jobs", "--json"])
+    assert jobs_result.exit_code == 0
+    assert "tool_runs" in jobs_result.stdout
+    assert "scheduled_scans" in jobs_result.stdout
 
     get_settings.cache_clear()
 

@@ -16,6 +16,17 @@ def build_summary(storage: Storage) -> dict[str, Any]:
         "category_breakdown": dict(storage.finding_counts_by_category()),
         "organizations": [org.name for org in storage.list_organizations()],
         "repositories": [repo.full_name for repo in storage.list_repositories()],
+        "accounts": [account.username for account in storage.list_accounts()],
+        "domain_exposures": [exposure.result_summary for exposure in storage.list_domain_exposures()],
+        "identity_correlations": [
+            {
+                "domain_id": correlation.domain_id,
+                "email": correlation.email,
+                "username": correlation.username,
+                "relation_type": correlation.relation_type,
+            }
+            for correlation in storage.list_identity_correlations()
+        ],
         "recent_scan_jobs": [
             {
                 "id": job.id,
@@ -25,6 +36,26 @@ def build_summary(storage: Storage) -> dict[str, Any]:
                 "status": job.status,
             }
             for job in storage.list_scan_jobs()
+        ],
+        "recent_tool_runs": [
+            {
+                "id": run.id,
+                "tool_name": run.tool_name,
+                "target": run.target,
+                "status": run.status,
+            }
+            for run in storage.list_tool_runs()
+        ],
+        "scheduled_scans": [
+            {
+                "id": scan.id,
+                "target_type": scan.target_type,
+                "target_value": scan.target_value,
+                "scanner_name": scan.scanner_name,
+                "cadence": scan.cadence,
+                "enabled": scan.enabled,
+            }
+            for scan in storage.list_scheduled_scans()
         ],
     }
 

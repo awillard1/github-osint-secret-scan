@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from datetime import date
-from hashlib import sha256
 from pathlib import Path
 from enum import StrEnum
 
@@ -11,16 +10,19 @@ import typer
 from sqlalchemy import text
 
 from orgscan.bootstrap import bootstrap
+from orgscan.api import serve_api
 from orgscan.config import Settings, get_settings
 from orgscan.db import create_session_factory, init_db
 from orgscan.discovery import DiscoveryError, GitHubDiscoveryClient
+from orgscan.expansion import GitHubExpansionEngine
 from orgscan.logging_config import setup_logging
 from orgscan.models import Finding
+from orgscan.providers import get_domain_provider
 from orgscan.repositories import Storage
 from orgscan.reporting import build_summary, finding_rows, write_csv, write_html, write_json
-from orgscan.scoring import calculate_risk_score
-from orgscan.schemas import CanonicalFinding
-from orgscan.scanners import ScannerExecutionError, get_scanner
+from orgscan.runner import execute_scan
+from orgscan.scanners import ScannerExecutionError
+from orgscan.scheduler import next_run_from_cadence, run_due_scans
 
 app = typer.Typer(help="OSINT Security Platform CLI foundation")
 
@@ -42,10 +44,22 @@ class DiscoverTargetType(StrEnum):
     DOMAIN = "domain"
 
 
+class ExpandTargetType(StrEnum):
+    REPOSITORY = "repository"
+    ORGANIZATION = "organization"
+
+
 class ExportFormat(StrEnum):
     JSON = "json"
     CSV = "csv"
     HTML = "html"
+
+
+class ScanCadence(StrEnum):
+    MANUAL = "manual"
+    HOURLY = "hourly"
+    DAILY = "daily"
+    WEEKLY = "weekly"
 
 
 class FindingWorkflowStatus(StrEnum):
@@ -92,10 +106,6 @@ def _write_export(output_path: Path, export_format: ExportFormat, summary: dict[
     if export_format == ExportFormat.CSV:
         return write_csv(output_path, rows)
     return write_html(output_path, summary, rows)
-
-
-def _domain_hash(*parts: str) -> str:
-    return sha256("::".join(parts).encode("utf-8")).hexdigest()
 
 
 def _parse_due_date(value: str | None) -> date | None:
@@ -217,6 +227,7 @@ def discover(
     target_type: DiscoverTargetType,
     value: str,
     limit: int = typer.Option(10, "--limit", min=1, max=100, help="Maximum repositories to ingest for organization discovery."),
+    provider: str = typer.Option("local-metadata", "--provider", help="Domain provider to use for domain discovery."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
@@ -233,39 +244,13 @@ def discover(
         discovered_identity_correlations: list[str] = []
 
         if target_type == DiscoverTargetType.DOMAIN:
-            domain_record, _ = storage.get_or_create_domain(value)
-            needle = value.lower()
-            for repository in storage.list_repositories():
-                haystacks = [
-                    repository.full_name.lower(),
-                    (repository.url or "").lower(),
-                    json.dumps(repository.metadata_json).lower(),
-                ]
-                if any(needle in haystack for haystack in haystacks):
-                    summary = f"Repository metadata references domain {value}: {repository.full_name}"
-                    storage.create_domain_exposure(
-                        domain_record.id,
-                        source="github-metadata",
-                        source_name="discover-domain",
-                        result_summary=summary,
-                        normalized_hash=_domain_hash("repo", value, repository.full_name),
-                        source_class="free",
-                        confidence="likely",
-                        severity="low",
-                    )
-                    discovered_domain_exposures.append(summary)
-            for account in storage.list_accounts():
-                if account.email and account.email.lower().endswith(f"@{needle}"):
-                    storage.create_identity_correlation(
-                        domain_record.id,
-                        source="github-metadata",
-                        relation_type="email-domain-match",
-                        email=account.email,
-                        username=account.username,
-                        confidence="likely",
-                        evidence_reference=account.email,
-                    )
-                    discovered_identity_correlations.append(account.username)
+            try:
+                domain_provider = get_domain_provider(provider)
+            except ValueError as exc:
+                raise typer.BadParameter(str(exc)) from exc
+            result = domain_provider.discover(storage, value)
+            discovered_domain_exposures.extend(result.exposures)
+            discovered_identity_correlations.extend(result.identity_correlations)
             session.commit()
             result = {
                 "target_type": target_type.value,
@@ -406,6 +391,46 @@ def findings(
         typer.echo(
             f"[{row.severity}/{row.confidence}] {row.title} "
             f"(id={row.id}, category={row.category}, status={row.status}, triage={row.triage_state})"
+        )
+
+
+@app.command("expand")
+def expand(
+    target_type: ExpandTargetType,
+    value: str,
+    limit: int = typer.Option(20, "--limit", min=1, max=100, help="Maximum related records to ingest."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    client = GitHubDiscoveryClient(settings)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        engine = GitHubExpansionEngine(client, storage)
+        try:
+            result = (
+                engine.expand_repository(value, limit=limit)
+                if target_type == ExpandTargetType.REPOSITORY
+                else engine.expand_organization(value, limit=limit)
+            )
+            session.commit()
+        except DiscoveryError as exc:
+            typer.echo(f"Expansion failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+    payload = {
+        "target_type": target_type.value,
+        "value": value,
+        "repositories": result.repositories,
+        "accounts": result.accounts,
+        "relationships": result.relationships,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2))
+    else:
+        typer.echo(
+            f"Expanded {value}: {len(result.repositories)} repositories, "
+            f"{len(result.accounts)} accounts, {result.relationships} relationships."
         )
 
 
@@ -567,10 +592,6 @@ def scan(
     settings = _settings()
     init_db(settings.database_url)
     session_factory = create_session_factory(settings.database_url)
-    try:
-        scanner_impl = get_scanner(scanner)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
     resolved_target = target.resolve()
 
     with session_factory() as session:
@@ -588,87 +609,155 @@ def scan(
             )
             repository_id = repository_record.id
 
-        scan_job = storage.create_scan_job(
-            target_type=target_type.value,
-            target_id=str(resolved_target),
-            scanner_name=scanner_impl.name,
-            status="pending",
-            parameters_json={"path": str(resolved_target)},
-        )
-        storage.mark_scan_job_running(scan_job)
-        session.commit()
-
         try:
-            matches = scanner_impl.scan_path(resolved_target)
-            finding_ids: list[int] = []
-            for match in matches:
-                finding = storage.create_finding(
-                    CanonicalFinding(
-                        source_tool=scanner_impl.name,
-                        source_name=scanner_impl.name,
-                        category=match.category,
-                        title=match.title,
-                        description=match.description,
-                        severity=match.severity,
-                        confidence=match.confidence,
-                        remediation_hint=match.remediation_hint,
-                        risk_score=calculate_risk_score(
-                            severity=str(match.severity),
-                            confidence=str(match.confidence),
-                            source_class="internal",
-                        ),
-                        raw_payload=match.raw_payload,
-                        metadata=match.metadata,
-                        organization_id=organization_id,
-                        repository_id=repository_id,
-                        scan_job_id=scan_job.id,
-                    )
-                )
-                storage.create_evidence(
-                    finding_id=finding.id,
-                    source=scanner_impl.name,
-                    repository_path=str(match.path),
-                    line_start=match.line_start,
-                    line_end=match.line_end,
-                    snippet=match.snippet,
-                    extracted_indicator=match.indicator,
-                    confidence=match.confidence,
-                    source_class="internal",
-                )
-                storage.create_risk_score(
-                    "finding",
-                    str(finding.id),
-                    finding.risk_score or 0,
-                    finding_id=finding.id,
-                    severity=finding.severity,
-                    confidence=finding.confidence,
-                    rationale=f"Calculated from severity={finding.severity}, confidence={finding.confidence}, source_class=internal.",
-                )
-                finding_ids.append(finding.id)
-            storage.mark_scan_job_completed(scan_job)
-            session.commit()
+            result = execute_scan(
+                storage,
+                target_path=resolved_target,
+                scanner_name=scanner,
+                organization_id=organization_id,
+                repository_id=repository_id,
+            )
         except ScannerExecutionError as exc:
-            storage.mark_scan_job_failed(scan_job, str(exc))
-            session.commit()
             typer.echo(f"Scan failed: {exc}", err=True)
             raise typer.Exit(code=1) from exc
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
         except Exception as exc:
-            storage.mark_scan_job_failed(scan_job, str(exc))
-            session.commit()
             raise
 
-    result = {
-        "scanner": scanner_impl.name,
-        "target": str(resolved_target),
-        "scan_job_id": scan_job.id,
-        "findings": len(matches),
-        "finding_ids": finding_ids,
+    result_payload = {
+        "scanner": result.scanner,
+        "target": result.target,
+        "scan_job_id": result.scan_job_id,
+        "tool_run_id": result.tool_run_id,
+        "findings": result.findings,
+        "finding_ids": result.finding_ids,
     }
     if json_output:
-        typer.echo(json.dumps(result, indent=2, default=str))
+        typer.echo(json.dumps(result_payload, indent=2, default=str))
     else:
-        typer.echo(f"Completed scan job {scan_job.id} with {len(matches)} finding(s).")
-        typer.echo(f"Target: {resolved_target}")
+        typer.echo(f"Completed scan job {result.scan_job_id} with {result.findings} finding(s).")
+        typer.echo(f"Target: {result.target}")
+
+
+@app.command("schedule-scan")
+def schedule_scan(
+    target: Path,
+    scanner: str = typer.Option("custom-patterns", "--scanner", help="Scanner to schedule."),
+    cadence: ScanCadence = typer.Option(ScanCadence.DAILY, "--cadence", help="How often to rerun the scan."),
+    organization: str | None = typer.Option(None, "--organization", help="Optional organization association."),
+    repository: str | None = typer.Option(None, "--repository", help="Optional repository association."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        organization_id = None
+        repository_id = None
+        if organization:
+            organization_record, _ = storage.get_or_create_organization(organization)
+            organization_id = organization_record.id
+        if repository:
+            repository_record, _ = storage.get_or_create_repository(repository, organization_id=organization_id)
+            repository_id = repository_record.id
+        scheduled = storage.create_scheduled_scan(
+            "path",
+            str(target.resolve()),
+            scanner,
+            next_run_from_cadence(cadence.value),
+            cadence=cadence.value,
+            metadata_json={
+                "organization_id": organization_id,
+                "repository_id": repository_id,
+            },
+        )
+        session.commit()
+    typer.echo(f"Scheduled scan {scheduled.id} for {target.resolve()} ({cadence.value})")
+
+
+@app.command("run-scheduled")
+def run_scheduled(
+    limit: int = typer.Option(10, "--limit", min=1, help="Maximum number of due scheduled scans to run."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        try:
+            results = run_due_scans(storage, limit=limit)
+        except ScannerExecutionError as exc:
+            typer.echo(f"Scheduled scan failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    payload = [
+        {
+            "scan_job_id": result.scan_job_id,
+            "tool_run_id": result.tool_run_id,
+            "scanner": result.scanner,
+            "target": result.target,
+            "findings": result.findings,
+        }
+        for result in results
+    ]
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        typer.echo(f"Ran {len(results)} scheduled scan(s).")
+
+
+@app.command("jobs")
+def jobs(
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        scan_jobs = storage.list_scan_jobs()
+        tool_runs = storage.list_tool_runs()
+        scheduled_scans = storage.list_scheduled_scans()
+    payload = {
+        "scan_jobs": [
+            {
+                "id": job.id,
+                "scanner_name": job.scanner_name,
+                "target_id": job.target_id,
+                "status": job.status,
+            }
+            for job in scan_jobs
+        ],
+        "tool_runs": [
+            {
+                "id": run.id,
+                "tool_name": run.tool_name,
+                "target": run.target,
+                "status": run.status,
+            }
+            for run in tool_runs
+        ],
+        "scheduled_scans": [
+            {
+                "id": scan.id,
+                "scanner_name": scan.scanner_name,
+                "target_value": scan.target_value,
+                "cadence": scan.cadence,
+                "enabled": scan.enabled,
+            }
+            for scan in scheduled_scans
+        ],
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        typer.echo(
+            f"scan_jobs={len(payload['scan_jobs'])} tool_runs={len(payload['tool_runs'])} "
+            f"scheduled_scans={len(payload['scheduled_scans'])}"
+        )
 
 
 @app.command("export")
@@ -704,6 +793,16 @@ def dashboard(
 
     output = write_html(output_path, summary, rows)
     typer.echo(f"Wrote dashboard HTML to {output}")
+
+
+@app.command("serve-api")
+def serve_api_command(
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host."),
+    port: int = typer.Option(8000, "--port", min=1, max=65535, help="Bind port."),
+) -> None:
+    settings = _settings()
+    typer.echo(f"Serving API on http://{host}:{port}")
+    serve_api(settings.database_url, host=host, port=port)
 
 
 @app.command("verify-deps")

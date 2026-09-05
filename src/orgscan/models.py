@@ -144,6 +144,7 @@ class ScanJob(TimestampMixin, Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     findings: Mapped[list[Finding]] = relationship(back_populates="scan_job")
+    tool_runs: Mapped[list[ToolRun]] = relationship(back_populates="scan_job")
 
 
 class Finding(TimestampMixin, Base):
@@ -246,6 +247,38 @@ class RiskScore(TimestampMixin, Base):
     calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     finding: Mapped[Finding | None] = relationship(back_populates="risk_scores")
+
+
+class ToolRun(TimestampMixin, Base):
+    __tablename__ = "tool_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scan_job_id: Mapped[int | None] = mapped_column(ForeignKey("scan_jobs.id"), nullable=True, index=True)
+    tool_name: Mapped[str] = mapped_column(String(255), index=True)
+    tool_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    target: Mapped[str] = mapped_column(String(1024))
+    command_line: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default=ScanJobStatus.PENDING.value)
+    stdout_log: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stderr_log: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    scan_job: Mapped[ScanJob | None] = relationship(back_populates="tool_runs")
+
+
+class ScheduledScan(TimestampMixin, Base):
+    __tablename__ = "scheduled_scans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_type: Mapped[str] = mapped_column(String(64), index=True)
+    target_value: Mapped[str] = mapped_column(String(1024), index=True)
+    scanner_name: Mapped[str] = mapped_column(String(255))
+    cadence: Mapped[str] = mapped_column(String(32), default="daily")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class DomainExposure(TimestampMixin, Base):
