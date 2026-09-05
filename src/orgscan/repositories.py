@@ -167,11 +167,12 @@ class Storage:
         )
         if existing:
             previous_status = existing.status
+            should_update_status = finding.status != "open" or previous_status == "resolved"
             existing.last_seen_at = finding.last_seen_at
             existing.raw_payload = finding.raw_payload
             existing.metadata_json = finding.metadata
             existing.scan_job_id = finding.scan_job_id
-            if finding.status != "open" or previous_status == "resolved":
+            if should_update_status:
                 existing.status = finding.status
             if previous_status == "resolved" and finding.status != "resolved":
                 existing.triage_state = "reopened"
@@ -476,6 +477,37 @@ class Storage:
             select(Finding.category, func.count()).group_by(Finding.category).order_by(Finding.category.asc())
         )
         return {category: count for category, count in rows}
+
+    def finding_counts_by_source_tool(self) -> Mapping[str, int]:
+        rows = self.session.execute(
+            select(Finding.source_tool, func.count()).group_by(Finding.source_tool).order_by(Finding.source_tool.asc())
+        )
+        return {source_tool: count for source_tool, count in rows}
+
+    def finding_counts_by_status(self) -> Mapping[str, int]:
+        rows = self.session.execute(
+            select(Finding.status, func.count()).group_by(Finding.status).order_by(Finding.status.asc())
+        )
+        return {status: count for status, count in rows}
+
+    def list_top_risky_findings(self, limit: int = 10) -> Sequence[Finding]:
+        query = (
+            select(Finding)
+            .order_by(Finding.risk_score.desc().nullslast(), Finding.detected_at.desc(), Finding.id.desc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(query))
+
+    def finding_counts_by_repository(self, limit: int = 10) -> list[tuple[str, int]]:
+        rows = self.session.execute(
+            select(func.coalesce(Repository.full_name, "unassigned"), func.count())
+            .select_from(Finding)
+            .join(Repository, Repository.id == Finding.repository_id, isouter=True)
+            .group_by(func.coalesce(Repository.full_name, "unassigned"))
+            .order_by(func.count().desc(), func.coalesce(Repository.full_name, "unassigned").asc())
+            .limit(limit)
+        )
+        return [(repository_name, count) for repository_name, count in rows]
 
     def counts(self) -> Mapping[str, int]:
         tables = {

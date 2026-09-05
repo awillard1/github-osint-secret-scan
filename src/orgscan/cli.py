@@ -372,6 +372,7 @@ def discover(
 
         for record in records:
             organization_id = None
+            owner_account = None
             if record.owner_type.lower() == "organization":
                 organization_record, _ = storage.get_or_create_organization(
                     record.owner_login,
@@ -415,7 +416,6 @@ def discover(
                     source="github-api",
                 )
             else:
-                owner_account = storage.get_account_by_username(record.owner_login)
                 if owner_account is not None:
                     storage.get_or_create_relationship(
                         "account",

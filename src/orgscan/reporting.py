@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import html
 import json
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -11,22 +10,16 @@ from orgscan.repositories import Storage
 
 
 def build_summary(storage: Storage) -> dict[str, Any]:
-    total_findings = storage.counts()["findings"]
-    findings = list(storage.list_findings(limit=max(total_findings, 1)))
     repositories = {repo.id: repo.full_name for repo in storage.list_repositories()}
-    findings_by_tool = Counter(finding.source_tool for finding in findings)
-    workflow_breakdown = Counter(finding.status for finding in findings)
-    repository_breakdown = Counter(
-        repositories.get(finding.repository_id, "unassigned")
-        for finding in findings
-    )
+    top_risky_findings = list(storage.list_top_risky_findings(limit=10))
+    repository_breakdown = storage.finding_counts_by_repository(limit=10)
 
     return {
         "counts": dict(storage.counts()),
         "severity_breakdown": dict(storage.finding_counts_by_severity()),
         "category_breakdown": dict(storage.finding_counts_by_category()),
-        "source_tool_breakdown": dict(sorted(findings_by_tool.items())),
-        "workflow_breakdown": dict(sorted(workflow_breakdown.items())),
+        "source_tool_breakdown": dict(storage.finding_counts_by_source_tool()),
+        "workflow_breakdown": dict(storage.finding_counts_by_status()),
         "organizations": [org.name for org in storage.list_organizations()],
         "repositories": list(repositories.values()),
         "accounts": [account.username for account in storage.list_accounts()],
@@ -69,15 +62,11 @@ def build_summary(storage: Storage) -> dict[str, Any]:
                 "source_tool": finding.source_tool,
                 "status": finding.status,
             }
-            for finding in sorted(
-                findings,
-                key=lambda finding: (finding.risk_score or 0, finding.detected_at),
-                reverse=True,
-            )[:10]
+            for finding in top_risky_findings
         ],
         "top_risky_assets": [
             {"repository": repository_name, "findings": count}
-            for repository_name, count in repository_breakdown.most_common(10)
+            for repository_name, count in repository_breakdown
         ],
         "scheduled_scans": [
             {

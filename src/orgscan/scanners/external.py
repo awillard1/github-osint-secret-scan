@@ -23,7 +23,9 @@ class ScannerExecutionError(RuntimeError):
 
 
 def _not_installed_error(name: str) -> ScannerExecutionError:
-    return ScannerExecutionError(f"{name} is not installed; run orgscan verify-deps or install the official binary.")
+    return ScannerExecutionError(
+        f"{name} is not installed; run orgscan verify-deps and review docs/open-source-tooling-gaps.md for installation guidance."
+    )
 
 
 def _redact(value: str) -> str:
