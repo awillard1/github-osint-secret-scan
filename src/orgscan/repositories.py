@@ -167,12 +167,14 @@ class Storage:
             select(Finding).where(Finding.normalized_hash == finding.normalized_hash)
         )
         if existing:
+            previous_status = existing.status
             existing.last_seen_at = finding.last_seen_at
             existing.raw_payload = finding.raw_payload
             existing.metadata_json = finding.metadata
             existing.scan_job_id = finding.scan_job_id
             existing.status = finding.status
-            existing.triage_state = "reopened" if existing.status != "resolved" else existing.triage_state
+            if previous_status == "resolved" and finding.status != "resolved":
+                existing.triage_state = "reopened"
             self.session.flush()
             return existing
 

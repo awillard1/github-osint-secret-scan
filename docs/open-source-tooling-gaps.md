@@ -38,7 +38,7 @@ This document summarizes what the current repository can accomplish directly and
 
 ## Current recommendation
 Use the current repository as the local-first control plane, then layer in:
-1. Semgrep + ct.sh enrichment
+1. Semgrep + crt.sh enrichment
 2. DNS/WHOIS tooling
 3. Redis-backed queue workers
 4. FastAPI-based interactive API/dashboard

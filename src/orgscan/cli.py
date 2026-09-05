@@ -622,8 +622,6 @@ def scan(
             raise typer.Exit(code=1) from exc
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
-        except Exception as exc:
-            raise
 
     result_payload = {
         "scanner": result.scanner,
