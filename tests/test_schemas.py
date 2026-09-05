@@ -26,3 +26,26 @@ def test_canonical_finding_rejects_invalid_risk_score() -> None:
             description="Token exposed in config file",
             risk_score=101,
         )
+
+
+def test_canonical_finding_hash_ignores_severity_and_confidence() -> None:
+    first = CanonicalFinding(
+        source_tool="semgrep",
+        category="code-policy",
+        title="Debug mode enabled",
+        description="Debug mode is enabled.",
+        severity="medium",
+        confidence="heuristic",
+        metadata={"path": "app.py"},
+    )
+    second = CanonicalFinding(
+        source_tool="semgrep",
+        category="code-policy",
+        title="Debug mode enabled",
+        description="Debug mode is enabled.",
+        severity="high",
+        confidence="likely",
+        metadata={"path": "app.py"},
+    )
+
+    assert first.normalized_hash == second.normalized_hash

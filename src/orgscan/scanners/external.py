@@ -10,6 +10,12 @@ from typing import Any
 from orgscan.models import ConfidenceLevel, SeverityLevel
 from orgscan.scanners.base import ScanMatch
 
+SEMGREP_SEVERITY_MAP = {
+    "error": SeverityLevel.HIGH,
+    "warning": SeverityLevel.MEDIUM,
+    "info": SeverityLevel.LOW,
+}
+
 
 class ScannerExecutionError(RuntimeError):
     pass
@@ -33,6 +39,7 @@ def _redact_in_line(line: str, value: str, label: str) -> str:
 
 class GitleaksScanner:
     name = "gitleaks"
+    source_class = "free"
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
         if not shutil.which(self.name):
@@ -100,6 +107,7 @@ class GitleaksScanner:
 
 class SemgrepScanner:
     name = "semgrep"
+    source_class = "free"
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
         if not shutil.which(self.name):
@@ -133,11 +141,6 @@ class SemgrepScanner:
             start = item.get("start") if isinstance(item.get("start"), dict) else {}
             end = item.get("end") if isinstance(item.get("end"), dict) else {}
             severity = str(extra.get("severity") or "INFO").lower()
-            severity_map = {
-                "error": SeverityLevel.HIGH,
-                "warning": SeverityLevel.MEDIUM,
-                "info": SeverityLevel.LOW,
-            }
             lines = str(extra.get("lines") or "")
             check_id = str(item.get("check_id") or "semgrep-rule")
             path = str(item.get("path") or "")
@@ -149,7 +152,7 @@ class SemgrepScanner:
                     category="code-policy",
                     title=f"Semgrep: {check_id}",
                     description=str(extra.get("message") or "Semgrep detected a policy or code issue."),
-                    severity=severity_map.get(severity, SeverityLevel.LOW),
+                    severity=SEMGREP_SEVERITY_MAP.get(severity, SeverityLevel.LOW),
                     confidence=ConfidenceLevel.LIKELY,
                     indicator=check_id,
                     snippet=lines,
@@ -171,6 +174,7 @@ class SemgrepScanner:
 
 class TruffleHogScanner:
     name = "trufflehog"
+    source_class = "free"
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
         if not shutil.which(self.name):

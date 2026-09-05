@@ -44,8 +44,6 @@ class CanonicalFinding(BaseModel):
             "category": self.category,
             "title": self.title,
             "description": self.description,
-            "severity": self.severity,
-            "confidence": self.confidence,
             "organization_id": self.organization_id,
             "domain_id": self.domain_id,
             "repository_id": self.repository_id,

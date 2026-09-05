@@ -50,6 +50,7 @@ def execute_scan(
 
     try:
         matches = scanner_impl.scan_path(resolved_target)
+        source_class = getattr(scanner_impl, "source_class", "internal")
         finding_ids: list[int] = []
         for match in matches:
             finding = storage.create_finding(
@@ -61,11 +62,12 @@ def execute_scan(
                     description=match.description,
                     severity=match.severity,
                     confidence=match.confidence,
+                    source_class=source_class,
                     remediation_hint=match.remediation_hint,
                     risk_score=calculate_risk_score(
                         severity=str(match.severity),
                         confidence=str(match.confidence),
-                        source_class="internal",
+                        source_class=source_class,
                     ),
                     raw_payload=match.raw_payload,
                     metadata=match.metadata,
