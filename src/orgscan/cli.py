@@ -22,6 +22,7 @@ from orgscan.repositories import Storage
 from orgscan.reporting import build_summary, finding_rows, write_csv, write_html, write_json
 from orgscan.runner import execute_scan, record_scan_results
 from orgscan.scanners import ScannerExecutionError
+from orgscan.scanners.base import ScanMatch
 from orgscan.scanners.external import GitleaksScanner, SemgrepScanner, TruffleHogScanner
 from orgscan.scheduler import next_run_from_cadence, run_due_scans
 
@@ -140,7 +141,7 @@ def _resolve_asset_context(
     return organization_id, repository_id
 
 
-def _load_scanner_report(scanner: str, report_path: Path):
+def _load_scanner_report(scanner: str, report_path: Path) -> tuple[str, list[ScanMatch]]:
     if scanner == "gitleaks":
         return GitleaksScanner.source_class, GitleaksScanner.load_report(report_path)
     if scanner == "semgrep":
@@ -824,6 +825,7 @@ def run_scheduled(
             raise typer.Exit(code=1) from exc
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
+        session.commit()
     payload = [
         {
             "scan_job_id": result.scan_job_id,

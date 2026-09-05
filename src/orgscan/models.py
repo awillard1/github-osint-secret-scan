@@ -135,7 +135,7 @@ class ScanJob(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     target_type: Mapped[str] = mapped_column(String(64), index=True)
-    target_id: Mapped[str] = mapped_column(String(64), index=True)
+    target_id: Mapped[str] = mapped_column(String(1024), index=True)
     scanner_name: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(32), default=ScanJobStatus.PENDING.value)
     parameters_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)

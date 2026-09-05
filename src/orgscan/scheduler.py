@@ -37,6 +37,5 @@ def run_due_scans(storage: Storage, limit: int = 10) -> list[ScanExecutionResult
             next_run_from_cadence(scheduled.cadence),
             enabled=False if scheduled.cadence == "manual" else None,
         )
-        storage.session.commit()
         results.append(result)
     return results

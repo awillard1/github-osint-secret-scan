@@ -131,6 +131,38 @@ def test_storage_deduplicates_findings_by_normalized_hash(tmp_path: Path) -> Non
     assert findings[0].raw_payload == {"updated": True}
 
 
+def test_storage_deduplication_preserves_non_default_status(tmp_path: Path) -> None:
+    db_path = tmp_path / "status-preserve.db"
+    database_url = f"sqlite:///{db_path}"
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+
+    with session_factory() as session:
+        storage = Storage(session)
+        finding = storage.create_finding(
+            CanonicalFinding(
+                source_tool="gitleaks",
+                source_name="gitleaks",
+                category="secret",
+                title="Exposed token",
+                description="A token was found in history",
+                status="suppressed",
+            )
+        )
+        storage.create_finding(
+            CanonicalFinding(
+                source_tool="gitleaks",
+                source_name="gitleaks",
+                category="secret",
+                title="Exposed token",
+                description="A token was found in history",
+            )
+        )
+        session.commit()
+
+    assert finding.status == "suppressed"
+
+
 def test_get_or_create_updates_existing_repository_metadata(tmp_path: Path) -> None:
     db_path = tmp_path / "update.db"
     database_url = f"sqlite:///{db_path}"

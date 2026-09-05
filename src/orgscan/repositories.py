@@ -171,7 +171,8 @@ class Storage:
             existing.raw_payload = finding.raw_payload
             existing.metadata_json = finding.metadata
             existing.scan_job_id = finding.scan_job_id
-            existing.status = finding.status
+            if finding.status != "open" or previous_status == "resolved":
+                existing.status = finding.status
             if previous_status == "resolved" and finding.status != "resolved":
                 existing.triage_state = "reopened"
             self.session.flush()

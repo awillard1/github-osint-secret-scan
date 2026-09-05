@@ -11,7 +11,8 @@ from orgscan.repositories import Storage
 
 
 def build_summary(storage: Storage) -> dict[str, Any]:
-    findings = list(storage.list_findings(limit=500))
+    total_findings = storage.counts()["findings"]
+    findings = list(storage.list_findings(limit=max(total_findings, 1)))
     repositories = {repo.id: repo.full_name for repo in storage.list_repositories()}
     findings_by_tool = Counter(finding.source_tool for finding in findings)
     workflow_breakdown = Counter(finding.status for finding in findings)
