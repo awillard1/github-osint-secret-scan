@@ -209,7 +209,10 @@ class TruffleHogScanner:
         )
         if completed.returncode not in (0, 1):
             raise ScannerExecutionError(completed.stderr.strip() or "trufflehog execution failed")
-        lines = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
+        try:
+            lines = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
+        except json.JSONDecodeError as exc:
+            raise ScannerExecutionError("trufflehog produced invalid JSON output") from exc
         return self.parse_output(lines)
 
     @staticmethod

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -254,8 +255,12 @@ def test_cli_projectdiscovery_domain_and_ingest_results(monkeypatch, tmp_path: P
         ["discover", "domain", "example.org", "--provider", "projectdiscovery", "--json"],
     )
     assert discover_result.exit_code == 0
-    assert "api.example.org" in discover_result.stdout
-    assert "https://api.example.org" in discover_result.stdout
+    discover_payload = json.loads(discover_result.stdout)
+    assert "Discovered subdomain for example.org: api.example.org" in discover_payload["domain_exposures"]
+    assert any(
+        exposure.startswith("HTTP service for api.example.org: status=200 https://api.example.org")
+        for exposure in discover_payload["domain_exposures"]
+    )
 
     report = tmp_path / "gitleaks.json"
     report.write_text(
