@@ -85,7 +85,7 @@ def execute_scan(
                 snippet=match.snippet,
                 extracted_indicator=match.indicator,
                 confidence=match.confidence,
-                source_class="internal",
+                source_class=source_class,
             )
             storage.create_risk_score(
                 "finding",
@@ -94,7 +94,7 @@ def execute_scan(
                 finding_id=finding.id,
                 severity=finding.severity,
                 confidence=finding.confidence,
-                rationale=f"Calculated from severity={finding.severity}, confidence={finding.confidence}, source_class=internal.",
+                rationale=f"Calculated from severity={finding.severity}, confidence={finding.confidence}, source_class={source_class}.",
             )
             finding_ids.append(finding.id)
         storage.mark_scan_job_completed(scan_job)

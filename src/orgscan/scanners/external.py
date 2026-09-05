@@ -11,7 +11,7 @@ from orgscan.models import ConfidenceLevel, SeverityLevel
 from orgscan.scanners.base import ScanMatch
 
 SEMGREP_SEVERITY_MAP = {
-    "error": SeverityLevel.HIGH,
+    "error": SeverityLevel.CRITICAL,
     "warning": SeverityLevel.MEDIUM,
     "info": SeverityLevel.LOW,
 }

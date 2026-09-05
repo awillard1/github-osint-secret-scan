@@ -200,17 +200,18 @@ def test_storage_suppression_and_domain_correlation_entities(tmp_path: Path) -> 
 
 def test_storage_tool_runs_and_scheduled_scans(tmp_path: Path) -> None:
     db_path = tmp_path / "jobs.db"
+    target_path = tmp_path / "example"
     database_url = f"sqlite:///{db_path}"
     init_db(database_url)
     session_factory = create_session_factory(database_url)
 
     with session_factory() as session:
         storage = Storage(session)
-        scan_job = storage.create_scan_job("path", "/tmp/example", "custom-patterns")
-        tool_run = storage.create_tool_run("custom-patterns", "/tmp/example", scan_job_id=scan_job.id)
+        scan_job = storage.create_scan_job("path", str(target_path), "custom-patterns")
+        tool_run = storage.create_tool_run("custom-patterns", str(target_path), scan_job_id=scan_job.id)
         storage.mark_tool_run_running(tool_run)
         storage.mark_tool_run_completed(tool_run, stdout_log="ok")
-        storage.create_scheduled_scan("path", "/tmp/example", "custom-patterns", scan_job.created_at)
+        storage.create_scheduled_scan("path", str(target_path), "custom-patterns", scan_job.created_at)
         session.commit()
 
     with session_factory() as session:
