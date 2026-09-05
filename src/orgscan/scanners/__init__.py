@@ -12,7 +12,7 @@ SCANNERS = {
 }
 
 
-def get_scanner(name: str):
+def get_scanner(name: str) -> CustomPatternScanner | GitleaksScanner | SemgrepScanner | TruffleHogScanner:
     try:
         return SCANNERS[name]()
     except KeyError as exc:

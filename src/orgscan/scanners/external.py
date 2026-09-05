@@ -109,7 +109,10 @@ class SemgrepScanner:
         )
         if completed.returncode not in (0, 1):
             raise ScannerExecutionError(completed.stderr.strip() or "semgrep execution failed")
-        payload = json.loads(completed.stdout or "{}")
+        try:
+            payload = json.loads((completed.stdout or "").strip() or "{}")
+        except json.JSONDecodeError as exc:
+            raise ScannerExecutionError("semgrep produced invalid JSON output") from exc
         return self.parse_output(payload)
 
     @staticmethod
