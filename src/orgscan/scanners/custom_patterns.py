@@ -132,9 +132,3 @@ class CustomPatternScanner:
     @classmethod
     def _redact_in_line(cls, line: str, value: str, pattern_name: str) -> str:
         return line.replace(value, f"<redacted:{pattern_name}>")
-
-
-def get_scanner(name: str) -> CustomPatternScanner:
-    if name != CustomPatternScanner.name:
-        raise ValueError(f"Unsupported scanner: {name}")
-    return CustomPatternScanner()

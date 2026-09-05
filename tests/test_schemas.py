@@ -1,3 +1,4 @@
+import pytest
 from pydantic import ValidationError
 
 from orgscan.schemas import CanonicalFinding
@@ -17,7 +18,7 @@ def test_canonical_finding_generates_stable_hashes() -> None:
 
 
 def test_canonical_finding_rejects_invalid_risk_score() -> None:
-    try:
+    with pytest.raises(ValidationError, match="risk_score"):
         CanonicalFinding(
             source_tool="gitleaks",
             category="secret",
@@ -25,7 +26,3 @@ def test_canonical_finding_rejects_invalid_risk_score() -> None:
             description="Token exposed in config file",
             risk_score=101,
         )
-    except ValidationError as exc:
-        assert "risk_score" in str(exc)
-    else:
-        raise AssertionError("Expected ValidationError")
