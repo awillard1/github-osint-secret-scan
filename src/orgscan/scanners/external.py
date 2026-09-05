@@ -15,6 +15,10 @@ class ScannerExecutionError(RuntimeError):
     pass
 
 
+def _not_installed_error(name: str) -> ScannerExecutionError:
+    return ScannerExecutionError(f"{name} is not installed; run orgscan verify-deps or install the official binary.")
+
+
 def _redact(value: str) -> str:
     if not value:
         return "<redacted>"
@@ -32,7 +36,7 @@ class GitleaksScanner:
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
         if not shutil.which(self.name):
-            raise ScannerExecutionError("gitleaks is not installed; run orgscan verify-deps or install the official binary.")
+            raise _not_installed_error(self.name)
 
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
             report_path = Path(handle.name)
@@ -99,7 +103,7 @@ class SemgrepScanner:
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
         if not shutil.which(self.name):
-            raise ScannerExecutionError("semgrep is not installed; run orgscan verify-deps or install the official binary.")
+            raise _not_installed_error(self.name)
 
         completed = subprocess.run(
             [self.name, "scan", "--config", "auto", "--json", str(target)],
@@ -170,7 +174,7 @@ class TruffleHogScanner:
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
         if not shutil.which(self.name):
-            raise ScannerExecutionError("trufflehog is not installed; run orgscan verify-deps or install the official binary.")
+            raise _not_installed_error(self.name)
 
         completed = subprocess.run(
             [self.name, "filesystem", "--json", str(target)],
@@ -178,7 +182,7 @@ class TruffleHogScanner:
             capture_output=True,
             text=True,
         )
-        if completed.returncode not in (0, 183):
+        if completed.returncode not in (0, 1):
             raise ScannerExecutionError(completed.stderr.strip() or "trufflehog execution failed")
         lines = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
         return self.parse_output(lines)
