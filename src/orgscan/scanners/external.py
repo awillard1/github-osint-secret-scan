@@ -11,6 +11,7 @@ from orgscan.models import ConfidenceLevel, SeverityLevel
 from orgscan.scanners.base import ScanMatch
 
 SEMGREP_SEVERITY_MAP = {
+    "critical": SeverityLevel.CRITICAL,
     "error": SeverityLevel.CRITICAL,
     "warning": SeverityLevel.MEDIUM,
     "info": SeverityLevel.LOW,
@@ -114,7 +115,7 @@ class SemgrepScanner:
             raise _not_installed_error(self.name)
 
         completed = subprocess.run(
-            [self.name, "scan", "--config", "auto", "--json", str(target)],
+            [self.name, "scan", "--config", "auto", "--json", "--metrics=off", str(target)],
             check=False,
             capture_output=True,
             text=True,
