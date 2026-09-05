@@ -5,6 +5,7 @@ This document summarizes what the current repository can accomplish directly and
 ## Already integrated or supported
 - Built-in custom pattern scanning for local files and directories
 - Optional `gitleaks` integration for generic secret scanning
+- Optional `semgrep` integration for policy and code/config scanning
 - Optional `trufflehog` integration for verified secret detection
 - GitHub REST API discovery for public repository and organization metadata
 - Local correlation of domains against stored repository metadata and account emails
@@ -13,7 +14,6 @@ This document summarizes what the current repository can accomplish directly and
 ## High-value OSS tools to add next
 
 ### Code and config analysis
-- **Semgrep**: supply-chain, CI/CD, and IaC policy checks beyond raw secret detection
 - **detect-secrets**: complementary detector set and baseline workflow
 - **YARA**: matching for known document or artifact patterns
 - **ripgrep**-based heuristics: lightweight scanning for internal hostnames, org-specific strings, and governance files

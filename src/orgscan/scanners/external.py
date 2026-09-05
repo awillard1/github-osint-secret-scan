@@ -94,6 +94,74 @@ class GitleaksScanner:
         return results
 
 
+class SemgrepScanner:
+    name = "semgrep"
+
+    def scan_path(self, target: Path) -> list[ScanMatch]:
+        if not shutil.which(self.name):
+            raise ScannerExecutionError("semgrep is not installed; run orgscan verify-deps or install the official binary.")
+
+        completed = subprocess.run(
+            [self.name, "scan", "--config", "auto", "--json", str(target)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode not in (0, 1):
+            raise ScannerExecutionError(completed.stderr.strip() or "semgrep execution failed")
+        payload = json.loads(completed.stdout or "{}")
+        return self.parse_output(payload)
+
+    @staticmethod
+    def parse_output(payload: dict[str, Any]) -> list[ScanMatch]:
+        results: list[ScanMatch] = []
+        items = payload.get("results")
+        if not isinstance(items, list):
+            return results
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
+            start = item.get("start") if isinstance(item.get("start"), dict) else {}
+            end = item.get("end") if isinstance(item.get("end"), dict) else {}
+            severity = str(extra.get("severity") or "INFO").lower()
+            severity_map = {
+                "error": SeverityLevel.HIGH,
+                "warning": SeverityLevel.MEDIUM,
+                "info": SeverityLevel.LOW,
+            }
+            lines = str(extra.get("lines") or "")
+            check_id = str(item.get("check_id") or "semgrep-rule")
+            path = str(item.get("path") or "")
+            results.append(
+                ScanMatch(
+                    path=Path(path),
+                    line_start=int(start.get("line") or 1),
+                    line_end=int(end.get("line") or start.get("line") or 1),
+                    category="code-policy",
+                    title=f"Semgrep: {check_id}",
+                    description=str(extra.get("message") or "Semgrep detected a policy or code issue."),
+                    severity=severity_map.get(severity, SeverityLevel.LOW),
+                    confidence=ConfidenceLevel.LIKELY,
+                    indicator=check_id,
+                    snippet=lines,
+                    remediation_hint="Review the matched rule, validate impact, and remediate the flagged code or configuration.",
+                    raw_payload={
+                        "check_id": check_id,
+                        "severity": severity,
+                        "path": path,
+                    },
+                    metadata={
+                        "path": path,
+                        "check_id": check_id,
+                        "severity": severity,
+                    },
+                )
+            )
+        return results
+
+
 class TruffleHogScanner:
     name = "trufflehog"
 

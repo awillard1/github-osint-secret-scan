@@ -283,6 +283,22 @@ def test_cli_scan_reports_missing_external_scanner(monkeypatch, tmp_path: Path) 
     get_settings.cache_clear()
 
 
+def test_cli_scan_reports_missing_semgrep(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'missing-semgrep.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+
+    sample = tmp_path / "app.py"
+    sample.write_text("print('hello')\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["scan", "path", str(sample), "--scanner", "semgrep"])
+    assert result.exit_code == 1
+    assert "Scan failed: semgrep is not installed" in result.stderr
+
+    get_settings.cache_clear()
+
+
 def test_cli_triage_updates_finding(monkeypatch, tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'triage.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)

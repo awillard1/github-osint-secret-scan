@@ -1,12 +1,13 @@
 """Scanner implementations for orgscan."""
 
 from orgscan.scanners.custom_patterns import CustomPatternScanner
-from orgscan.scanners.external import GitleaksScanner, ScannerExecutionError, TruffleHogScanner
+from orgscan.scanners.external import GitleaksScanner, ScannerExecutionError, SemgrepScanner, TruffleHogScanner
 
 
 SCANNERS = {
     CustomPatternScanner.name: CustomPatternScanner,
     GitleaksScanner.name: GitleaksScanner,
+    SemgrepScanner.name: SemgrepScanner,
     TruffleHogScanner.name: TruffleHogScanner,
 }
 
@@ -21,6 +22,7 @@ def get_scanner(name: str):
 __all__ = [
     "CustomPatternScanner",
     "GitleaksScanner",
+    "SemgrepScanner",
     "TruffleHogScanner",
     "ScannerExecutionError",
     "get_scanner",

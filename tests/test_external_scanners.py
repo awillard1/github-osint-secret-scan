@@ -1,4 +1,4 @@
-from orgscan.scanners.external import GitleaksScanner, TruffleHogScanner
+from orgscan.scanners.external import GitleaksScanner, SemgrepScanner, TruffleHogScanner
 
 
 def test_gitleaks_parser_redacts_match_values() -> None:
@@ -36,3 +36,28 @@ def test_trufflehog_parser_marks_verified_findings() -> None:
     assert len(matches) == 1
     assert matches[0].confidence == "verified"
     assert matches[0].line_start == 8
+
+
+def test_semgrep_parser_maps_results() -> None:
+    matches = SemgrepScanner.parse_output(
+        {
+            "results": [
+                {
+                    "check_id": "python.flask.security.audit.app-run-debug.app-run-debug",
+                    "path": "app.py",
+                    "start": {"line": 12},
+                    "end": {"line": 12},
+                    "extra": {
+                        "message": "Debug mode should not be enabled in production.",
+                        "severity": "WARNING",
+                        "lines": "app.run(debug=True)",
+                    },
+                }
+            ]
+        }
+    )
+
+    assert len(matches) == 1
+    assert matches[0].category == "code-policy"
+    assert matches[0].severity == "medium"
+    assert matches[0].indicator == "python.flask.security.audit.app-run-debug.app-run-debug"

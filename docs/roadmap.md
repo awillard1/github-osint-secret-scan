@@ -30,7 +30,7 @@ This roadmap maps the current repository implementation to the phased goals from
 - built-in custom pattern scanner
 - persisted scan jobs, tool runs, findings, risk scores, and evidence
 - redacted evidence handling for scanner output
-- external scanner wrappers for `gitleaks` and `trufflehog` with graceful failure when binaries are unavailable
+- external scanner wrappers for `gitleaks`, `semgrep`, and `trufflehog` with graceful failure when binaries are unavailable
 
 ### Phase 4 — Discovery and reporting
 - public GitHub repository and organization discovery using the GitHub REST API
@@ -68,7 +68,7 @@ This roadmap maps the current repository implementation to the phased goals from
 ## Remaining gaps versus the full project spec
 - no FastAPI/Jinja2 or React live dashboard yet; current API is lightweight stdlib HTTP and dashboard output is static HTML
 - no distributed worker backend such as Celery/RQ/Dramatiq or Redis-backed queue
-- no CT log, WHOIS, DNS, Semgrep, YARA, or broader enrichment integrations yet
+- no CT log, WHOIS, DNS, YARA, or broader enrichment integrations yet
 - no graph visualization UI, multi-tenant auth, or PDF reporting
 - no paid provider implementations; only the abstraction and free/local correlation path exist
 - no large-scale branch/history orchestration or incremental repo mirror management

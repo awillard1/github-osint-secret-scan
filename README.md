@@ -93,10 +93,11 @@ Run the built-in custom pattern scanner against a file or directory:
 orgscan scan path ./path/to/scan --organization example-org --repository example-org/app
 ```
 
-If `gitleaks` or `trufflehog` are installed locally, you can run them through the same workflow:
+If `gitleaks`, `semgrep`, or `trufflehog` are installed locally, you can run them through the same workflow:
 
 ```bash
 orgscan scan path ./path/to/scan --scanner gitleaks
+orgscan scan path ./path/to/scan --scanner semgrep
 orgscan scan path ./path/to/scan --scanner trufflehog
 ```
 
@@ -162,4 +163,4 @@ pytest
 - The initial `scan` command uses the built-in `custom-patterns` scanner and stores scan jobs, findings, and evidence in SQLite for later reporting.
 - The `discover` command uses the public GitHub REST API and can use `ORGSCAN_GITHUB_TOKEN` when configured for higher rate limits.
 - The current roadmap status and remaining gaps relative to the full project spec are documented in `docs/roadmap.md`.
-- Additional open-source tools that can close current capability gaps are documented in `docs/open-source-tooling-gaps.md`.
+- Additional open-source tools that can close current capability gaps are documented in `docs/open-source-tooling-gaps.md`; Semgrep is now available as an optional external scanner integration.
