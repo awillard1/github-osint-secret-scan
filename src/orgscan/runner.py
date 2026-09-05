@@ -98,11 +98,6 @@ def execute_scan(
         storage.mark_scan_job_completed(scan_job)
         storage.mark_tool_run_completed(tool_run, stdout_log=f"findings={len(matches)}")
         storage.session.commit()
-    except ScannerExecutionError as exc:
-        storage.mark_scan_job_failed(scan_job, str(exc))
-        storage.mark_tool_run_failed(tool_run, stderr_log=str(exc))
-        storage.session.commit()
-        raise
     except Exception as exc:
         storage.mark_scan_job_failed(scan_job, str(exc))
         storage.mark_tool_run_failed(tool_run, stderr_log=str(exc))

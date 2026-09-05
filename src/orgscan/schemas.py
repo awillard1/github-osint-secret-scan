@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any
@@ -51,7 +52,9 @@ class CanonicalFinding(BaseModel):
             "account_id": self.account_id,
             "metadata": self.metadata,
         }
-        digest = sha256(repr(sorted(digest_basis.items())).encode("utf-8")).hexdigest()
+        digest = sha256(
+            json.dumps(digest_basis, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
         if not self.normalized_hash:
             self.normalized_hash = digest
         if not self.fingerprint:

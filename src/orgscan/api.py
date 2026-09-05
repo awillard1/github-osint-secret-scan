@@ -12,14 +12,14 @@ from orgscan.repositories import Storage
 class OrgscanApiService:
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url
+        init_db(self.database_url)
+        self.session_factory = create_session_factory(self.database_url)
 
     def handle(self, path: str) -> tuple[int, dict[str, object]]:
-        init_db(self.database_url)
-        session_factory = create_session_factory(self.database_url)
         parsed = urlparse(path)
         route = parsed.path
         params = parse_qs(parsed.query)
-        with session_factory() as session:
+        with self.session_factory() as session:
             storage = Storage(session)
             if route == "/health":
                 return 200, {"status": "ok"}
