@@ -331,21 +331,21 @@ def discover(
             except ValueError as exc:
                 raise typer.BadParameter(str(exc)) from exc
             try:
-                result = domain_provider.discover(storage, value)
+                provider_result = domain_provider.discover(storage, value)
             except DomainProviderError as exc:
                 typer.echo(f"Domain discovery failed: {exc}", err=True)
                 raise typer.Exit(code=1) from exc
-            discovered_domain_exposures.extend(result.exposures)
-            discovered_identity_correlations.extend(result.identity_correlations)
+            discovered_domain_exposures.extend(provider_result.exposures)
+            discovered_identity_correlations.extend(provider_result.identity_correlations)
             session.commit()
-            result = {
+            response_payload = {
                 "target_type": target_type.value,
                 "value": value,
                 "domain_exposures": discovered_domain_exposures,
                 "identity_correlations": discovered_identity_correlations,
             }
             if json_output:
-                typer.echo(json.dumps(result, indent=2))
+                typer.echo(json.dumps(response_payload, indent=2))
             else:
                 typer.echo(
                     f"Correlated domain {value}: "

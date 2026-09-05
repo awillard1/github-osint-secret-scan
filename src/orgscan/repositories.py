@@ -188,7 +188,16 @@ class Storage:
         self.session.flush()
         return evidence
 
-    def create_domain_exposure(self, domain_id: int, source: str, source_name: str, result_summary: str, normalized_hash: str, **kwargs: Any) -> DomainExposure:
+    def create_domain_exposure(
+        self,
+        domain_id: int,
+        source: str,
+        *,
+        source_name: str,
+        result_summary: str,
+        normalized_hash: str,
+        **kwargs: Any,
+    ) -> DomainExposure:
         existing = self.session.scalar(select(DomainExposure).where(DomainExposure.normalized_hash == normalized_hash))
         if existing:
             for key, value in kwargs.items():

@@ -216,7 +216,11 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
                 normalized_hash=self._hash("httpx", domain_name, host or domain_name, url or ""),
                 source_class="free",
                 confidence="likely",
-                severity="medium" if isinstance(status_code, int) and 200 <= status_code < 500 else "low",
+                severity=(
+                    "medium"
+                    if isinstance(status_code, int) and 200 <= status_code < 400
+                    else "low"
+                ),
                 query_used=host or domain_name,
                 evidence_url=url or None,
             )
