@@ -35,7 +35,8 @@ This roadmap maps the current repository implementation to the phased goals from
 ### Phase 4 — Discovery and reporting
 - public GitHub repository and organization discovery using the GitHub REST API
 - optional `ORGSCAN_GITHUB_TOKEN` support for authenticated discovery
-- summary reporting, JSON/CSV/HTML export, and static dashboard generation
+- ProjectDiscovery-backed domain enrichment through `subfinder` and `httpx`
+- summary reporting, JSON/CSV/HTML export, and richer static dashboard generation
 
 ### Phase 5 — Domain intelligence providers
 - provider abstraction for domain intelligence
@@ -64,11 +65,12 @@ This roadmap maps the current repository implementation to the phased goals from
 ### Phase 10 — Open-source tooling gap analysis
 - documented OSS capability matrix and remaining gaps in `docs/open-source-tooling-gaps.md`
 - current implementation keeps a free-first approach while identifying where additional OSS systems are needed
+- saved output from supported external scanners can be ingested and normalized through the common finding model
 
 ## Remaining gaps versus the full project spec
 - no FastAPI/Jinja2 or React live dashboard yet; current API is lightweight stdlib HTTP and dashboard output is static HTML
 - no distributed worker backend such as Celery/RQ/Dramatiq or Redis-backed queue
-- no CT log, WHOIS, DNS, YARA, or broader enrichment integrations yet
+- no CT log, WHOIS, DNS, YARA, or broader enrichment integrations beyond current ProjectDiscovery and local metadata support yet
 - no graph visualization UI, multi-tenant auth, or PDF reporting
 - no paid provider implementations; only the abstraction and free/local correlation path exist
 - no large-scale branch/history orchestration or incremental repo mirror management

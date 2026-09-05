@@ -112,6 +112,27 @@ def test_cli_verify_deps_json(monkeypatch, tmp_path: Path) -> None:
     get_settings.cache_clear()
 
 
+def test_cli_config_and_init_config(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'config.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ORGSCAN_GITHUB_TOKEN", "example-token")
+    get_settings.cache_clear()
+
+    config_result = runner.invoke(app, ["config", "--json"])
+    assert config_result.exit_code == 0
+    assert '"github_token": "<redacted>"' in config_result.stdout
+    assert '"projectdiscovery"' in config_result.stdout
+
+    env_path = tmp_path / ".env.generated"
+    init_result = runner.invoke(app, ["init-config", str(env_path)])
+    assert init_result.exit_code == 0
+    assert env_path.exists()
+    assert "ORGSCAN_SUBFINDER_BINARY=subfinder" in env_path.read_text(encoding="utf-8")
+
+    get_settings.cache_clear()
+
+
 def test_cli_scan_persists_findings(monkeypatch, tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'scan.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
@@ -207,6 +228,64 @@ def test_cli_discover_report_export_and_dashboard(monkeypatch, tmp_path: Path) -
     domain_result = runner.invoke(app, ["discover", "domain", "example.org", "--json"])
     assert domain_result.exit_code == 0
     assert "domain_exposures" in domain_result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_cli_projectdiscovery_domain_and_ingest_results(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'projectdiscovery.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+
+    monkeypatch.setattr(
+        "orgscan.providers.ProjectDiscoveryDomainProvider._run_subfinder",
+        lambda self, domain_name: [{"host": f"api.{domain_name}"}, {"host": f"www.{domain_name}"}],
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.ProjectDiscoveryDomainProvider._run_httpx",
+        lambda self, hosts: [
+            {"input": hosts[0], "url": f"https://{hosts[0]}", "status_code": 200, "tech": ["nginx"], "title": "API"}
+        ],
+    )
+
+    discover_result = runner.invoke(
+        app,
+        ["discover", "domain", "example.org", "--provider", "projectdiscovery", "--json"],
+    )
+    assert discover_result.exit_code == 0
+    assert "api.example.org" in discover_result.stdout
+    assert "https://api.example.org" in discover_result.stdout
+
+    report = tmp_path / "gitleaks.json"
+    report.write_text(
+        '[{"RuleID":"generic-api-key","Description":"Potential secret detected","File":"config.py","StartLine":4,"EndLine":4,"Secret":"example-not-real-secret-value","Match":"api_key = \\"example-not-real-secret-value\\""}]',
+        encoding="utf-8",
+    )
+    ingest_result = runner.invoke(
+        app,
+        [
+            "ingest-results",
+            "--scanner",
+            "gitleaks",
+            "--target",
+            "example-org/app",
+            "--repository",
+            "example-org/app",
+            str(report),
+            "--json",
+        ],
+    )
+    assert ingest_result.exit_code == 0
+    assert '"findings": 1' in ingest_result.stdout
+
+    findings_result = runner.invoke(app, ["findings", "--json"])
+    assert findings_result.exit_code == 0
+    assert "Gitleaks: generic-api-key" in findings_result.stdout
+
+    report_result = runner.invoke(app, ["report", "--json"])
+    assert report_result.exit_code == 0
+    assert '"source_tool_breakdown"' in report_result.stdout
 
     get_settings.cache_clear()
 

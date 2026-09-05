@@ -9,7 +9,7 @@
 - a SQLite-first persistence layer built on SQLAlchemy for future PostgreSQL support
 - target intake commands for organizations, domains, repositories, and accounts
 - finding inspection, GitHub metadata discovery, local scanning, reporting, export, dashboard generation, and dependency verification commands
-- repository expansion, scheduled scanning, execution telemetry, and a lightweight JSON API
+- repository expansion, scheduled scanning, execution telemetry, intuitive configuration helpers, and a lightweight JSON API
 - tests for config, validation, storage, and CLI flows
 
 ## Requirements
@@ -43,6 +43,15 @@ Example:
 ```env
 ORGSCAN_DATABASE_URL=sqlite:///./data/orgscan.db
 ORGSCAN_LOG_LEVEL=INFO
+ORGSCAN_SUBFINDER_BINARY=subfinder
+ORGSCAN_HTTPX_BINARY=httpx
+```
+
+Generate a starter `.env` template and inspect the effective configuration:
+
+```bash
+orgscan init-config
+orgscan config
 ```
 
 ## Usage
@@ -101,12 +110,22 @@ orgscan scan path ./path/to/scan --scanner semgrep
 orgscan scan path ./path/to/scan --scanner trufflehog
 ```
 
+You can also ingest previously saved scanner output and normalize it into the same canonical data model:
+
+```bash
+orgscan ingest-results --scanner gitleaks --target example-org/app --repository example-org/app ./reports/gitleaks.json
+orgscan ingest-results --scanner semgrep --target example-org/app --repository example-org/app ./reports/semgrep.json
+```
+
 Discover public GitHub repository metadata and persist it locally:
 
 ```bash
 orgscan discover repository psf/requests
 orgscan discover domain example.com
+orgscan discover domain example.com --provider projectdiscovery
 ```
+
+The `projectdiscovery` domain provider uses `subfinder` and `httpx` when installed to enrich domain exposure data with discovered subdomains and reachable HTTP services.
 
 Expand related repositories and contributors:
 
@@ -160,7 +179,9 @@ pytest
 - Storage code uses SQLAlchemy abstractions so PostgreSQL support can be added in later phases with minimal API churn.
 - Canonical scanner output should be normalized through `orgscan.schemas.CanonicalFinding` before persistence.
 - The bootstrap helper recommends package-manager installation only for base OS dependencies; use official upstream install methods for tools such as Gitleaks and TruffleHog.
+- The optional ProjectDiscovery integration uses `subfinder` for passive subdomain discovery and `httpx` for HTTP service enrichment.
 - The initial `scan` command uses the built-in `custom-patterns` scanner and stores scan jobs, findings, and evidence in SQLite for later reporting.
 - The `discover` command uses the public GitHub REST API and can use `ORGSCAN_GITHUB_TOKEN` when configured for higher rate limits.
+- External scanner output from `gitleaks`, `semgrep`, and `trufflehog` can be normalized through `orgscan ingest-results` without rerunning the original tool.
 - The current roadmap status and remaining gaps relative to the full project spec are documented in `docs/roadmap.md`.
 - Additional open-source tools that can close current capability gaps are documented in `docs/open-source-tooling-gaps.md`; Semgrep is now available as an optional external scanner integration.

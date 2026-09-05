@@ -105,6 +105,16 @@ class GitleaksScanner:
             )
         return results
 
+    @classmethod
+    def load_report(cls, report_path: Path) -> list[ScanMatch]:
+        try:
+            payload = json.loads(report_path.read_text(encoding="utf-8").strip() or "[]")
+        except json.JSONDecodeError as exc:
+            raise ScannerExecutionError("gitleaks report contained invalid JSON") from exc
+        if not isinstance(payload, list):
+            raise ScannerExecutionError("gitleaks report must contain a JSON array")
+        return cls.parse_output(payload)
+
 
 class SemgrepScanner:
     name = "semgrep"
@@ -172,6 +182,16 @@ class SemgrepScanner:
             )
         return results
 
+    @classmethod
+    def load_report(cls, report_path: Path) -> list[ScanMatch]:
+        try:
+            payload = json.loads(report_path.read_text(encoding="utf-8").strip() or "{}")
+        except json.JSONDecodeError as exc:
+            raise ScannerExecutionError("semgrep report contained invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise ScannerExecutionError("semgrep report must contain a JSON object")
+        return cls.parse_output(payload)
+
 
 class TruffleHogScanner:
     name = "trufflehog"
@@ -227,3 +247,17 @@ class TruffleHogScanner:
                 )
             )
         return results
+
+    @classmethod
+    def load_report(cls, report_path: Path) -> list[ScanMatch]:
+        results: list[dict[str, Any]] = []
+        for line in report_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ScannerExecutionError("trufflehog report contained invalid JSON lines") from exc
+            if isinstance(item, dict):
+                results.append(item)
+        return cls.parse_output(results)

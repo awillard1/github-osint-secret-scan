@@ -11,17 +11,18 @@ from sqlalchemy import text
 
 from orgscan.bootstrap import bootstrap
 from orgscan.api import serve_api
-from orgscan.config import Settings, get_settings
+from orgscan.config import Settings, get_settings, render_env_template
 from orgscan.db import create_session_factory, init_db
 from orgscan.discovery import DiscoveryError, GitHubDiscoveryClient
 from orgscan.expansion import GitHubExpansionEngine
 from orgscan.logging_config import setup_logging
 from orgscan.models import Finding
-from orgscan.providers import get_domain_provider
+from orgscan.providers import DomainProviderError, get_domain_provider
 from orgscan.repositories import Storage
 from orgscan.reporting import build_summary, finding_rows, write_csv, write_html, write_json
-from orgscan.runner import execute_scan
+from orgscan.runner import execute_scan, record_scan_results
 from orgscan.scanners import ScannerExecutionError
+from orgscan.scanners.external import GitleaksScanner, SemgrepScanner, TruffleHogScanner
 from orgscan.scheduler import next_run_from_cadence, run_due_scans
 
 app = typer.Typer(help="OSINT Security Platform CLI foundation")
@@ -117,6 +118,38 @@ def _parse_due_date(value: str | None) -> date | None:
         raise typer.BadParameter("Due dates must use YYYY-MM-DD format.") from exc
 
 
+def _resolve_asset_context(
+    storage: Storage,
+    *,
+    organization: str | None,
+    repository: str | None,
+    provider: str,
+) -> tuple[int | None, int | None]:
+    organization_id = None
+    repository_id = None
+    if organization:
+        organization_record, _ = storage.get_or_create_organization(organization)
+        organization_id = organization_record.id
+    if repository:
+        repository_record, _ = storage.get_or_create_repository(
+            repository,
+            organization_id=organization_id,
+            provider=provider,
+        )
+        repository_id = repository_record.id
+    return organization_id, repository_id
+
+
+def _load_scanner_report(scanner: str, report_path: Path):
+    if scanner == "gitleaks":
+        return GitleaksScanner.source_class, GitleaksScanner.load_report(report_path)
+    if scanner == "semgrep":
+        return SemgrepScanner.source_class, SemgrepScanner.load_report(report_path)
+    if scanner == "trufflehog":
+        return TruffleHogScanner.source_class, TruffleHogScanner.load_report(report_path)
+    raise typer.BadParameter(f"Unsupported report import scanner: {scanner}")
+
+
 @app.command("setup")
 def setup(
     init_database: bool = typer.Option(False, "--init-db", help="Initialize the configured database."),
@@ -161,6 +194,55 @@ def init_database() -> None:
     settings = _settings()
     init_db(settings.database_url)
     typer.echo(f"Initialized database at {settings.database_url}")
+
+
+@app.command("config")
+def config(
+    show_secrets: bool = typer.Option(False, "--show-secrets", help="Show configured secrets instead of redacting them."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    details = bootstrap(settings, verify_only=True)
+    payload = {
+        "settings": settings.as_dict(include_secrets=show_secrets),
+        "available_scanners": ["custom-patterns", "gitleaks", "semgrep", "trufflehog"],
+        "available_domain_providers": ["local-metadata", "projectdiscovery"],
+        "dependency_status": {
+            "required": details["required"],
+            "optional": details["optional"],
+        },
+    }
+
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+        return
+
+    typer.echo("Effective configuration")
+    for key, value in payload["settings"].items():
+        typer.echo(f"  - {key}: {value}")
+    typer.echo("Available scanners:")
+    for name in payload["available_scanners"]:
+        typer.echo(f"  - {name}")
+    typer.echo("Available domain providers:")
+    for name in payload["available_domain_providers"]:
+        typer.echo(f"  - {name}")
+    typer.echo("Dependency status:")
+    for scope, entries in payload["dependency_status"].items():
+        typer.echo(f"  {scope}:")
+        for command, present in entries.items():
+            typer.echo(f"    - {command}: {'ok' if present else 'missing'}")
+
+
+@app.command("init-config")
+def init_config(
+    output_path: Path = typer.Argument(Path(".env"), help="Path to write the .env template."),
+    force: bool = typer.Option(False, "--force", help="Overwrite an existing file."),
+) -> None:
+    if output_path.exists() and not force:
+        raise typer.BadParameter(f"Refusing to overwrite existing file: {output_path}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(render_env_template(), encoding="utf-8")
+    typer.echo(f"Wrote configuration template to {output_path.resolve()}")
 
 
 @app.command("add-target")
@@ -245,10 +327,14 @@ def discover(
 
         if target_type == DiscoverTargetType.DOMAIN:
             try:
-                domain_provider = get_domain_provider(provider)
+                domain_provider = get_domain_provider(provider, settings)
             except ValueError as exc:
                 raise typer.BadParameter(str(exc)) from exc
-            result = domain_provider.discover(storage, value)
+            try:
+                result = domain_provider.discover(storage, value)
+            except DomainProviderError as exc:
+                typer.echo(f"Domain discovery failed: {exc}", err=True)
+                raise typer.Exit(code=1) from exc
             discovered_domain_exposures.extend(result.exposures)
             discovered_identity_correlations.extend(result.identity_correlations)
             session.commit()
@@ -596,18 +682,12 @@ def scan(
 
     with session_factory() as session:
         storage = Storage(session)
-        organization_id = None
-        repository_id = None
-        if organization:
-            organization_record, _ = storage.get_or_create_organization(organization)
-            organization_id = organization_record.id
-        if repository:
-            repository_record, _ = storage.get_or_create_repository(
-                repository,
-                organization_id=organization_id,
-                provider=provider,
-            )
-            repository_id = repository_record.id
+        organization_id, repository_id = _resolve_asset_context(
+            storage,
+            organization=organization,
+            repository=repository,
+            provider=provider,
+        )
 
         try:
             result = execute_scan(
@@ -638,6 +718,61 @@ def scan(
         typer.echo(f"Target: {result.target}")
 
 
+@app.command("ingest-results")
+def ingest_results(
+    scanner: str = typer.Option(..., "--scanner", help="Scanner format to import: gitleaks, semgrep, or trufflehog."),
+    report_path: Path = typer.Argument(..., help="Path to the saved scanner report."),
+    target: str = typer.Option(..., "--target", help="Original target path or repository label for the report."),
+    organization: str | None = typer.Option(None, "--organization", help="Optional organization association."),
+    repository: str | None = typer.Option(None, "--repository", help="Optional repository association."),
+    provider: str = typer.Option("github", "--provider", help="Provider name for repository records."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    if not report_path.exists():
+        raise typer.BadParameter(f"Report does not exist: {report_path}")
+
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    source_class, matches = _load_scanner_report(scanner, report_path)
+
+    with session_factory() as session:
+        storage = Storage(session)
+        organization_id, repository_id = _resolve_asset_context(
+            storage,
+            organization=organization,
+            repository=repository,
+            provider=provider,
+        )
+        result = record_scan_results(
+            storage,
+            scanner_name=scanner,
+            source_class=source_class,
+            target=target,
+            matches=matches,
+            target_type="repository" if repository else "path",
+            organization_id=organization_id,
+            repository_id=repository_id,
+            command_line=f"orgscan ingest-results --scanner {scanner} {report_path}",
+        )
+
+    result_payload = {
+        "scanner": result.scanner,
+        "target": result.target,
+        "report_path": str(report_path.resolve()),
+        "scan_job_id": result.scan_job_id,
+        "tool_run_id": result.tool_run_id,
+        "findings": result.findings,
+        "finding_ids": result.finding_ids,
+    }
+    if json_output:
+        typer.echo(json.dumps(result_payload, indent=2, default=str))
+    else:
+        typer.echo(
+            f"Ingested {result.findings} finding(s) from {scanner} report into scan job {result.scan_job_id}."
+        )
+
+
 @app.command("schedule-scan")
 def schedule_scan(
     target: Path,
@@ -651,14 +786,12 @@ def schedule_scan(
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
-        organization_id = None
-        repository_id = None
-        if organization:
-            organization_record, _ = storage.get_or_create_organization(organization)
-            organization_id = organization_record.id
-        if repository:
-            repository_record, _ = storage.get_or_create_repository(repository, organization_id=organization_id)
-            repository_id = repository_record.id
+        organization_id, repository_id = _resolve_asset_context(
+            storage,
+            organization=organization,
+            repository=repository,
+            provider="github",
+        )
         scheduled = storage.create_scheduled_scan(
             "path",
             str(target.resolve()),

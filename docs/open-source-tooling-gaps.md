@@ -7,6 +7,7 @@ This document summarizes what the current repository can accomplish directly and
 - Optional `gitleaks` integration for generic secret scanning
 - Optional `semgrep` integration for policy and code/config scanning
 - Optional `trufflehog` integration for verified secret detection
+- Optional ProjectDiscovery integration via `subfinder` and `httpx` for domain and HTTP exposure enrichment
 - GitHub REST API discovery for public repository and organization metadata
 - Local correlation of domains against stored repository metadata and account emails
 - SQLite-backed persistence, exports, reports, and local API responses
@@ -19,8 +20,8 @@ This document summarizes what the current repository can accomplish directly and
 - **ripgrep**-based heuristics: lightweight scanning for internal hostnames, org-specific strings, and governance files
 
 ### Domain and infrastructure enrichment
-- **crt.sh** or other CT log APIs: certificate transparency signals for domain expansion
-- **dnspython** / `dnsrecon`: DNS and subdomain enrichment
+- **crt.sh** or other CT log APIs: certificate transparency signals to complement current ProjectDiscovery coverage
+- **dnspython** / `dnsrecon`: DNS enrichment beyond current subdomain/HTTP discovery
 - **whois**: ownership and registrar context
 - **httpx** / **subfinder** / **amass**: broader asset discovery, only where scope permits
 

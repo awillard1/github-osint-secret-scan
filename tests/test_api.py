@@ -32,5 +32,6 @@ def test_api_service_returns_summary_and_findings(tmp_path: Path) -> None:
     assert health_payload["status"] == "ok"
     assert summary_status == 200
     assert summary_payload["counts"]["findings"] == 1
+    assert summary_payload["source_tool_breakdown"]["custom-patterns"] == 1
     assert findings_status == 200
     assert findings_payload["findings"][0]["title"] == "API finding"

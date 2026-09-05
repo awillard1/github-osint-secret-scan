@@ -61,3 +61,16 @@ def test_semgrep_parser_maps_results() -> None:
     assert matches[0].category == "code-policy"
     assert matches[0].severity == "medium"
     assert matches[0].indicator == "python.flask.security.audit.app-run-debug.app-run-debug"
+
+
+def test_semgrep_load_report_reads_json_file(tmp_path) -> None:
+    report = tmp_path / "semgrep.json"
+    report.write_text(
+        '{"results":[{"check_id":"rule","path":"app.py","start":{"line":2},"end":{"line":2},"extra":{"message":"msg","severity":"ERROR","lines":"danger()"}}]}',
+        encoding="utf-8",
+    )
+
+    matches = SemgrepScanner.load_report(report)
+
+    assert len(matches) == 1
+    assert matches[0].severity == "critical"

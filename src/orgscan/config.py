@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 
@@ -23,10 +24,51 @@ class Settings(BaseSettings):
     github_api_base_url: str = "https://api.github.com"
     github_token: str | None = None
     http_timeout_seconds: int = 15
+    gitleaks_binary: str = "gitleaks"
+    semgrep_binary: str = "semgrep"
+    trufflehog_binary: str = "trufflehog"
+    subfinder_binary: str = "subfinder"
+    httpx_binary: str = "httpx"
 
     def ensure_data_dir(self) -> Path:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         return self.data_dir
+
+    def as_dict(self, *, include_secrets: bool = False) -> dict[str, object]:
+        payload = self.model_dump()
+        payload["data_dir"] = str(self.data_dir)
+        if not include_secrets and payload.get("github_token"):
+            payload["github_token"] = "<redacted>"
+        return payload
+
+
+def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
+    values: dict[str, object] = {
+        "ORGSCAN_APP_ENV": "development",
+        "ORGSCAN_LOG_LEVEL": "INFO",
+        "ORGSCAN_DATA_DIR": "./data",
+        "ORGSCAN_DATABASE_URL": "sqlite:///./data/orgscan.db",
+        "ORGSCAN_GITHUB_API_BASE_URL": "https://api.github.com",
+        "ORGSCAN_GITHUB_TOKEN": "",
+        "ORGSCAN_HTTP_TIMEOUT_SECONDS": 15,
+        "ORGSCAN_GITLEAKS_BINARY": "gitleaks",
+        "ORGSCAN_SEMGREP_BINARY": "semgrep",
+        "ORGSCAN_TRUFFLEHOG_BINARY": "trufflehog",
+        "ORGSCAN_SUBFINDER_BINARY": "subfinder",
+        "ORGSCAN_HTTPX_BINARY": "httpx",
+    }
+    if overrides:
+        values.update(overrides)
+
+    lines = [
+        "# orgscan configuration",
+        "# Copy this file to .env and adjust values for your environment.",
+        "",
+    ]
+    for key, value in values.items():
+        lines.append(f"{key}={value}")
+    lines.append("")
+    return "\n".join(lines)
 
 
 @lru_cache(maxsize=1)

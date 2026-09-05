@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from hashlib import sha256
+from pathlib import Path
+from typing import Any
 
+from orgscan.config import Settings
 from orgscan.repositories import Storage
 
 
@@ -13,8 +19,15 @@ class DomainProviderResult:
     identity_correlations: list[str]
 
 
+class DomainProviderError(RuntimeError):
+    pass
+
+
 class DomainIntelligenceProvider:
     name = "base"
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
         raise NotImplementedError
@@ -69,13 +82,157 @@ class LocalMetadataDomainProvider(DomainIntelligenceProvider):
         return DomainProviderResult(exposures=exposures, identity_correlations=identity_correlations)
 
 
+class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
+    name = "projectdiscovery"
+
+    @staticmethod
+    def _hash(*parts: str) -> str:
+        return sha256("::".join(parts).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _resolve_binary(command: str) -> str | None:
+        candidate = Path(command)
+        if candidate.is_absolute():
+            return str(candidate) if candidate.exists() else None
+        return shutil.which(command)
+
+    def _require_settings(self) -> Settings:
+        if self.settings is None:
+            raise DomainProviderError("ProjectDiscovery provider requires application settings.")
+        return self.settings
+
+    def _run_subfinder(self, domain_name: str) -> list[dict[str, Any]]:
+        settings = self._require_settings()
+        binary = self._resolve_binary(settings.subfinder_binary)
+        if binary is None:
+            raise DomainProviderError("subfinder is not installed; configure ORGSCAN_SUBFINDER_BINARY or install the ProjectDiscovery binary.")
+
+        completed = subprocess.run(
+            [binary, "-d", domain_name, "-silent", "-oJ"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0:
+            raise DomainProviderError(completed.stderr.strip() or "subfinder execution failed")
+
+        results: list[dict[str, Any]] = []
+        for line in completed.stdout.splitlines():
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise DomainProviderError("subfinder produced invalid JSON output") from exc
+            if isinstance(item, dict):
+                results.append(item)
+        return results
+
+    def _run_httpx(self, hosts: list[str]) -> list[dict[str, Any]]:
+        if not hosts:
+            return []
+        settings = self._require_settings()
+        binary = self._resolve_binary(settings.httpx_binary)
+        if binary is None:
+            raise DomainProviderError("httpx is not installed; configure ORGSCAN_HTTPX_BINARY or install the ProjectDiscovery binary.")
+
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            handle.write("\n".join(hosts) + "\n")
+            input_path = Path(handle.name)
+        try:
+            completed = subprocess.run(
+                [binary, "-silent", "-json", "-l", str(input_path)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        finally:
+            input_path.unlink(missing_ok=True)
+        if completed.returncode != 0:
+            raise DomainProviderError(completed.stderr.strip() or "httpx execution failed")
+
+        results: list[dict[str, Any]] = []
+        for line in completed.stdout.splitlines():
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise DomainProviderError("httpx produced invalid JSON output") from exc
+            if isinstance(item, dict):
+                results.append(item)
+        return results
+
+    def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        domain_record, _ = storage.get_or_create_domain(domain_name)
+        exposures: list[str] = []
+
+        subfinder_results = self._run_subfinder(domain_name)
+        subdomains = sorted(
+            {
+                str(item.get("host") or item.get("input") or "").strip().lower()
+                for item in subfinder_results
+                if str(item.get("host") or item.get("input") or "").strip()
+            }
+        )
+        if subdomains:
+            existing_subdomains = {value.lower() for value in domain_record.discovered_subdomains}
+            domain_record.discovered_subdomains = sorted(existing_subdomains.union(subdomains))
+            existing_sources = set(domain_record.discovery_sources)
+            existing_sources.add("projectdiscovery-subfinder")
+            domain_record.discovery_sources = sorted(existing_sources)
+
+        for subdomain in subdomains:
+            summary = f"Discovered subdomain for {domain_name}: {subdomain}"
+            storage.create_domain_exposure(
+                domain_record.id,
+                source="projectdiscovery",
+                source_name="subfinder",
+                result_summary=summary,
+                normalized_hash=self._hash("subfinder", domain_name, subdomain),
+                source_class="free",
+                confidence="likely",
+                severity="low",
+                query_used=domain_name,
+            )
+            exposures.append(summary)
+
+        for item in self._run_httpx(subdomains):
+            host = str(item.get("input") or item.get("host") or "").strip().lower()
+            url = str(item.get("url") or "").strip()
+            status_code = item.get("status_code")
+            title = str(item.get("title") or "").strip()
+            tech = item.get("tech") if isinstance(item.get("tech"), list) else []
+            tech_label = f" [{', '.join(str(entry) for entry in tech[:4])}]" if tech else ""
+            status_label = f"status={status_code}" if status_code is not None else "status=unknown"
+            summary = f"HTTP service for {host or domain_name}: {status_label} {url or host}{tech_label}".strip()
+            if title:
+                summary = f"{summary} title={title}"
+            storage.create_domain_exposure(
+                domain_record.id,
+                source="projectdiscovery",
+                source_name="httpx",
+                result_summary=summary,
+                normalized_hash=self._hash("httpx", domain_name, host or domain_name, url or ""),
+                source_class="free",
+                confidence="likely",
+                severity="medium" if isinstance(status_code, int) and 200 <= status_code < 500 else "low",
+                query_used=host or domain_name,
+                evidence_url=url or None,
+            )
+            exposures.append(summary)
+
+        return DomainProviderResult(exposures=exposures, identity_correlations=[])
+
+
 DOMAIN_PROVIDERS = {
     LocalMetadataDomainProvider.name: LocalMetadataDomainProvider,
+    ProjectDiscoveryDomainProvider.name: ProjectDiscoveryDomainProvider,
 }
 
 
-def get_domain_provider(name: str) -> DomainIntelligenceProvider:
+def get_domain_provider(name: str, settings: Settings | None = None) -> DomainIntelligenceProvider:
     try:
-        return DOMAIN_PROVIDERS[name]()
+        return DOMAIN_PROVIDERS[name](settings)
     except KeyError as exc:
         raise ValueError(f"Unsupported domain provider: {name}") from exc
