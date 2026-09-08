@@ -16,6 +16,7 @@ def test_open_source_gap_doc_exists() -> None:
     content = gaps.read_text(encoding="utf-8")
 
     assert "Semgrep" in content
+    assert "detect-secrets" in content
     assert "ProjectDiscovery" in content
     assert "crt.sh" in content
     assert "whois" in content

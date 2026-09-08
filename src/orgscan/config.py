@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     github_token: str | None = None
     http_timeout_seconds: int = 15
     gitleaks_binary: str = "gitleaks"
+    detect_secrets_binary: str = "detect-secrets"
     semgrep_binary: str = "semgrep"
     trufflehog_binary: str = "trufflehog"
     subfinder_binary: str = "subfinder"
@@ -55,6 +56,7 @@ def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
         "ORGSCAN_GITHUB_TOKEN": "",
         "ORGSCAN_HTTP_TIMEOUT_SECONDS": 15,
         "ORGSCAN_GITLEAKS_BINARY": "gitleaks",
+        "ORGSCAN_DETECT_SECRETS_BINARY": "detect-secrets",
         "ORGSCAN_SEMGREP_BINARY": "semgrep",
         "ORGSCAN_TRUFFLEHOG_BINARY": "trufflehog",
         "ORGSCAN_SUBFINDER_BINARY": "subfinder",

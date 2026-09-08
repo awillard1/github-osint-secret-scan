@@ -28,9 +28,10 @@ This roadmap maps the current repository implementation to the phased goals from
 
 ### Phase 3 — Initial scanning pipeline
 - built-in custom pattern scanner
+- built-in repository governance scanner for CODEOWNERS, SECURITY.md, and unpinned workflow checks
 - persisted scan jobs, tool runs, findings, risk scores, and evidence
 - redacted evidence handling for scanner output
-- external scanner wrappers for `gitleaks`, `semgrep`, and `trufflehog` with graceful failure when binaries are unavailable
+- external scanner wrappers for `gitleaks`, `detect-secrets`, `semgrep`, and `trufflehog` with graceful failure when binaries are unavailable
 
 ### Phase 4 — Discovery and reporting
 - public GitHub repository and organization discovery using the GitHub REST API
@@ -74,7 +75,7 @@ This roadmap maps the current repository implementation to the phased goals from
 
 ## Remaining gaps versus the full project spec
 - no distributed worker backend such as Celery/RQ/Dramatiq or Redis-backed queue
-- no YARA or broader enrichment integrations beyond current DNS, WHOIS, crt.sh, ProjectDiscovery, and local metadata support yet
+- no YARA or deeper repo-history/governance coverage beyond current detect-secrets, repo-governance, DNS, WHOIS, crt.sh, ProjectDiscovery, and local metadata support yet
 - no graph visualization UI, multi-tenant auth, or PDF reporting
 - no paid provider implementations; only the abstraction and free/local correlation path exist
 - no large-scale branch/history orchestration or incremental repo mirror management

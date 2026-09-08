@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from orgscan.scanners import CustomPatternScanner
+from orgscan.scanners import CustomPatternScanner, RepositoryGovernanceScanner
 
 
 def test_custom_pattern_scanner_redacts_detected_values(tmp_path: Path) -> None:
@@ -13,3 +13,19 @@ def test_custom_pattern_scanner_redacts_detected_values(tmp_path: Path) -> None:
     assert matches[0].indicator != 'api_key = "example-not-real-123456789"'
     assert "<redacted:generic-secret-assignment>" in matches[0].snippet
     assert "example-not-real-123456789" not in matches[0].snippet
+
+
+def test_repository_governance_scanner_detects_missing_controls_and_unpinned_actions(tmp_path: Path) -> None:
+    workflow_dir = tmp_path / ".github" / "workflows"
+    workflow_dir.mkdir(parents=True)
+    (workflow_dir / "ci.yml").write_text(
+        "jobs:\n  test:\n    steps:\n      - uses: actions/checkout@v4\n      - uses: ./local-action\n",
+        encoding="utf-8",
+    )
+
+    matches = RepositoryGovernanceScanner().scan_path(tmp_path)
+
+    titles = {match.title for match in matches}
+    assert "Missing CODEOWNERS file" in titles
+    assert "Missing SECURITY.md policy" in titles
+    assert "Unpinned GitHub Action reference" in titles

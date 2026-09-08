@@ -4,7 +4,9 @@ This document summarizes what the current repository can accomplish directly and
 
 ## Already integrated or supported
 - Built-in custom pattern scanning for local files and directories
+- Built-in repository governance scanning for missing CODEOWNERS, missing SECURITY.md, and unpinned GitHub Actions references
 - Optional `gitleaks` integration for generic secret scanning
+- Optional `detect-secrets` integration for complementary baseline-style secret detection
 - Optional `semgrep` integration for policy and code/config scanning
 - Optional `trufflehog` integration for verified secret detection
 - Optional ProjectDiscovery integration via `subfinder` and `httpx` for domain and HTTP exposure enrichment
@@ -19,7 +21,6 @@ This document summarizes what the current repository can accomplish directly and
 ## High-value OSS tools to add next
 
 ### Code and config analysis
-- **detect-secrets**: complementary detector set and baseline workflow
 - **YARA**: matching for known document or artifact patterns
 - **ripgrep**-based heuristics: lightweight scanning for internal hostnames, org-specific strings, and governance files
 

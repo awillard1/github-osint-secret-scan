@@ -28,6 +28,7 @@ def test_settings_redacts_secret_by_default() -> None:
 def test_render_env_template_lists_tool_binaries() -> None:
     template = render_env_template()
 
+    assert "ORGSCAN_DETECT_SECRETS_BINARY=detect-secrets" in template
     assert "ORGSCAN_SEMGREP_BINARY=semgrep" in template
     assert "ORGSCAN_SUBFINDER_BINARY=subfinder" in template
     assert "ORGSCAN_HTTPX_BINARY=httpx" in template

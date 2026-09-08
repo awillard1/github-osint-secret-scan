@@ -1,18 +1,21 @@
 """Scanner implementations for orgscan."""
 
 from orgscan.scanners.custom_patterns import CustomPatternScanner
-from orgscan.scanners.external import GitleaksScanner, ScannerExecutionError, SemgrepScanner, TruffleHogScanner
+from orgscan.scanners.external import DetectSecretsScanner, GitleaksScanner, ScannerExecutionError, SemgrepScanner, TruffleHogScanner
+from orgscan.scanners.repo_governance import RepositoryGovernanceScanner
 
 
 SCANNERS = {
     CustomPatternScanner.name: CustomPatternScanner,
+    RepositoryGovernanceScanner.name: RepositoryGovernanceScanner,
+    DetectSecretsScanner.name: DetectSecretsScanner,
     GitleaksScanner.name: GitleaksScanner,
     SemgrepScanner.name: SemgrepScanner,
     TruffleHogScanner.name: TruffleHogScanner,
 }
 
 
-def get_scanner(name: str) -> CustomPatternScanner | GitleaksScanner | SemgrepScanner | TruffleHogScanner:
+def get_scanner(name: str) -> CustomPatternScanner | RepositoryGovernanceScanner | DetectSecretsScanner | GitleaksScanner | SemgrepScanner | TruffleHogScanner:
     try:
         return SCANNERS[name]()
     except KeyError as exc:
@@ -21,6 +24,8 @@ def get_scanner(name: str) -> CustomPatternScanner | GitleaksScanner | SemgrepSc
 
 __all__ = [
     "CustomPatternScanner",
+    "RepositoryGovernanceScanner",
+    "DetectSecretsScanner",
     "GitleaksScanner",
     "SemgrepScanner",
     "TruffleHogScanner",

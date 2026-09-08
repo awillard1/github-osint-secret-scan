@@ -1,4 +1,4 @@
-from orgscan.scanners.external import GitleaksScanner, SemgrepScanner, TruffleHogScanner
+from orgscan.scanners.external import DetectSecretsScanner, GitleaksScanner, SemgrepScanner, TruffleHogScanner
 
 
 def test_gitleaks_parser_redacts_match_values() -> None:
@@ -36,6 +36,30 @@ def test_trufflehog_parser_marks_verified_findings() -> None:
     assert len(matches) == 1
     assert matches[0].confidence == "verified"
     assert matches[0].line_start == 8
+
+
+def test_detect_secrets_parser_maps_baseline_results() -> None:
+    matches = DetectSecretsScanner.parse_output(
+        {
+            "results": {
+                "app.py": [
+                    {
+                        "type": "Secret Keyword",
+                        "line_number": 9,
+                        "hashed_secret": "1234567890abcdef1234567890abcdef",
+                        "is_verified": False,
+                    }
+                ]
+            }
+        }
+    )
+
+    assert len(matches) == 1
+    assert matches[0].title == "detect-secrets: Secret Keyword"
+    assert matches[0].category == "secret"
+    assert matches[0].severity == "high"
+    assert "1234567890abcdef1234567890abcdef" not in matches[0].indicator
+    assert matches[0].snippet == "<redacted:detect-secrets:Secret Keyword>"
 
 
 def test_semgrep_parser_maps_results() -> None:

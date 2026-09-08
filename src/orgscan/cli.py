@@ -23,7 +23,7 @@ from orgscan.reporting import build_summary, finding_rows, write_csv, write_html
 from orgscan.runner import execute_scan, record_scan_results
 from orgscan.scanners import ScannerExecutionError
 from orgscan.scanners.base import ScanMatch
-from orgscan.scanners.external import GitleaksScanner, SemgrepScanner, TruffleHogScanner
+from orgscan.scanners.external import DetectSecretsScanner, GitleaksScanner, SemgrepScanner, TruffleHogScanner
 from orgscan.scheduler import next_run_from_cadence, run_due_scans
 
 app = typer.Typer(help="OSINT Security Platform CLI foundation")
@@ -144,6 +144,8 @@ def _resolve_asset_context(
 def _load_scanner_report(scanner: str, report_path: Path) -> tuple[str, list[ScanMatch]]:
     if scanner == "gitleaks":
         return GitleaksScanner.source_class, GitleaksScanner.load_report(report_path)
+    if scanner == "detect-secrets":
+        return DetectSecretsScanner.source_class, DetectSecretsScanner.load_report(report_path)
     if scanner == "semgrep":
         return SemgrepScanner.source_class, SemgrepScanner.load_report(report_path)
     if scanner == "trufflehog":
@@ -206,7 +208,7 @@ def config(
     details = bootstrap(settings, verify_only=True)
     payload = {
         "settings": settings.as_dict(include_secrets=show_secrets),
-        "available_scanners": ["custom-patterns", "gitleaks", "semgrep", "trufflehog"],
+        "available_scanners": ["custom-patterns", "repo-governance", "gitleaks", "detect-secrets", "semgrep", "trufflehog"],
         "available_domain_providers": ["local-metadata", "crtsh", "projectdiscovery", "whois", "dns", "all"],
         "dependency_status": {
             "required": details["required"],
@@ -724,7 +726,7 @@ def scan(
 
 @app.command("ingest-results")
 def ingest_results(
-    scanner: str = typer.Option(..., "--scanner", help="Scanner format to import: gitleaks, semgrep, or trufflehog."),
+    scanner: str = typer.Option(..., "--scanner", help="Scanner format to import: gitleaks, detect-secrets, semgrep, or trufflehog."),
     report_path: Path = typer.Argument(..., help="Path to the saved scanner report."),
     target: str = typer.Option(..., "--target", help="Original target path or repository label for the report."),
     organization: str | None = typer.Option(None, "--organization", help="Optional organization association."),

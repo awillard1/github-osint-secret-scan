@@ -10,10 +10,11 @@ from pathlib import Path
 from orgscan.config import Settings
 
 REQUIRED_COMMANDS = ("git", "curl", "openssl")
-OPTIONAL_COMMANDS = ("jq", "gitleaks", "semgrep", "trufflehog", "subfinder", "httpx", "whois")
+OPTIONAL_COMMANDS = ("jq", "gitleaks", "detect-secrets", "semgrep", "trufflehog", "subfinder", "httpx", "whois")
 OPTIONAL_INSTALL_NOTES = {
     "jq": "Package manager install is usually sufficient.",
     "gitleaks": "Prefer the official release binary or install script rather than OS packages for current versions.",
+    "detect-secrets": "Install the Yelp detect-secrets CLI to add an additional baseline-oriented secret scanner.",
     "semgrep": "Prefer pipx or the official installation method if you plan to use Semgrep locally.",
     "trufflehog": "Prefer the official upstream installation method rather than OS packages for current versions.",
     "subfinder": "Use ProjectDiscovery's official release or package instructions for passive subdomain discovery.",

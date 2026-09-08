@@ -126,11 +126,13 @@ def test_cli_config_and_init_config(monkeypatch, tmp_path: Path) -> None:
     assert '"github_token": "<redacted>"' in config_result.stdout
     assert '"projectdiscovery"' in config_result.stdout
     assert '"whois"' in config_result.stdout
+    assert '"detect-secrets"' in config_result.stdout
 
     env_path = tmp_path / ".env.generated"
     init_result = runner.invoke(app, ["init-config", str(env_path)])
     assert init_result.exit_code == 0
     assert env_path.exists()
+    assert "ORGSCAN_DETECT_SECRETS_BINARY=detect-secrets" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_SUBFINDER_BINARY=subfinder" in env_path.read_text(encoding="utf-8")
 
     get_settings.cache_clear()
@@ -293,6 +295,42 @@ def test_cli_projectdiscovery_domain_and_ingest_results(monkeypatch, tmp_path: P
     report_result = runner.invoke(app, ["report", "--json"])
     assert report_result.exit_code == 0
     assert '"source_tool_breakdown"' in report_result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_cli_ingest_detect_secrets_report(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'detect-secrets.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+
+    report = tmp_path / "detect-secrets.json"
+    report.write_text(
+        '{"results":{"service.py":[{"type":"Secret Keyword","line_number":7,"hashed_secret":"abcdef1234567890abcdef1234567890","is_verified":false}]}}',
+        encoding="utf-8",
+    )
+    ingest_result = runner.invoke(
+        app,
+        [
+            "ingest-results",
+            "--scanner",
+            "detect-secrets",
+            "--target",
+            "example-org/service",
+            "--repository",
+            "example-org/service",
+            str(report),
+            "--json",
+        ],
+    )
+
+    assert ingest_result.exit_code == 0
+    assert '"findings": 1' in ingest_result.stdout
+
+    findings_result = runner.invoke(app, ["findings", "--json"])
+    assert findings_result.exit_code == 0
+    assert "detect-secrets: Secret Keyword" in findings_result.stdout
 
     get_settings.cache_clear()
 
@@ -484,6 +522,48 @@ def test_cli_scan_reports_missing_semgrep(monkeypatch, tmp_path: Path) -> None:
     result = runner.invoke(app, ["scan", "path", str(sample), "--scanner", "semgrep"])
     assert result.exit_code == 1
     assert "Scan failed: semgrep is not installed" in result.stderr
+
+    get_settings.cache_clear()
+
+
+def test_cli_scan_reports_missing_detect_secrets(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'missing-detect-secrets.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+
+    sample = tmp_path / "app.py"
+    sample.write_text("print('hello')\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["scan", "path", str(sample), "--scanner", "detect-secrets"])
+    assert result.exit_code == 1
+    assert "Scan failed: detect-secrets is not installed" in result.stderr
+
+    get_settings.cache_clear()
+
+
+def test_cli_repo_governance_scanner_finds_governance_issues(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'repo-governance.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+
+    workflow_dir = tmp_path / ".github" / "workflows"
+    workflow_dir.mkdir(parents=True)
+    (workflow_dir / "release.yml").write_text(
+        "jobs:\n  release:\n    steps:\n      - uses: actions/checkout@v4\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["scan", "path", str(tmp_path), "--scanner", "repo-governance", "--json"])
+    assert result.exit_code == 0
+    assert '"findings": 3' in result.stdout
+
+    findings_result = runner.invoke(app, ["findings", "--json"])
+    assert findings_result.exit_code == 0
+    assert "Missing CODEOWNERS file" in findings_result.stdout
+    assert "Missing SECURITY.md policy" in findings_result.stdout
+    assert "Unpinned GitHub Action reference" in findings_result.stdout
 
     get_settings.cache_clear()
 

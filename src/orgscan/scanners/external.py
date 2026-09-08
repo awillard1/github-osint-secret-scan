@@ -118,6 +118,82 @@ class GitleaksScanner:
         return cls.parse_output(payload)
 
 
+class DetectSecretsScanner:
+    name = "detect-secrets"
+    source_class = "free"
+
+    def scan_path(self, target: Path) -> list[ScanMatch]:
+        if not shutil.which(self.name):
+            raise _not_installed_error(self.name)
+
+        completed = subprocess.run(
+            [self.name, "scan", "--all-files", "--force-use-all-plugins", "--json", str(target)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0:
+            raise ScannerExecutionError(completed.stderr.strip() or "detect-secrets execution failed")
+        try:
+            payload = json.loads((completed.stdout or "").strip() or "{}")
+        except json.JSONDecodeError as exc:
+            raise ScannerExecutionError("detect-secrets produced invalid JSON output") from exc
+        return self.parse_output(payload)
+
+    @staticmethod
+    def parse_output(payload: dict[str, Any]) -> list[ScanMatch]:
+        results: list[ScanMatch] = []
+        raw_results = payload.get("results")
+        if not isinstance(raw_results, dict):
+            return results
+
+        for path, findings in raw_results.items():
+            if not isinstance(findings, list):
+                continue
+            for item in findings:
+                if not isinstance(item, dict):
+                    continue
+                secret_type = str(item.get("type") or "secret")
+                line_number = int(item.get("line_number") or 1)
+                verified = bool(item.get("is_verified"))
+                hashed_secret = str(item.get("hashed_secret") or "")
+                results.append(
+                    ScanMatch(
+                        path=Path(path),
+                        line_start=line_number,
+                        line_end=line_number,
+                        category="secret",
+                        title=f"detect-secrets: {secret_type}",
+                        description="detect-secrets identified a potential secret that should be reviewed and rotated if valid.",
+                        severity=SeverityLevel.CRITICAL if verified else SeverityLevel.HIGH,
+                        confidence=ConfidenceLevel.VERIFIED if verified else ConfidenceLevel.LIKELY,
+                        indicator=_redact(hashed_secret),
+                        snippet=f"<redacted:detect-secrets:{secret_type}>",
+                        remediation_hint="Validate the secret, rotate it if exposed, and remove it from committed artifacts.",
+                        raw_payload={
+                            "type": secret_type,
+                            "verified": verified,
+                            "hashed_secret": _redact(hashed_secret),
+                        },
+                        metadata={
+                            "path": path,
+                            "type": secret_type,
+                        },
+                    )
+                )
+        return results
+
+    @classmethod
+    def load_report(cls, report_path: Path) -> list[ScanMatch]:
+        try:
+            payload = json.loads(report_path.read_text(encoding="utf-8").strip() or "{}")
+        except json.JSONDecodeError as exc:
+            raise ScannerExecutionError("detect-secrets report contained invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise ScannerExecutionError("detect-secrets report must contain a JSON object")
+        return cls.parse_output(payload)
+
+
 class SemgrepScanner:
     name = "semgrep"
     source_class = "free"
