@@ -473,6 +473,9 @@ class Storage:
         self.session.flush()
         return scheduled_scan
 
+    def get_scheduled_scan(self, scheduled_scan_id: int) -> ScheduledScan | None:
+        return self.session.get(ScheduledScan, scheduled_scan_id)
+
     def finding_counts_by_severity(self) -> Mapping[str, int]:
         rows = self.session.execute(
             select(Finding.severity, func.count()).group_by(Finding.severity).order_by(Finding.severity.asc())

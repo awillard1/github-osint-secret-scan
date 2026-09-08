@@ -56,6 +56,7 @@ This roadmap maps the current repository implementation to the phased goals from
 ### Phase 7 — Scheduling and re-scan workflow
 - scheduled scan model and CLI commands for scheduling and running due scans
 - queue-like scan job execution using persisted scheduled scans and tool runs
+- optional Redis/RQ queue backend with worker and enqueue commands for scheduled scans
 - manual cadence disables itself after execution to avoid runaway reprocessing
 
 ### Phase 8 — API surface
@@ -74,9 +75,8 @@ This roadmap maps the current repository implementation to the phased goals from
 - saved output from supported external scanners can be ingested and normalized through the common finding model
 
 ## Remaining gaps versus the full project spec
-- no distributed worker backend such as Celery/RQ/Dramatiq or Redis-backed queue
 - no YARA or deeper repo-history/governance coverage beyond current detect-secrets, repo-governance, DNS, WHOIS, crt.sh, ProjectDiscovery, and local metadata support yet
-- no graph visualization UI, multi-tenant auth, or PDF reporting
+- no advanced distributed orchestration beyond the initial Redis/RQ worker backend, and no graph visualization UI, multi-tenant auth, or PDF reporting
 - no paid provider implementations; only the abstraction and free/local correlation path exist
 - no large-scale branch/history orchestration or incremental repo mirror management
 

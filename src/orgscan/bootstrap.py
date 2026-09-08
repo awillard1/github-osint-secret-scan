@@ -10,9 +10,10 @@ from pathlib import Path
 from orgscan.config import Settings
 
 REQUIRED_COMMANDS = ("git", "curl", "openssl")
-OPTIONAL_COMMANDS = ("jq", "gitleaks", "detect-secrets", "semgrep", "trufflehog", "subfinder", "httpx", "whois")
+OPTIONAL_COMMANDS = ("jq", "redis-server", "gitleaks", "detect-secrets", "semgrep", "trufflehog", "subfinder", "httpx", "whois")
 OPTIONAL_INSTALL_NOTES = {
     "jq": "Package manager install is usually sufficient.",
+    "redis-server": "Install Redis locally or point ORGSCAN_REDIS_URL at a reachable Redis service to enable queue workers.",
     "gitleaks": "Prefer the official release binary or install script rather than OS packages for current versions.",
     "detect-secrets": "Install the Yelp detect-secrets CLI to add an additional baseline-oriented secret scanner.",
     "semgrep": "Prefer pipx or the official installation method if you plan to use Semgrep locally.",

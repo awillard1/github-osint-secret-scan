@@ -44,6 +44,8 @@ Example:
 ORGSCAN_DATABASE_URL=sqlite:///./data/orgscan.db
 ORGSCAN_LOG_LEVEL=INFO
 ORGSCAN_CRTSH_BASE_URL=https://crt.sh
+ORGSCAN_REDIS_URL=redis://127.0.0.1:6379/0
+ORGSCAN_SCAN_QUEUE_NAME=orgscan:scans
 ORGSCAN_DETECT_SECRETS_BINARY=detect-secrets
 ORGSCAN_SUBFINDER_BINARY=subfinder
 ORGSCAN_HTTPX_BINARY=httpx
@@ -164,8 +166,13 @@ Schedule recurring scans and inspect execution history:
 ```bash
 orgscan schedule-scan ./path/to/scan --repository example-org/app --cadence daily
 orgscan run-scheduled --limit 5
+orgscan enqueue-scheduled --limit 5
+orgscan queue-status
+orgscan run-worker --burst --max-jobs 5
 orgscan jobs --json
 ```
+
+Use `run-scheduled` for local in-process execution, or `enqueue-scheduled` plus `run-worker` to process scheduled scans through Redis/RQ workers.
 
 Serve the live dashboard and API:
 
@@ -208,5 +215,6 @@ pytest
 - The `discover` command uses the public GitHub REST API and can use `ORGSCAN_GITHUB_TOKEN` when configured for higher rate limits.
 - External scanner output from `gitleaks`, `detect-secrets`, `semgrep`, and `trufflehog` can be normalized through `orgscan ingest-results` without rerunning the original tool.
 - The local web surface now runs on FastAPI and serves both live HTML dashboard views and JSON endpoints from the same application.
+- Scheduled scans can also be enqueued onto Redis/RQ workers for queue-based execution in addition to the local synchronous scheduler flow.
 - The current roadmap status and remaining gaps relative to the full project spec are documented in `docs/roadmap.md`.
 - Additional open-source tools that can close current capability gaps are documented in `docs/open-source-tooling-gaps.md`; Semgrep is now available as an optional external scanner integration.

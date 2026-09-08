@@ -17,6 +17,7 @@ This document summarizes what the current repository can accomplish directly and
 - Local correlation of domains against stored repository metadata and account emails
 - SQLite-backed persistence, exports, reports, and local API responses
 - FastAPI-served live dashboard and JSON API for local interactive use
+- Optional Redis/RQ-backed scheduled scan queue workers
 
 ## High-value OSS tools to add next
 
@@ -30,7 +31,7 @@ This document summarizes what the current repository can accomplish directly and
 - **httpx** / **subfinder** / **amass**: broader asset discovery, only where scope permits
 
 ### Execution and scale
-- **RQ**, **Dramatiq**, or **Celery** with **Redis**: true worker pools and queueing beyond the current local scheduler
+- **Dramatiq** or **Celery** with **Redis**: richer worker orchestration, retries, and scaling beyond the current initial RQ queue backend
 - **Alembic**: formal schema migrations instead of lightweight SQLite evolution
 - richer client-side visualization stack for graph exploration and advanced dashboard UX beyond the current server-rendered FastAPI dashboard
 
@@ -45,6 +46,6 @@ This document summarizes what the current repository can accomplish directly and
 Use the current repository as the local-first control plane, then layer in:
 1. Semgrep + crt.sh enrichment
 2. DNS/WHOIS tooling
-3. Redis-backed queue workers
+3. deeper retries/rate-aware scaling on top of the initial Redis/RQ queue workers
 4. richer graph/trend visualization on top of the current FastAPI dashboard
 5. Optional paid providers after the free-first path is solid

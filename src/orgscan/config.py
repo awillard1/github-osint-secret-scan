@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     crtsh_base_url: str = "https://crt.sh"
     github_token: str | None = None
     http_timeout_seconds: int = 15
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    scan_queue_name: str = "orgscan:scans"
     gitleaks_binary: str = "gitleaks"
     detect_secrets_binary: str = "detect-secrets"
     semgrep_binary: str = "semgrep"
@@ -55,6 +57,8 @@ def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
         "ORGSCAN_CRTSH_BASE_URL": "https://crt.sh",
         "ORGSCAN_GITHUB_TOKEN": "",
         "ORGSCAN_HTTP_TIMEOUT_SECONDS": 15,
+        "ORGSCAN_REDIS_URL": "redis://127.0.0.1:6379/0",
+        "ORGSCAN_SCAN_QUEUE_NAME": "orgscan:scans",
         "ORGSCAN_GITLEAKS_BINARY": "gitleaks",
         "ORGSCAN_DETECT_SECRETS_BINARY": "detect-secrets",
         "ORGSCAN_SEMGREP_BINARY": "semgrep",

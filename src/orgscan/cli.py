@@ -18,6 +18,7 @@ from orgscan.expansion import GitHubExpansionEngine
 from orgscan.logging_config import setup_logging
 from orgscan.models import Finding
 from orgscan.providers import DomainProviderError, get_domain_provider
+from orgscan.queueing import QueueBackendError, enqueue_due_scheduled_scans, queue_status, run_worker
 from orgscan.repositories import Storage
 from orgscan.reporting import build_summary, finding_rows, write_csv, write_html, write_json
 from orgscan.runner import execute_scan, record_scan_results
@@ -210,6 +211,7 @@ def config(
         "settings": settings.as_dict(include_secrets=show_secrets),
         "available_scanners": ["custom-patterns", "repo-governance", "gitleaks", "detect-secrets", "semgrep", "trufflehog"],
         "available_domain_providers": ["local-metadata", "crtsh", "projectdiscovery", "whois", "dns", "all"],
+        "available_execution_backends": ["local", "rq"],
         "dependency_status": {
             "required": details["required"],
             "optional": details["optional"],
@@ -847,6 +849,65 @@ def run_scheduled(
         typer.echo(f"Ran {len(results)} scheduled scan(s).")
 
 
+@app.command("enqueue-scheduled")
+def enqueue_scheduled(
+    limit: int = typer.Option(10, "--limit", min=1, help="Maximum number of due scheduled scans to enqueue."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    try:
+        results = enqueue_due_scheduled_scans(settings, limit=limit)
+        status = queue_status(settings)
+    except QueueBackendError as exc:
+        typer.echo(f"Queue operation failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    payload = {
+        "queued_jobs": results,
+        "queue_status": status,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        typer.echo(f"Enqueued {len(results)} scheduled scan(s) onto {status['queue_name']}.")
+
+
+@app.command("queue-status")
+def queue_status_command(
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    try:
+        payload = queue_status(settings)
+    except QueueBackendError as exc:
+        typer.echo(f"Queue operation failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        typer.echo(
+            f"backend={payload['backend']} queue={payload['queue_name']} pending={payload['pending_jobs']} "
+            f"started={payload['started_jobs']} failed={payload['failed_jobs']}"
+        )
+
+
+@app.command("run-worker")
+def run_worker_command(
+    burst: bool = typer.Option(False, "--burst", help="Exit when the queue is empty."),
+    max_jobs: int | None = typer.Option(None, "--max-jobs", min=1, help="Maximum jobs to process before exiting."),
+) -> None:
+    settings = _settings()
+    try:
+        worked = run_worker(settings, burst=burst, max_jobs=max_jobs)
+    except QueueBackendError as exc:
+        typer.echo(f"Queue operation failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        "Worker processed at least one job." if worked else "Worker exited without processing a job."
+    )
+
+
 @app.command("jobs")
 def jobs(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
@@ -885,6 +946,8 @@ def jobs(
                 "target_value": scan.target_value,
                 "cadence": scan.cadence,
                 "enabled": scan.enabled,
+                "queue_status": (scan.metadata_json or {}).get("queue_status"),
+                "queue_job_id": (scan.metadata_json or {}).get("queue_job_id"),
             }
             for scan in scheduled_scans
         ],

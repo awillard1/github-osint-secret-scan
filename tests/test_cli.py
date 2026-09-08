@@ -568,6 +568,37 @@ def test_cli_repo_governance_scanner_finds_governance_issues(monkeypatch, tmp_pa
     get_settings.cache_clear()
 
 
+def test_cli_queue_commands(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'queue-cli.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "orgscan.cli.enqueue_due_scheduled_scans",
+        lambda settings, limit=10: [{"scheduled_scan_id": 4, "queue_job_id": "job-1", "target_value": "/tmp/scan", "scanner_name": "custom-patterns"}],
+    )
+    monkeypatch.setattr(
+        "orgscan.cli.queue_status",
+        lambda settings: {"backend": "rq", "queue_name": "orgscan:scans", "pending_jobs": 1, "started_jobs": 0, "failed_jobs": 0},
+    )
+    monkeypatch.setattr("orgscan.cli.run_worker", lambda settings, burst=False, max_jobs=None: True)
+
+    enqueue_result = runner.invoke(app, ["enqueue-scheduled", "--json"])
+    assert enqueue_result.exit_code == 0
+    assert '"queue_name": "orgscan:scans"' in enqueue_result.stdout
+    assert '"scheduled_scan_id": 4' in enqueue_result.stdout
+
+    status_result = runner.invoke(app, ["queue-status", "--json"])
+    assert status_result.exit_code == 0
+    assert '"backend": "rq"' in status_result.stdout
+
+    worker_result = runner.invoke(app, ["run-worker", "--burst", "--max-jobs", "1"])
+    assert worker_result.exit_code == 0
+    assert "processed at least one job" in worker_result.stdout
+
+    get_settings.cache_clear()
+
+
 def test_cli_triage_updates_finding(monkeypatch, tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'triage.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
