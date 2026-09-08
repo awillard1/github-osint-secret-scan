@@ -937,7 +937,7 @@ def serve_api_command(
     port: int = typer.Option(8000, "--port", min=1, max=65535, help="Bind port."),
 ) -> None:
     settings = _settings()
-    typer.echo(f"Serving API on http://{host}:{port}")
+    typer.echo(f"Serving API and dashboard on http://{host}:{port}")
     serve_api(settings.database_url, host=host, port=port)
 
 

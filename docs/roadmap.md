@@ -58,8 +58,9 @@ This roadmap maps the current repository implementation to the phased goals from
 - manual cadence disables itself after execution to avoid runaway reprocessing
 
 ### Phase 8 — API surface
-- lightweight JSON API service with health, summary, findings, and scheduled-scan endpoints
-- `orgscan serve-api` for local API serving without introducing a full web stack yet
+- FastAPI service with health, summary, filtered findings, scheduled-scan, relationship graph, and trend endpoints
+- live HTML dashboard served from the same app with interactive filter controls
+- `orgscan serve-api` for local web/API serving
 
 ### Phase 9 — Execution telemetry
 - ToolRun persistence for auditability of scanner invocations
@@ -72,7 +73,6 @@ This roadmap maps the current repository implementation to the phased goals from
 - saved output from supported external scanners can be ingested and normalized through the common finding model
 
 ## Remaining gaps versus the full project spec
-- no FastAPI/Jinja2 or React live dashboard yet; current API is lightweight stdlib HTTP and dashboard output is static HTML
 - no distributed worker backend such as Celery/RQ/Dramatiq or Redis-backed queue
 - no YARA or broader enrichment integrations beyond current DNS, WHOIS, crt.sh, ProjectDiscovery, and local metadata support yet
 - no graph visualization UI, multi-tenant auth, or PDF reporting

@@ -21,3 +21,4 @@ def test_open_source_gap_doc_exists() -> None:
     assert "whois" in content
     assert "dnspython" in content
     assert "Redis" in content
+    assert "FastAPI" in content

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func, select
@@ -411,6 +411,9 @@ class Storage:
     def list_organizations(self) -> Sequence[Organization]:
         return list(self.session.scalars(select(Organization).order_by(Organization.name.asc())))
 
+    def list_domains(self) -> Sequence[Domain]:
+        return list(self.session.scalars(select(Domain).order_by(Domain.name.asc())))
+
     def list_repositories(self) -> Sequence[Repository]:
         return list(self.session.scalars(select(Repository).order_by(Repository.full_name.asc())))
 
@@ -441,6 +444,10 @@ class Storage:
         query = select(ScheduledScan).order_by(ScheduledScan.next_run_at.asc(), ScheduledScan.id.asc())
         if enabled_only:
             query = query.where(ScheduledScan.enabled.is_(True))
+        return list(self.session.scalars(query))
+
+    def list_relationships(self, limit: int = 250) -> Sequence[Relationship]:
+        query = select(Relationship).order_by(Relationship.created_at.desc(), Relationship.id.desc()).limit(limit)
         return list(self.session.scalars(query))
 
     def list_due_scheduled_scans(self, now: datetime | None = None) -> Sequence[ScheduledScan]:
@@ -508,6 +515,16 @@ class Storage:
             .limit(limit)
         )
         return [(repository_name, count) for repository_name, count in rows]
+
+    def finding_trends_by_day(self, days: int = 30) -> list[tuple[str, str, int]]:
+        cutoff = datetime.now(UTC) - timedelta(days=max(days, 1) - 1)
+        rows = self.session.execute(
+            select(func.date(Finding.detected_at), Finding.severity, func.count())
+            .where(Finding.detected_at >= cutoff)
+            .group_by(func.date(Finding.detected_at), Finding.severity)
+            .order_by(func.date(Finding.detected_at).asc(), Finding.severity.asc())
+        )
+        return [(str(day), severity, count) for day, severity, count in rows if day is not None]
 
     def counts(self) -> Mapping[str, int]:
         tables = {

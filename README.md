@@ -9,7 +9,7 @@
 - a SQLite-first persistence layer built on SQLAlchemy for future PostgreSQL support
 - target intake commands for organizations, domains, repositories, and accounts
 - finding inspection, GitHub metadata discovery, local scanning, reporting, export, dashboard generation, and dependency verification commands
-- repository expansion, scheduled scanning, execution telemetry, intuitive configuration helpers, and a lightweight JSON API
+- repository expansion, scheduled scanning, execution telemetry, intuitive configuration helpers, and a live FastAPI dashboard/API
 - tests for config, validation, storage, and CLI flows
 
 ## Requirements
@@ -161,11 +161,19 @@ orgscan run-scheduled --limit 5
 orgscan jobs --json
 ```
 
-Serve the local JSON API:
+Serve the live dashboard and API:
 
 ```bash
 orgscan serve-api --host 127.0.0.1 --port 8000
 ```
+
+Key routes:
+
+- `/dashboard` live HTML dashboard with filter controls
+- `/summary` summary JSON
+- `/findings` filtered findings JSON
+- `/relationships/graph` relationship graph JSON
+- `/trends/findings` findings trend JSON
 
 Verify required local dependencies:
 
@@ -192,5 +200,6 @@ pytest
 - The initial `scan` command uses the built-in `custom-patterns` scanner and stores scan jobs, findings, and evidence in SQLite for later reporting.
 - The `discover` command uses the public GitHub REST API and can use `ORGSCAN_GITHUB_TOKEN` when configured for higher rate limits.
 - External scanner output from `gitleaks`, `semgrep`, and `trufflehog` can be normalized through `orgscan ingest-results` without rerunning the original tool.
+- The local web surface now runs on FastAPI and serves both live HTML dashboard views and JSON endpoints from the same application.
 - The current roadmap status and remaining gaps relative to the full project spec are documented in `docs/roadmap.md`.
 - Additional open-source tools that can close current capability gaps are documented in `docs/open-source-tooling-gaps.md`; Semgrep is now available as an optional external scanner integration.

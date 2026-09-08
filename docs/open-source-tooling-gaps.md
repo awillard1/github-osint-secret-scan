@@ -14,6 +14,7 @@ This document summarizes what the current repository can accomplish directly and
 - GitHub REST API discovery for public repository and organization metadata
 - Local correlation of domains against stored repository metadata and account emails
 - SQLite-backed persistence, exports, reports, and local API responses
+- FastAPI-served live dashboard and JSON API for local interactive use
 
 ## High-value OSS tools to add next
 
@@ -30,7 +31,7 @@ This document summarizes what the current repository can accomplish directly and
 ### Execution and scale
 - **RQ**, **Dramatiq**, or **Celery** with **Redis**: true worker pools and queueing beyond the current local scheduler
 - **Alembic**: formal schema migrations instead of lightweight SQLite evolution
-- **FastAPI** + **Uvicorn** + templates/UI stack: richer interactive API and dashboard experience
+- richer client-side visualization stack for graph exploration and advanced dashboard UX beyond the current server-rendered FastAPI dashboard
 
 ## Gaps that cannot be fully solved by simple library swaps alone
 - distributed, rate-aware scanning at scale requires queue infrastructure and operational deployment choices
@@ -44,5 +45,5 @@ Use the current repository as the local-first control plane, then layer in:
 1. Semgrep + crt.sh enrichment
 2. DNS/WHOIS tooling
 3. Redis-backed queue workers
-4. FastAPI-based interactive API/dashboard
+4. richer graph/trend visualization on top of the current FastAPI dashboard
 5. Optional paid providers after the free-first path is solid
