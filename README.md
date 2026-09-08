@@ -43,6 +43,7 @@ Example:
 ```env
 ORGSCAN_DATABASE_URL=sqlite:///./data/orgscan.db
 ORGSCAN_LOG_LEVEL=INFO
+ORGSCAN_CRTSH_BASE_URL=https://crt.sh
 ORGSCAN_SUBFINDER_BINARY=subfinder
 ORGSCAN_HTTPX_BINARY=httpx
 ```
@@ -122,10 +123,11 @@ Discover public GitHub repository metadata and persist it locally:
 ```bash
 orgscan discover repository psf/requests
 orgscan discover domain example.com
+orgscan discover domain example.com --provider crtsh
 orgscan discover domain example.com --provider projectdiscovery
 ```
 
-The `projectdiscovery` domain provider uses `subfinder` and `httpx` when installed to enrich domain exposure data with discovered subdomains and reachable HTTP services.
+The `crtsh` domain provider uses the public crt.sh certificate-transparency feed to discover additional domain-linked hosts. The `projectdiscovery` domain provider uses `subfinder` and `httpx` when installed to enrich domain exposure data with discovered subdomains and reachable HTTP services.
 
 Expand related repositories and contributors:
 
@@ -180,6 +182,7 @@ pytest
 - Canonical scanner output should be normalized through `orgscan.schemas.CanonicalFinding` before persistence.
 - The bootstrap helper recommends package-manager installation only for base OS dependencies; use official upstream install methods for tools such as Gitleaks and TruffleHog.
 - The optional ProjectDiscovery integration uses `subfinder` for passive subdomain discovery and `httpx` for HTTP service enrichment.
+- The optional crt.sh integration adds certificate-transparency-based host discovery for tracked domains.
 - The initial `scan` command uses the built-in `custom-patterns` scanner and stores scan jobs, findings, and evidence in SQLite for later reporting.
 - The `discover` command uses the public GitHub REST API and can use `ORGSCAN_GITHUB_TOKEN` when configured for higher rate limits.
 - External scanner output from `gitleaks`, `semgrep`, and `trufflehog` can be normalized through `orgscan ingest-results` without rerunning the original tool.

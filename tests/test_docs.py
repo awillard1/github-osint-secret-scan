@@ -17,4 +17,5 @@ def test_open_source_gap_doc_exists() -> None:
 
     assert "Semgrep" in content
     assert "ProjectDiscovery" in content
+    assert "crt.sh" in content
     assert "Redis" in content

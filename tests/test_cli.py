@@ -295,6 +295,31 @@ def test_cli_projectdiscovery_domain_and_ingest_results(monkeypatch, tmp_path: P
     get_settings.cache_clear()
 
 
+def test_cli_crtsh_domain_discovery(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'crtsh.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "orgscan.providers.CrtShDomainProvider._fetch_records",
+        lambda self, domain_name: [
+            {
+                "id": 123,
+                "issuer_name": "Example CA",
+                "name_value": f"api.{domain_name}\nwww.{domain_name}",
+                "not_before": "2024-01-01",
+                "not_after": "2025-01-01",
+            }
+        ],
+    )
+
+    result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "crtsh", "--json"])
+    assert result.exit_code == 0
+    assert "Certificate transparency entry for api.example.org via Example CA" in result.stdout
+
+    get_settings.cache_clear()
+
+
 def test_cli_expand_schedule_and_jobs(monkeypatch, tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'ops.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)

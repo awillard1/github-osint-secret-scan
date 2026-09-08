@@ -31,3 +31,4 @@ def test_render_env_template_lists_tool_binaries() -> None:
     assert "ORGSCAN_SEMGREP_BINARY=semgrep" in template
     assert "ORGSCAN_SUBFINDER_BINARY=subfinder" in template
     assert "ORGSCAN_HTTPX_BINARY=httpx" in template
+    assert "ORGSCAN_CRTSH_BASE_URL=https://crt.sh" in template

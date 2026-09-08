@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 from orgscan.config import Settings
 from orgscan.repositories import Storage
@@ -229,7 +232,87 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
         return DomainProviderResult(exposures=exposures, identity_correlations=[])
 
 
+class CrtShDomainProvider(DomainIntelligenceProvider):
+    name = "crtsh"
+
+    @staticmethod
+    def _hash(*parts: str) -> str:
+        return sha256("::".join(parts).encode("utf-8")).hexdigest()
+
+    def _require_settings(self) -> Settings:
+        if self.settings is None:
+            raise DomainProviderError("crt.sh provider requires application settings.")
+        return self.settings
+
+    def _fetch_records(self, domain_name: str) -> list[dict[str, Any]]:
+        settings = self._require_settings()
+        query = quote(f"%.{domain_name}")
+        request = Request(
+            f"{settings.crtsh_base_url.rstrip('/')}/?q={query}&output=json",
+            headers={
+                "User-Agent": "orgscan/0.1.0",
+                "Accept": "application/json",
+            },
+        )
+        try:
+            with urlopen(request, timeout=settings.http_timeout_seconds) as response:
+                payload = json.loads(response.read().decode("utf-8") or "[]")
+        except HTTPError as exc:
+            raise DomainProviderError(f"crt.sh request failed with status {exc.code}") from exc
+        except URLError as exc:
+            raise DomainProviderError(f"crt.sh request failed: {exc.reason}") from exc
+        except json.JSONDecodeError as exc:
+            raise DomainProviderError("crt.sh returned invalid JSON output") from exc
+
+        if not isinstance(payload, list):
+            raise DomainProviderError("crt.sh response must be a JSON array")
+        return [item for item in payload if isinstance(item, dict)]
+
+    def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        domain_record, _ = storage.get_or_create_domain(domain_name)
+        records = self._fetch_records(domain_name)
+        exposures: list[str] = []
+        discovered_hosts: set[str] = set()
+
+        for item in records:
+            names = str(item.get("name_value") or "").splitlines()
+            issuer = str(item.get("issuer_name") or "unknown issuer").strip()
+            not_before = str(item.get("not_before") or "").strip()
+            not_after = str(item.get("not_after") or "").strip()
+            entry_id = str(item.get("id") or "")
+            for raw_name in names:
+                host = raw_name.strip().lower()
+                if not host or "*" in host or not host.endswith(domain_name.lower()):
+                    continue
+                discovered_hosts.add(host)
+                validity = f" valid={not_before}->{not_after}" if not_before or not_after else ""
+                summary = f"Certificate transparency entry for {host} via {issuer}{validity}".strip()
+                storage.create_domain_exposure(
+                    domain_record.id,
+                    source="crt.sh",
+                    source_name=self.name,
+                    result_summary=summary,
+                    normalized_hash=self._hash("crtsh", domain_name, host, entry_id),
+                    source_class="free",
+                    confidence="likely",
+                    severity="low",
+                    query_used=domain_name,
+                    evidence_url=f"{self._require_settings().crtsh_base_url.rstrip('/')}/?id={entry_id}" if entry_id else None,
+                )
+                exposures.append(summary)
+
+        if discovered_hosts:
+            existing_subdomains = {value.lower() for value in domain_record.discovered_subdomains}
+            domain_record.discovered_subdomains = sorted(existing_subdomains.union(discovered_hosts))
+            existing_sources = set(domain_record.discovery_sources)
+            existing_sources.add("crtsh")
+            domain_record.discovery_sources = sorted(existing_sources)
+
+        return DomainProviderResult(exposures=exposures, identity_correlations=[])
+
+
 DOMAIN_PROVIDERS = {
+    CrtShDomainProvider.name: CrtShDomainProvider,
     LocalMetadataDomainProvider.name: LocalMetadataDomainProvider,
     ProjectDiscoveryDomainProvider.name: ProjectDiscoveryDomainProvider,
 }
