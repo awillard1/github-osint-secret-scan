@@ -207,7 +207,7 @@ def config(
     payload = {
         "settings": settings.as_dict(include_secrets=show_secrets),
         "available_scanners": ["custom-patterns", "gitleaks", "semgrep", "trufflehog"],
-        "available_domain_providers": ["local-metadata", "projectdiscovery", "crtsh"],
+        "available_domain_providers": ["local-metadata", "crtsh", "projectdiscovery", "whois", "all"],
         "dependency_status": {
             "required": details["required"],
             "optional": details["optional"],
@@ -344,6 +344,7 @@ def discover(
                 "value": value,
                 "domain_exposures": discovered_domain_exposures,
                 "identity_correlations": discovered_identity_correlations,
+                "warnings": provider_result.warnings or [],
             }
             if json_output:
                 typer.echo(json.dumps(response_payload, indent=2))
@@ -352,6 +353,8 @@ def discover(
                     f"Correlated domain {value}: "
                     f"{len(discovered_domain_exposures)} exposure(s), {len(discovered_identity_correlations)} identity correlation(s)."
                 )
+                for warning in provider_result.warnings or []:
+                    typer.echo(f"warning: {warning}")
             return
 
     try:

@@ -20,6 +20,7 @@ from orgscan.repositories import Storage
 class DomainProviderResult:
     exposures: list[str]
     identity_correlations: list[str]
+    warnings: list[str] | None = None
 
 
 class DomainProviderError(RuntimeError):
@@ -34,6 +35,13 @@ class DomainIntelligenceProvider:
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
         raise NotImplementedError
+
+
+def _resolve_binary(command: str) -> str | None:
+    candidate = Path(command)
+    if candidate.is_absolute():
+        return str(candidate) if candidate.exists() else None
+    return shutil.which(command)
 
 
 class LocalMetadataDomainProvider(DomainIntelligenceProvider):
@@ -82,7 +90,7 @@ class LocalMetadataDomainProvider(DomainIntelligenceProvider):
                 )
                 identity_correlations.append(account.username)
 
-        return DomainProviderResult(exposures=exposures, identity_correlations=identity_correlations)
+        return DomainProviderResult(exposures=exposures, identity_correlations=identity_correlations, warnings=[])
 
 
 class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
@@ -92,13 +100,6 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
     def _hash(*parts: str) -> str:
         return sha256("::".join(parts).encode("utf-8")).hexdigest()
 
-    @staticmethod
-    def _resolve_binary(command: str) -> str | None:
-        candidate = Path(command)
-        if candidate.is_absolute():
-            return str(candidate) if candidate.exists() else None
-        return shutil.which(command)
-
     def _require_settings(self) -> Settings:
         if self.settings is None:
             raise DomainProviderError("ProjectDiscovery provider requires application settings.")
@@ -106,7 +107,7 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
 
     def _run_subfinder(self, domain_name: str) -> list[dict[str, Any]]:
         settings = self._require_settings()
-        binary = self._resolve_binary(settings.subfinder_binary)
+        binary = _resolve_binary(settings.subfinder_binary)
         if binary is None:
             raise DomainProviderError("subfinder is not installed; configure ORGSCAN_SUBFINDER_BINARY or install the ProjectDiscovery binary.")
 
@@ -135,7 +136,7 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
         if not hosts:
             return []
         settings = self._require_settings()
-        binary = self._resolve_binary(settings.httpx_binary)
+        binary = _resolve_binary(settings.httpx_binary)
         if binary is None:
             raise DomainProviderError("httpx is not installed; configure ORGSCAN_HTTPX_BINARY or install the ProjectDiscovery binary.")
 
@@ -229,7 +230,7 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
             )
             exposures.append(summary)
 
-        return DomainProviderResult(exposures=exposures, identity_correlations=[])
+        return DomainProviderResult(exposures=exposures, identity_correlations=[], warnings=[])
 
 
 class CrtShDomainProvider(DomainIntelligenceProvider):
@@ -308,13 +309,146 @@ class CrtShDomainProvider(DomainIntelligenceProvider):
             existing_sources.add("crtsh")
             domain_record.discovery_sources = sorted(existing_sources)
 
-        return DomainProviderResult(exposures=exposures, identity_correlations=[])
+        return DomainProviderResult(exposures=exposures, identity_correlations=[], warnings=[])
+
+
+class WhoisDomainProvider(DomainIntelligenceProvider):
+    name = "whois"
+
+    @staticmethod
+    def _hash(*parts: str) -> str:
+        return sha256("::".join(parts).encode("utf-8")).hexdigest()
+
+    def _require_settings(self) -> Settings:
+        if self.settings is None:
+            raise DomainProviderError("whois provider requires application settings.")
+        return self.settings
+
+    def _fetch_output(self, domain_name: str) -> str:
+        settings = self._require_settings()
+        binary = _resolve_binary(settings.whois_binary)
+        if binary is None:
+            raise DomainProviderError("whois is not installed; configure ORGSCAN_WHOIS_BINARY or install the whois client.")
+        completed = subprocess.run(
+            [binary, domain_name],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0:
+            raise DomainProviderError(completed.stderr.strip() or "whois execution failed")
+        return completed.stdout
+
+    @staticmethod
+    def _parse_fields(output: str) -> dict[str, list[str]]:
+        fields: dict[str, list[str]] = {}
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("%") or ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            normalized_key = key.strip().lower()
+            normalized_value = value.strip()
+            if normalized_value:
+                fields.setdefault(normalized_key, []).append(normalized_value)
+        return fields
+
+    def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        domain_record, _ = storage.get_or_create_domain(domain_name)
+        fields = self._parse_fields(self._fetch_output(domain_name))
+        exposures: list[str] = []
+
+        registrar = next(iter(fields.get("registrar", []) or fields.get("sponsoring registrar", [])), None)
+        created = next(iter(fields.get("creation date", []) or fields.get("created", [])), None)
+        expires = next(iter(fields.get("registry expiry date", []) or fields.get("expiration date", [])), None)
+        registrant_org = next(iter(fields.get("registrant organization", []) or fields.get("org", [])), None)
+
+        summary_parts = [f"WHOIS record for {domain_name}"]
+        if registrar:
+            summary_parts.append(f"registrar={registrar}")
+        if registrant_org:
+            summary_parts.append(f"org={registrant_org}")
+        if created:
+            summary_parts.append(f"created={created}")
+        if expires:
+            summary_parts.append(f"expires={expires}")
+        summary = " ".join(summary_parts)
+        storage.create_domain_exposure(
+            domain_record.id,
+            source="whois",
+            source_name=self.name,
+            result_summary=summary,
+            normalized_hash=self._hash("whois-summary", domain_name, registrar or "", created or "", expires or ""),
+            source_class="free",
+            confidence="likely",
+            severity="low",
+            query_used=domain_name,
+        )
+        exposures.append(summary)
+
+        nameservers = sorted(
+            {
+                value.lower()
+                for key, values in fields.items()
+                if key in {"name server", "nserver"}
+                for value in values
+            }
+        )
+        if nameservers:
+            existing_sources = set(domain_record.discovery_sources)
+            existing_sources.add("whois")
+            domain_record.discovery_sources = sorted(existing_sources)
+
+        for nameserver in nameservers[:20]:
+            ns_summary = f"WHOIS nameserver for {domain_name}: {nameserver}"
+            storage.create_domain_exposure(
+                domain_record.id,
+                source="whois",
+                source_name=self.name,
+                result_summary=ns_summary,
+                normalized_hash=self._hash("whois-ns", domain_name, nameserver),
+                source_class="free",
+                confidence="likely",
+                severity="low",
+                query_used=domain_name,
+            )
+            exposures.append(ns_summary)
+
+        return DomainProviderResult(exposures=exposures, identity_correlations=[], warnings=[])
+
+
+class AggregateDomainProvider(DomainIntelligenceProvider):
+    name = "all"
+
+    def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        exposures: list[str] = []
+        identity_correlations: list[str] = []
+        warnings: list[str] = []
+
+        for provider_name in ("local-metadata", "crtsh", "projectdiscovery", "whois"):
+            provider = get_domain_provider(provider_name, self.settings)
+            try:
+                result = provider.discover(storage, domain_name)
+            except DomainProviderError as exc:
+                warnings.append(f"{provider_name}: {exc}")
+                continue
+            exposures.extend(result.exposures)
+            identity_correlations.extend(result.identity_correlations)
+            warnings.extend(result.warnings or [])
+
+        return DomainProviderResult(
+            exposures=exposures,
+            identity_correlations=identity_correlations,
+            warnings=warnings,
+        )
 
 
 DOMAIN_PROVIDERS = {
+    AggregateDomainProvider.name: AggregateDomainProvider,
     CrtShDomainProvider.name: CrtShDomainProvider,
     LocalMetadataDomainProvider.name: LocalMetadataDomainProvider,
     ProjectDiscoveryDomainProvider.name: ProjectDiscoveryDomainProvider,
+    WhoisDomainProvider.name: WhoisDomainProvider,
 }
 
 

@@ -7,6 +7,7 @@ from orgscan.cli import app
 from orgscan.config import get_settings
 from orgscan.discovery import GitHubAccountRecord, GitHubRepositoryRecord
 from orgscan.db import create_session_factory, init_db
+from orgscan.providers import DomainProviderError, DomainProviderResult
 from orgscan.repositories import Storage
 from orgscan.schemas import CanonicalFinding
 
@@ -124,6 +125,7 @@ def test_cli_config_and_init_config(monkeypatch, tmp_path: Path) -> None:
     assert config_result.exit_code == 0
     assert '"github_token": "<redacted>"' in config_result.stdout
     assert '"projectdiscovery"' in config_result.stdout
+    assert '"whois"' in config_result.stdout
 
     env_path = tmp_path / ".env.generated"
     init_result = runner.invoke(app, ["init-config", str(env_path)])
@@ -316,6 +318,52 @@ def test_cli_crtsh_domain_discovery(monkeypatch, tmp_path: Path) -> None:
     result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "crtsh", "--json"])
     assert result.exit_code == 0
     assert "Certificate transparency entry for api.example.org via Example CA" in result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_cli_aggregate_domain_discovery_collects_warnings(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'all-providers.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+
+    monkeypatch.setattr(
+        "orgscan.providers.LocalMetadataDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(
+            exposures=[f"local {domain_name}"],
+            identity_correlations=[],
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.CrtShDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(
+            exposures=[f"crtsh {domain_name}"],
+            identity_correlations=[],
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.ProjectDiscoveryDomainProvider.discover",
+        lambda self, storage, domain_name: (_ for _ in ()).throw(DomainProviderError("subfinder unavailable")),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.WhoisDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(
+            exposures=[f"whois {domain_name}"],
+            identity_correlations=[],
+            warnings=[],
+        ),
+    )
+
+    result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "all", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert "local example.org" in payload["domain_exposures"]
+    assert "crtsh example.org" in payload["domain_exposures"]
+    assert "whois example.org" in payload["domain_exposures"]
+    assert any("projectdiscovery:" in warning for warning in payload["warnings"])
 
     get_settings.cache_clear()
 

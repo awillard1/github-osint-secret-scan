@@ -42,6 +42,8 @@ This roadmap maps the current repository implementation to the phased goals from
 - provider abstraction for domain intelligence
 - local metadata provider for repository-domain and account-email correlation
 - crt.sh certificate transparency provider for public host discovery
+- WHOIS provider for registrar and nameserver enrichment
+- aggregate domain discovery mode that combines installed providers and surfaces provider warnings
 - persisted DomainExposure and IdentityCorrelation records
 
 ### Phase 6 — Expansion and relationship mapping
@@ -71,7 +73,7 @@ This roadmap maps the current repository implementation to the phased goals from
 ## Remaining gaps versus the full project spec
 - no FastAPI/Jinja2 or React live dashboard yet; current API is lightweight stdlib HTTP and dashboard output is static HTML
 - no distributed worker backend such as Celery/RQ/Dramatiq or Redis-backed queue
-- no WHOIS, DNS, YARA, or broader enrichment integrations beyond current crt.sh, ProjectDiscovery, and local metadata support yet
+- no DNS, YARA, or broader enrichment integrations beyond current WHOIS, crt.sh, ProjectDiscovery, and local metadata support yet
 - no graph visualization UI, multi-tenant auth, or PDF reporting
 - no paid provider implementations; only the abstraction and free/local correlation path exist
 - no large-scale branch/history orchestration or incremental repo mirror management

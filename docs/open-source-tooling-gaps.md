@@ -9,6 +9,7 @@ This document summarizes what the current repository can accomplish directly and
 - Optional `trufflehog` integration for verified secret detection
 - Optional ProjectDiscovery integration via `subfinder` and `httpx` for domain and HTTP exposure enrichment
 - Optional `crt.sh` integration for certificate-transparency host discovery
+- Optional `whois` integration for registrar and nameserver enrichment
 - GitHub REST API discovery for public repository and organization metadata
 - Local correlation of domains against stored repository metadata and account emails
 - SQLite-backed persistence, exports, reports, and local API responses
@@ -22,8 +23,7 @@ This document summarizes what the current repository can accomplish directly and
 
 ### Domain and infrastructure enrichment
 - other CT log APIs can complement the existing `crt.sh` integration with broader or redundant certificate-transparency coverage
-- **dnspython** / `dnsrecon`: DNS enrichment beyond current subdomain/HTTP discovery
-- **whois**: ownership and registrar context
+- **dnspython** / `dnsrecon`: DNS enrichment beyond current subdomain/HTTP discovery and WHOIS context
 - **httpx** / **subfinder** / **amass**: broader asset discovery, only where scope permits
 
 ### Execution and scale

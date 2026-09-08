@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     trufflehog_binary: str = "trufflehog"
     subfinder_binary: str = "subfinder"
     httpx_binary: str = "httpx"
+    whois_binary: str = "whois"
 
     def ensure_data_dir(self) -> Path:
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -58,6 +59,7 @@ def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
         "ORGSCAN_TRUFFLEHOG_BINARY": "trufflehog",
         "ORGSCAN_SUBFINDER_BINARY": "subfinder",
         "ORGSCAN_HTTPX_BINARY": "httpx",
+        "ORGSCAN_WHOIS_BINARY": "whois",
     }
     if overrides:
         values.update(overrides)

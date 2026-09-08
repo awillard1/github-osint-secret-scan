@@ -10,7 +10,7 @@ from pathlib import Path
 from orgscan.config import Settings
 
 REQUIRED_COMMANDS = ("git", "curl", "openssl")
-OPTIONAL_COMMANDS = ("jq", "gitleaks", "semgrep", "trufflehog", "subfinder", "httpx")
+OPTIONAL_COMMANDS = ("jq", "gitleaks", "semgrep", "trufflehog", "subfinder", "httpx", "whois")
 OPTIONAL_INSTALL_NOTES = {
     "jq": "Package manager install is usually sufficient.",
     "gitleaks": "Prefer the official release binary or install script rather than OS packages for current versions.",
@@ -18,6 +18,7 @@ OPTIONAL_INSTALL_NOTES = {
     "trufflehog": "Prefer the official upstream installation method rather than OS packages for current versions.",
     "subfinder": "Use ProjectDiscovery's official release or package instructions for passive subdomain discovery.",
     "httpx": "Use ProjectDiscovery's official release or package instructions for HTTP probing and metadata collection.",
+    "whois": "Install the standard whois client package to enable registrar and nameserver enrichment.",
 }
 
 
