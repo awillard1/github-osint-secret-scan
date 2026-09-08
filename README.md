@@ -128,9 +128,10 @@ orgscan discover domain example.com --provider all
 orgscan discover domain example.com --provider crtsh
 orgscan discover domain example.com --provider projectdiscovery
 orgscan discover domain example.com --provider whois
+orgscan discover domain example.com --provider dns
 ```
 
-The `all` domain provider aggregates local metadata, crt.sh, ProjectDiscovery, and WHOIS enrichment in one pass and returns warnings for providers that are unavailable. The `crtsh` domain provider uses the public crt.sh certificate-transparency feed to discover additional domain-linked hosts. The `projectdiscovery` domain provider uses `subfinder` and `httpx` when installed to enrich domain exposure data with discovered subdomains and reachable HTTP services. The `whois` domain provider extracts registrar and nameserver context from WHOIS output.
+The `all` domain provider aggregates local metadata, crt.sh, ProjectDiscovery, WHOIS, and DNS enrichment in one pass and returns warnings for providers that are unavailable. The `crtsh` domain provider uses the public crt.sh certificate-transparency feed to discover additional domain-linked hosts. The `projectdiscovery` domain provider uses `subfinder` and `httpx` when installed to enrich domain exposure data with discovered subdomains and reachable HTTP services. The `whois` domain provider extracts registrar and nameserver context from WHOIS output. The `dns` provider uses `dnspython` to collect NS, MX, TXT, A, AAAA, and CNAME records for the tracked domain and discovered hosts.
 
 Expand related repositories and contributors:
 
@@ -187,6 +188,7 @@ pytest
 - The optional ProjectDiscovery integration uses `subfinder` for passive subdomain discovery and `httpx` for HTTP service enrichment.
 - The optional crt.sh integration adds certificate-transparency-based host discovery for tracked domains.
 - The optional WHOIS integration adds registrar and nameserver enrichment for tracked domains.
+- The optional DNS integration adds record-level enrichment for tracked domains and previously discovered subdomains.
 - The initial `scan` command uses the built-in `custom-patterns` scanner and stores scan jobs, findings, and evidence in SQLite for later reporting.
 - The `discover` command uses the public GitHub REST API and can use `ORGSCAN_GITHUB_TOKEN` when configured for higher rate limits.
 - External scanner output from `gitleaks`, `semgrep`, and `trufflehog` can be normalized through `orgscan ingest-results` without rerunning the original tool.

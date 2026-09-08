@@ -19,4 +19,5 @@ def test_open_source_gap_doc_exists() -> None:
     assert "ProjectDiscovery" in content
     assert "crt.sh" in content
     assert "whois" in content
+    assert "dnspython" in content
     assert "Redis" in content

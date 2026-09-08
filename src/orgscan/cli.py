@@ -207,7 +207,7 @@ def config(
     payload = {
         "settings": settings.as_dict(include_secrets=show_secrets),
         "available_scanners": ["custom-patterns", "gitleaks", "semgrep", "trufflehog"],
-        "available_domain_providers": ["local-metadata", "crtsh", "projectdiscovery", "whois", "all"],
+        "available_domain_providers": ["local-metadata", "crtsh", "projectdiscovery", "whois", "dns", "all"],
         "dependency_status": {
             "required": details["required"],
             "optional": details["optional"],

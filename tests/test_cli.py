@@ -322,6 +322,29 @@ def test_cli_crtsh_domain_discovery(monkeypatch, tmp_path: Path) -> None:
     get_settings.cache_clear()
 
 
+def test_cli_dns_domain_discovery(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'dns.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "orgscan.providers.DnsDomainProvider._resolve_records",
+        lambda self, name, record_type: {
+            ("example.org", "NS"): ["ns1.example.net."],
+            ("example.org", "MX"): ["10 mail.example.org."],
+            ("example.org", "TXT"): ['"v=spf1 include:_spf.example.org ~all"'],
+        }.get((name, record_type), []),
+    )
+
+    result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "dns", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert "DNS NS for example.org: ns1.example.net." in payload["domain_exposures"]
+    assert "DNS MX for example.org: 10 mail.example.org." in payload["domain_exposures"]
+
+    get_settings.cache_clear()
+
+
 def test_cli_aggregate_domain_discovery_collects_warnings(monkeypatch, tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'all-providers.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
@@ -356,6 +379,14 @@ def test_cli_aggregate_domain_discovery_collects_warnings(monkeypatch, tmp_path:
             warnings=[],
         ),
     )
+    monkeypatch.setattr(
+        "orgscan.providers.DnsDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(
+            exposures=[f"dns {domain_name}"],
+            identity_correlations=[],
+            warnings=[],
+        ),
+    )
 
     result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "all", "--json"])
     assert result.exit_code == 0
@@ -363,6 +394,7 @@ def test_cli_aggregate_domain_discovery_collects_warnings(monkeypatch, tmp_path:
     assert "local example.org" in payload["domain_exposures"]
     assert "crtsh example.org" in payload["domain_exposures"]
     assert "whois example.org" in payload["domain_exposures"]
+    assert "dns example.org" in payload["domain_exposures"]
     assert any("projectdiscovery:" in warning for warning in payload["warnings"])
 
     get_settings.cache_clear()

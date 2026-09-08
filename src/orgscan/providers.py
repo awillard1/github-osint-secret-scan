@@ -12,6 +12,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+import dns.exception
+import dns.resolver
+
 from orgscan.config import Settings
 from orgscan.repositories import Storage
 
@@ -425,7 +428,7 @@ class AggregateDomainProvider(DomainIntelligenceProvider):
         identity_correlations: list[str] = []
         warnings: list[str] = []
 
-        for provider_name in ("local-metadata", "crtsh", "projectdiscovery", "whois"):
+        for provider_name in ("local-metadata", "crtsh", "projectdiscovery", "whois", "dns"):
             provider = get_domain_provider(provider_name, self.settings)
             try:
                 result = provider.discover(storage, domain_name)
@@ -443,9 +446,86 @@ class AggregateDomainProvider(DomainIntelligenceProvider):
         )
 
 
+class DnsDomainProvider(DomainIntelligenceProvider):
+    name = "dns"
+    RECORD_TYPES = ("NS", "MX", "TXT", "A", "AAAA", "CNAME")
+
+    @staticmethod
+    def _hash(*parts: str) -> str:
+        return sha256("::".join(parts).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _severity_for_record(record_type: str) -> str:
+        return "medium" if record_type in {"TXT", "CNAME"} else "low"
+
+    @staticmethod
+    def _confidence_for_record(record_type: str) -> str:
+        return "verified" if record_type in {"A", "AAAA", "MX", "NS", "CNAME"} else "likely"
+
+    def _resolve_records(self, name: str, record_type: str) -> list[str]:
+        try:
+            answers = dns.resolver.resolve(name, record_type)
+        except (
+            dns.resolver.NoAnswer,
+            dns.resolver.NXDOMAIN,
+            dns.resolver.NoNameservers,
+            dns.resolver.LifetimeTimeout,
+        ):
+            return []
+        except dns.exception.DNSException as exc:
+            raise DomainProviderError(f"dns lookup failed for {name} {record_type}: {exc}") from exc
+
+        results: list[str] = []
+        for answer in answers:
+            value = str(answer).strip()
+            if value:
+                results.append(value)
+        return results
+
+    def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        domain_record, _ = storage.get_or_create_domain(domain_name)
+        exposures: list[str] = []
+        warnings: list[str] = []
+        targets = [domain_name, *domain_record.discovered_subdomains]
+        seen_targets: set[str] = set()
+
+        existing_sources = set(domain_record.discovery_sources)
+        existing_sources.add("dns")
+        domain_record.discovery_sources = sorted(existing_sources)
+
+        for target in targets:
+            normalized_target = target.strip().lower()
+            if not normalized_target or normalized_target in seen_targets:
+                continue
+            seen_targets.add(normalized_target)
+
+            for record_type in self.RECORD_TYPES:
+                try:
+                    values = self._resolve_records(normalized_target, record_type)
+                except DomainProviderError as exc:
+                    warnings.append(str(exc))
+                    continue
+                for value in values[:20]:
+                    summary = f"DNS {record_type} for {normalized_target}: {value}"
+                    storage.create_domain_exposure(
+                        domain_record.id,
+                        source="dns",
+                        source_name=self.name,
+                        result_summary=summary,
+                        normalized_hash=self._hash("dns", normalized_target, record_type, value),
+                        source_class="free",
+                        confidence=self._confidence_for_record(record_type),
+                        severity=self._severity_for_record(record_type),
+                        query_used=normalized_target,
+                    )
+                    exposures.append(summary)
+        return DomainProviderResult(exposures=exposures, identity_correlations=[], warnings=warnings)
+
+
 DOMAIN_PROVIDERS = {
     AggregateDomainProvider.name: AggregateDomainProvider,
     CrtShDomainProvider.name: CrtShDomainProvider,
+    DnsDomainProvider.name: DnsDomainProvider,
     LocalMetadataDomainProvider.name: LocalMetadataDomainProvider,
     ProjectDiscoveryDomainProvider.name: ProjectDiscoveryDomainProvider,
     WhoisDomainProvider.name: WhoisDomainProvider,
