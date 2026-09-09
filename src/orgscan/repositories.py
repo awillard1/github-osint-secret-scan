@@ -420,10 +420,26 @@ class Storage:
     def list_accounts(self) -> Sequence[Account]:
         return list(self.session.scalars(select(Account).order_by(Account.username.asc())))
 
-    def list_domain_exposures(self, domain_id: int | None = None) -> Sequence[DomainExposure]:
+    def list_domain_exposures(
+        self,
+        domain_id: int | None = None,
+        *,
+        source_name: str | None = None,
+        source_class: str | None = None,
+        confidence: str | None = None,
+        limit: int | None = None,
+    ) -> Sequence[DomainExposure]:
         query = select(DomainExposure).order_by(DomainExposure.last_seen.desc(), DomainExposure.id.desc())
         if domain_id is not None:
             query = query.where(DomainExposure.domain_id == domain_id)
+        if source_name:
+            query = query.where(DomainExposure.source_name == source_name)
+        if source_class:
+            query = query.where(DomainExposure.source_class == source_class)
+        if confidence:
+            query = query.where(DomainExposure.confidence == confidence)
+        if limit is not None:
+            query = query.limit(limit)
         return list(self.session.scalars(query))
 
     def list_identity_correlations(self, domain_id: int | None = None) -> Sequence[IdentityCorrelation]:

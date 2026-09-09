@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     http_timeout_seconds: int = 15
     redis_url: str = "redis://127.0.0.1:6379/0"
     scan_queue_name: str = "orgscan:scans"
+    hibp_base_url: str = "https://haveibeenpwned.com/api/v3"
+    hibp_api_key: str | None = None
+    dehashed_base_url: str = "https://api.dehashed.com/search"
+    dehashed_email: str | None = None
+    dehashed_api_key: str | None = None
+    intelligencex_base_url: str = "https://2.intelx.io"
+    intelligencex_api_key: str | None = None
     gitleaks_binary: str = "gitleaks"
     detect_secrets_binary: str = "detect-secrets"
     semgrep_binary: str = "semgrep"
@@ -48,8 +55,10 @@ class Settings(BaseSettings):
     def as_dict(self, *, include_secrets: bool = False) -> dict[str, object]:
         payload = self.model_dump()
         payload["data_dir"] = str(self.data_dir)
-        if not include_secrets and payload.get("github_token"):
-            payload["github_token"] = "<redacted>"
+        if not include_secrets:
+            for secret_field in ("github_token", "hibp_api_key", "dehashed_api_key", "intelligencex_api_key", "dehashed_email"):
+                if payload.get(secret_field):
+                    payload[secret_field] = "<redacted>"
         return payload
 
     def heuristic_term_list(self) -> list[str]:
@@ -71,6 +80,13 @@ def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
         "ORGSCAN_HTTP_TIMEOUT_SECONDS": 15,
         "ORGSCAN_REDIS_URL": "redis://127.0.0.1:6379/0",
         "ORGSCAN_SCAN_QUEUE_NAME": "orgscan:scans",
+        "ORGSCAN_HIBP_BASE_URL": "https://haveibeenpwned.com/api/v3",
+        "ORGSCAN_HIBP_API_KEY": "",
+        "ORGSCAN_DEHASHED_BASE_URL": "https://api.dehashed.com/search",
+        "ORGSCAN_DEHASHED_EMAIL": "",
+        "ORGSCAN_DEHASHED_API_KEY": "",
+        "ORGSCAN_INTELLIGENCEX_BASE_URL": "https://2.intelx.io",
+        "ORGSCAN_INTELLIGENCEX_API_KEY": "",
         "ORGSCAN_GITLEAKS_BINARY": "gitleaks",
         "ORGSCAN_DETECT_SECRETS_BINARY": "detect-secrets",
         "ORGSCAN_SEMGREP_BINARY": "semgrep",

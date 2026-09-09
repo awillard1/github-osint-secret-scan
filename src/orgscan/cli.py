@@ -17,7 +17,7 @@ from orgscan.discovery import DiscoveryError, GitHubDiscoveryClient
 from orgscan.expansion import GitHubExpansionEngine
 from orgscan.logging_config import setup_logging
 from orgscan.models import Finding
-from orgscan.providers import DomainProviderError, get_domain_provider
+from orgscan.providers import DomainProviderError, available_domain_provider_names, get_domain_provider
 from orgscan.queueing import QueueBackendError, enqueue_due_scheduled_scans, queue_status, run_worker
 from orgscan.repositories import Storage
 from orgscan.reporting import build_summary, finding_rows, write_csv, write_html, write_json
@@ -55,6 +55,7 @@ class ExportFormat(StrEnum):
     JSON = "json"
     CSV = "csv"
     HTML = "html"
+    PDF = "pdf"
 
 
 class ScanCadence(StrEnum):
@@ -107,6 +108,10 @@ def _write_export(output_path: Path, export_format: ExportFormat, summary: dict[
         return write_json(output_path, {"summary": summary, "findings": rows})
     if export_format == ExportFormat.CSV:
         return write_csv(output_path, rows)
+    if export_format == ExportFormat.PDF:
+        from orgscan.reporting import write_pdf
+
+        return write_pdf(output_path, summary, rows)
     return write_html(output_path, summary, rows)
 
 
@@ -213,7 +218,7 @@ def config(
     payload = {
         "settings": settings.as_dict(include_secrets=show_secrets),
         "available_scanners": available_scanner_names(),
-        "available_domain_providers": ["local-metadata", "crtsh", "projectdiscovery", "whois", "dns", "all"],
+        "available_domain_providers": available_domain_provider_names(),
         "available_execution_backends": ["local", "rq"],
         "dependency_status": {
             "required": details["required"],

@@ -40,7 +40,8 @@ This roadmap maps the current repository implementation to the phased goals from
 - public GitHub repository and organization discovery using the GitHub REST API
 - optional `ORGSCAN_GITHUB_TOKEN` support for authenticated discovery
 - ProjectDiscovery-backed domain enrichment through `subfinder` and `httpx`
-- summary reporting, JSON/CSV/HTML export, and richer static dashboard generation
+- paid domain enrichment adapters for Have I Been Pwned, DeHashed, and Intelligence X
+- summary reporting, JSON/CSV/HTML/PDF export, and richer static dashboard generation
 
 ### Phase 5 — Domain intelligence providers
 - provider abstraction for domain intelligence
@@ -63,8 +64,8 @@ This roadmap maps the current repository implementation to the phased goals from
 - manual cadence disables itself after execution to avoid runaway reprocessing
 
 ### Phase 8 — API surface
-- FastAPI service with health, summary, filtered findings, scheduled-scan, relationship graph, and trend endpoints
-- live HTML dashboard served from the same app with interactive filter controls
+- FastAPI service with health, summary, filtered findings, filtered domain exposures, scheduled-scan, relationship graph, trend, organization comparison, and remediation suggestion endpoints
+- live HTML dashboard served from the same app with interactive filter controls, client-side charts, graph visualization, and multi-org comparison summaries
 - `orgscan serve-api` for local web/API serving
 
 ### Phase 9 — Execution telemetry
@@ -79,7 +80,7 @@ This roadmap maps the current repository implementation to the phased goals from
 
 ## Remaining gaps versus the full project spec
 - no advanced distributed orchestration beyond the initial Redis/RQ worker backend, and no graph visualization UI, multi-tenant auth, or PDF reporting
-- no paid provider implementations; only the abstraction and free/local correlation path exist
+- no advanced distributed orchestration beyond the initial Redis/RQ worker backend, and no multi-tenant auth/RBAC yet
 - no large-scale branch/history orchestration or incremental repo mirror management
 
 ## Current implementation stance

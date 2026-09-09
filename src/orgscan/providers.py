@@ -4,12 +4,13 @@ import json
 import shutil
 import subprocess
 import tempfile
+from base64 import b64encode
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 import dns.exception
@@ -45,6 +46,37 @@ def _resolve_binary(command: str) -> str | None:
     if candidate.is_absolute():
         return str(candidate) if candidate.exists() else None
     return shutil.which(command)
+
+
+def _require_setting(value: str | None, message: str) -> str:
+    if value:
+        return value
+    raise DomainProviderError(message)
+
+
+def _request_json(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    method: str = "GET",
+    data: bytes | None = None,
+    timeout: int = 15,
+    expected: type[list[Any]] | type[dict[str, Any]] | None = None,
+) -> object:
+    request = Request(url, headers=headers or {}, method=method, data=data)
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8") or "null")
+    except HTTPError as exc:
+        raise DomainProviderError(f"request failed with status {exc.code}") from exc
+    except URLError as exc:
+        raise DomainProviderError(f"request failed: {exc.reason}") from exc
+    except json.JSONDecodeError as exc:
+        raise DomainProviderError("provider returned invalid JSON output") from exc
+    if expected is not None and not isinstance(payload, expected):
+        expected_name = "array" if expected is list else "object"
+        raise DomainProviderError(f"provider response must be a JSON {expected_name}")
+    return payload
 
 
 class LocalMetadataDomainProvider(DomainIntelligenceProvider):
@@ -446,6 +478,239 @@ class AggregateDomainProvider(DomainIntelligenceProvider):
         )
 
 
+class EnrichedAggregateDomainProvider(DomainIntelligenceProvider):
+    name = "all-enriched"
+
+    def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        exposures: list[str] = []
+        identity_correlations: list[str] = []
+        warnings: list[str] = []
+
+        for provider_name in ("local-metadata", "crtsh", "projectdiscovery", "whois", "dns", "hibp", "dehashed", "intelligencex"):
+            provider = get_domain_provider(provider_name, self.settings)
+            try:
+                result = provider.discover(storage, domain_name)
+            except DomainProviderError as exc:
+                warnings.append(f"{provider_name}: {exc}")
+                continue
+            exposures.extend(result.exposures)
+            identity_correlations.extend(result.identity_correlations)
+            warnings.extend(result.warnings or [])
+
+        return DomainProviderResult(exposures=exposures, identity_correlations=identity_correlations, warnings=warnings)
+
+
+class HaveIBeenPwnedDomainProvider(DomainIntelligenceProvider):
+    name = "hibp"
+
+    @staticmethod
+    def _hash(*parts: str) -> str:
+        return sha256("::".join(parts).encode("utf-8")).hexdigest()
+
+    def _require_settings(self) -> Settings:
+        if self.settings is None:
+            raise DomainProviderError("HIBP provider requires application settings.")
+        return self.settings
+
+    def _fetch_breaches(self) -> list[dict[str, Any]]:
+        settings = self._require_settings()
+        api_key = _require_setting(settings.hibp_api_key, "HIBP provider requires ORGSCAN_HIBP_API_KEY.")
+        payload = _request_json(
+            f"{settings.hibp_base_url.rstrip('/')}/breaches",
+            headers={
+                "User-Agent": "orgscan/0.1.0",
+                "hibp-api-key": api_key,
+                "Accept": "application/json",
+            },
+            timeout=settings.http_timeout_seconds,
+            expected=list,
+        )
+        return [item for item in payload if isinstance(item, dict)]  # type: ignore[arg-type]
+
+    def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        domain_record, _ = storage.get_or_create_domain(domain_name)
+        exposures: list[str] = []
+        normalized_domain = domain_name.lower()
+
+        for item in self._fetch_breaches():
+            breach_domain = str(item.get("Domain") or "").strip().lower()
+            if breach_domain != normalized_domain:
+                continue
+            breach_name = str(item.get("Name") or "unknown breach").strip()
+            breach_date = str(item.get("BreachDate") or "").strip()
+            title = str(item.get("Title") or breach_name).strip()
+            summary = f"HIBP breach linked to {domain_name}: {title}"
+            if breach_date:
+                summary = f"{summary} breach_date={breach_date}"
+            storage.create_domain_exposure(
+                domain_record.id,
+                source="hibp",
+                source_name=self.name,
+                result_summary=summary,
+                normalized_hash=self._hash("hibp", domain_name, breach_name, breach_date),
+                source_class="paid",
+                confidence="likely",
+                severity="medium",
+                query_used=domain_name,
+                evidence_url=str(item.get("DomainSearch") or "") or None,
+            )
+            exposures.append(summary)
+
+        return DomainProviderResult(exposures=exposures, identity_correlations=[], warnings=[])
+
+
+class DeHashedDomainProvider(DomainIntelligenceProvider):
+    name = "dehashed"
+
+    @staticmethod
+    def _hash(*parts: str) -> str:
+        return sha256("::".join(parts).encode("utf-8")).hexdigest()
+
+    def _require_settings(self) -> Settings:
+        if self.settings is None:
+            raise DomainProviderError("DeHashed provider requires application settings.")
+        return self.settings
+
+    def _fetch_records(self, domain_name: str) -> list[dict[str, Any]]:
+        settings = self._require_settings()
+        email = _require_setting(settings.dehashed_email, "DeHashed provider requires ORGSCAN_DEHASHED_EMAIL.")
+        api_key = _require_setting(settings.dehashed_api_key, "DeHashed provider requires ORGSCAN_DEHASHED_API_KEY.")
+        auth = b64encode(f"{email}:{api_key}".encode("utf-8")).decode("ascii")
+        payload = _request_json(
+            f"{settings.dehashed_base_url.rstrip('/')}?{urlencode({'query': f'domain:{domain_name}'})}",
+            headers={
+                "User-Agent": "orgscan/0.1.0",
+                "Authorization": f"Basic {auth}",
+                "Accept": "application/json",
+            },
+            timeout=settings.http_timeout_seconds,
+            expected=dict,
+        )
+        entries = payload.get("entries") if isinstance(payload, dict) else None
+        return [item for item in entries if isinstance(item, dict)] if isinstance(entries, list) else []
+
+    def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        domain_record, _ = storage.get_or_create_domain(domain_name)
+        exposures: list[str] = []
+        identity_correlations: list[str] = []
+        normalized_suffix = f"@{domain_name.lower()}"
+
+        for item in self._fetch_records(domain_name):
+            email = str(item.get("email") or "").strip().lower()
+            username = str(item.get("username") or "").strip() or None
+            source_ip = str(item.get("ip_address") or "").strip()
+            database_name = str(item.get("database_name") or "unknown dataset").strip()
+            if not email.endswith(normalized_suffix):
+                continue
+            summary = f"DeHashed exposure for {domain_name}: email={email} source={database_name}"
+            if source_ip:
+                summary = f"{summary} ip={source_ip}"
+            storage.create_domain_exposure(
+                domain_record.id,
+                source="dehashed",
+                source_name=self.name,
+                result_summary=summary,
+                normalized_hash=self._hash("dehashed", domain_name, email, username or "", database_name),
+                source_class="paid",
+                confidence="likely",
+                severity="medium",
+                query_used=f"domain:{domain_name}",
+            )
+            exposures.append(summary)
+            storage.create_identity_correlation(
+                domain_record.id,
+                source="dehashed",
+                relation_type="breach-email-domain-match",
+                email=email,
+                username=username,
+                confidence="likely",
+                evidence_reference=database_name,
+            )
+            identity_correlations.append(username or email)
+
+        return DomainProviderResult(exposures=exposures, identity_correlations=identity_correlations, warnings=[])
+
+
+class IntelligenceXDomainProvider(DomainIntelligenceProvider):
+    name = "intelligencex"
+
+    @staticmethod
+    def _hash(*parts: str) -> str:
+        return sha256("::".join(parts).encode("utf-8")).hexdigest()
+
+    def _require_settings(self) -> Settings:
+        if self.settings is None:
+            raise DomainProviderError("Intelligence X provider requires application settings.")
+        return self.settings
+
+    def _search_results(self, domain_name: str) -> list[dict[str, Any]]:
+        settings = self._require_settings()
+        api_key = _require_setting(
+            settings.intelligencex_api_key,
+            "Intelligence X provider requires ORGSCAN_INTELLIGENCEX_API_KEY.",
+        )
+        payload = _request_json(
+            f"{settings.intelligencex_base_url.rstrip('/')}/intelligent/search",
+            method="POST",
+            data=json.dumps({"term": domain_name, "maxresults": 20, "media": 0}).encode("utf-8"),
+            headers={
+                "User-Agent": "orgscan/0.1.0",
+                "x-key": api_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            timeout=settings.http_timeout_seconds,
+            expected=dict,
+        )
+        records = payload.get("records") if isinstance(payload, dict) else None
+        return [item for item in records if isinstance(item, dict)] if isinstance(records, list) else []
+
+    def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        domain_record, _ = storage.get_or_create_domain(domain_name)
+        exposures: list[str] = []
+        identity_correlations: list[str] = []
+        needle = domain_name.lower()
+
+        for item in self._search_results(domain_name):
+            record_type = str(item.get("type") or item.get("bucket") or "record").strip()
+            system_id = str(item.get("systemid") or item.get("id") or "").strip()
+            name = str(item.get("name") or item.get("selectorvalue") or "").strip()
+            text_blob = json.dumps(item).lower()
+            if needle not in text_blob:
+                continue
+            summary = f"Intelligence X exposure for {domain_name}: type={record_type}"
+            if name:
+                summary = f"{summary} name={name}"
+            storage.create_domain_exposure(
+                domain_record.id,
+                source="intelligencex",
+                source_name=self.name,
+                result_summary=summary,
+                normalized_hash=self._hash("intelligencex", domain_name, record_type, system_id, name),
+                source_class="paid",
+                confidence="likely",
+                severity="medium",
+                query_used=domain_name,
+                evidence_url=f"{self._require_settings().intelligencex_base_url.rstrip('/')}/?did={system_id}" if system_id else None,
+            )
+            exposures.append(summary)
+            for key in ("email", "selectorvalue"):
+                candidate = str(item.get(key) or "").strip().lower()
+                if candidate.endswith(f"@{needle}"):
+                    storage.create_identity_correlation(
+                        domain_record.id,
+                        source="intelligencex",
+                        relation_type="intel-record-email-domain-match",
+                        email=candidate,
+                        username=str(item.get("name") or "").strip() or None,
+                        confidence="likely",
+                        evidence_reference=record_type,
+                    )
+                    identity_correlations.append(candidate)
+
+        return DomainProviderResult(exposures=exposures, identity_correlations=identity_correlations, warnings=[])
+
+
 class DnsDomainProvider(DomainIntelligenceProvider):
     name = "dns"
     RECORD_TYPES = ("NS", "MX", "TXT", "A", "AAAA", "CNAME")
@@ -524,12 +789,20 @@ class DnsDomainProvider(DomainIntelligenceProvider):
 
 DOMAIN_PROVIDERS = {
     AggregateDomainProvider.name: AggregateDomainProvider,
+    EnrichedAggregateDomainProvider.name: EnrichedAggregateDomainProvider,
     CrtShDomainProvider.name: CrtShDomainProvider,
+    DeHashedDomainProvider.name: DeHashedDomainProvider,
     DnsDomainProvider.name: DnsDomainProvider,
+    HaveIBeenPwnedDomainProvider.name: HaveIBeenPwnedDomainProvider,
+    IntelligenceXDomainProvider.name: IntelligenceXDomainProvider,
     LocalMetadataDomainProvider.name: LocalMetadataDomainProvider,
     ProjectDiscoveryDomainProvider.name: ProjectDiscoveryDomainProvider,
     WhoisDomainProvider.name: WhoisDomainProvider,
 }
+
+
+def available_domain_provider_names() -> list[str]:
+    return sorted(DOMAIN_PROVIDERS)
 
 
 def get_domain_provider(name: str, settings: Settings | None = None) -> DomainIntelligenceProvider:

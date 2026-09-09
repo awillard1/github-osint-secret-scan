@@ -46,6 +46,10 @@ ORGSCAN_LOG_LEVEL=INFO
 ORGSCAN_CRTSH_BASE_URL=https://crt.sh
 ORGSCAN_REDIS_URL=redis://127.0.0.1:6379/0
 ORGSCAN_SCAN_QUEUE_NAME=orgscan:scans
+ORGSCAN_HIBP_API_KEY=
+ORGSCAN_DEHASHED_EMAIL=
+ORGSCAN_DEHASHED_API_KEY=
+ORGSCAN_INTELLIGENCEX_API_KEY=
 ORGSCAN_DETECT_SECRETS_BINARY=detect-secrets
 ORGSCAN_YARA_BINARY=yara
 ORGSCAN_YARA_RULES_PATH=
@@ -151,9 +155,13 @@ orgscan discover domain example.com --provider crtsh
 orgscan discover domain example.com --provider projectdiscovery
 orgscan discover domain example.com --provider whois
 orgscan discover domain example.com --provider dns
+orgscan discover domain example.com --provider hibp
+orgscan discover domain example.com --provider dehashed
+orgscan discover domain example.com --provider intelligencex
+orgscan discover domain example.com --provider all-enriched
 ```
 
-The `all` domain provider aggregates local metadata, crt.sh, ProjectDiscovery, WHOIS, and DNS enrichment in one pass and returns warnings for providers that are unavailable. The `crtsh` domain provider uses the public crt.sh certificate-transparency feed to discover additional domain-linked hosts. The `projectdiscovery` domain provider uses `subfinder` and `httpx` when installed to enrich domain exposure data with discovered subdomains and reachable HTTP services. The `whois` domain provider extracts registrar and nameserver context from WHOIS output. The `dns` provider uses `dnspython` to collect NS, MX, TXT, A, AAAA, and CNAME records for the tracked domain and discovered hosts.
+The `all` domain provider aggregates local metadata, crt.sh, ProjectDiscovery, WHOIS, and DNS enrichment in one pass and returns warnings for providers that are unavailable. The `all-enriched` provider extends that flow with configured paid providers. The `crtsh` domain provider uses the public crt.sh certificate-transparency feed to discover additional domain-linked hosts. The `projectdiscovery` domain provider uses `subfinder` and `httpx` when installed to enrich domain exposure data with discovered subdomains and reachable HTTP services. The `whois` domain provider extracts registrar and nameserver context from WHOIS output. The `dns` provider uses `dnspython` to collect NS, MX, TXT, A, AAAA, and CNAME records for the tracked domain and discovered hosts. Paid integrations for **Have I Been Pwned**, **DeHashed**, and **Intelligence X** can add breach and exposure records when their credentials are configured.
 
 Expand related repositories and contributors:
 
@@ -172,6 +180,7 @@ Export findings and generate a static HTML dashboard:
 
 ```bash
 orgscan export ./data/findings.json --format json
+orgscan export ./data/findings.pdf --format pdf
 orgscan dashboard ./data/dashboard.html
 ```
 
@@ -199,8 +208,11 @@ Key routes:
 - `/dashboard` live HTML dashboard with filter controls
 - `/summary` summary JSON
 - `/findings` filtered findings JSON
+- `/domain-exposures` filtered domain exposure JSON
 - `/relationships/graph` relationship graph JSON
 - `/trends/findings` findings trend JSON
+- `/comparisons/organizations` multi-org comparison JSON
+- `/remediation/suggestions` remediation suggestion JSON
 
 Verify required local dependencies:
 
@@ -225,12 +237,14 @@ pytest
 - The optional crt.sh integration adds certificate-transparency-based host discovery for tracked domains.
 - The optional WHOIS integration adds registrar and nameserver enrichment for tracked domains.
 - The optional DNS integration adds record-level enrichment for tracked domains and previously discovered subdomains.
+- Optional paid domain intelligence integrations are available for Have I Been Pwned, DeHashed, and Intelligence X.
 - The built-in repo-governance scanner checks for missing ownership/security policy files, missing Dependabot configuration, risky workflow triggers, broad workflow permissions, and unpinned GitHub Actions references.
 - The initial `scan` command uses the built-in `custom-patterns` scanner and stores scan jobs, findings, and evidence in SQLite for later reporting.
 - Additional built-in scanners cover YARA rule matching, ripgrep-based heuristics, and git history scanning for regex-based secret exposures.
 - The `discover` command uses the public GitHub REST API and can use `ORGSCAN_GITHUB_TOKEN` when configured for higher rate limits.
 - External scanner output from `gitleaks`, `detect-secrets`, `semgrep`, and `trufflehog` can be normalized through `orgscan ingest-results` without rerunning the original tool.
-- The local web surface now runs on FastAPI and serves both live HTML dashboard views and JSON endpoints from the same application.
+- The local web surface now runs on FastAPI and serves both live HTML dashboard views and JSON endpoints from the same application, including multi-org comparison, remediation, and filtered domain exposure views.
+- Reporting exports now include PDF alongside JSON, CSV, and HTML outputs.
 - Scheduled scans can also be enqueued onto Redis/RQ workers for queue-based execution in addition to the local synchronous scheduler flow.
 - The current roadmap status and remaining gaps relative to the full project spec are documented in `docs/roadmap.md`.
 - Additional open-source tools that can close current capability gaps are documented in `docs/open-source-tooling-gaps.md`; Semgrep is now available as an optional external scanner integration.

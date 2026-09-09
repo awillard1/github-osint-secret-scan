@@ -18,11 +18,21 @@ def test_settings_load_from_env_file(tmp_path: Path) -> None:
 
 
 def test_settings_redacts_secret_by_default() -> None:
-    settings = Settings(github_token="example-secret-token")
+    settings = Settings(
+        github_token="example-secret-token",
+        hibp_api_key="hibp-token",
+        dehashed_email="user@example.com",
+        dehashed_api_key="dehashed-token",
+        intelligencex_api_key="intelx-token",
+    )
 
     payload = settings.as_dict()
 
     assert payload["github_token"] == "<redacted>"
+    assert payload["hibp_api_key"] == "<redacted>"
+    assert payload["dehashed_email"] == "<redacted>"
+    assert payload["dehashed_api_key"] == "<redacted>"
+    assert payload["intelligencex_api_key"] == "<redacted>"
 
 
 def test_render_env_template_lists_tool_binaries() -> None:
@@ -31,6 +41,9 @@ def test_render_env_template_lists_tool_binaries() -> None:
     assert "ORGSCAN_DETECT_SECRETS_BINARY=detect-secrets" in template
     assert "ORGSCAN_REDIS_URL=redis://127.0.0.1:6379/0" in template
     assert "ORGSCAN_SCAN_QUEUE_NAME=orgscan:scans" in template
+    assert "ORGSCAN_HIBP_API_KEY=" in template
+    assert "ORGSCAN_DEHASHED_API_KEY=" in template
+    assert "ORGSCAN_INTELLIGENCEX_API_KEY=" in template
     assert "ORGSCAN_SEMGREP_BINARY=semgrep" in template
     assert "ORGSCAN_YARA_BINARY=yara" in template
     assert "ORGSCAN_RG_BINARY=rg" in template

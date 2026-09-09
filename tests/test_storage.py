@@ -251,3 +251,46 @@ def test_storage_tool_runs_and_scheduled_scans(tmp_path: Path) -> None:
 
     assert counts["scheduled_scans"] == 1
     assert counts["tool_runs"] == 1
+
+
+def test_list_domain_exposures_supports_source_filters(tmp_path: Path) -> None:
+    db_path = tmp_path / "exposures-filter.db"
+    database_url = f"sqlite:///{db_path}"
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+
+    with session_factory() as session:
+        storage = Storage(session)
+        domain = storage.create_domain("example.org")
+        storage.create_domain_exposure(
+            domain.id,
+            source="crt.sh",
+            source_name="crtsh",
+            result_summary="crtsh exposure",
+            normalized_hash="crtsh-hash",
+            source_class="free",
+            confidence="likely",
+        )
+        storage.create_domain_exposure(
+            domain.id,
+            source="hibp",
+            source_name="hibp",
+            result_summary="hibp exposure",
+            normalized_hash="hibp-hash",
+            source_class="paid",
+            confidence="verified",
+        )
+        session.commit()
+
+    with session_factory() as session:
+        storage = Storage(session)
+        paid = storage.list_domain_exposures(source_class="paid")
+        hibp = storage.list_domain_exposures(source_name="hibp")
+        verified = storage.list_domain_exposures(confidence="verified")
+
+    assert len(paid) == 1
+    assert paid[0].source_name == "hibp"
+    assert len(hibp) == 1
+    assert hibp[0].source == "hibp"
+    assert len(verified) == 1
+    assert verified[0].result_summary == "hibp exposure"

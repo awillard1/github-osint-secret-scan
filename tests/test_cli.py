@@ -126,7 +126,12 @@ def test_cli_config_and_init_config(monkeypatch, tmp_path: Path) -> None:
     config_result = runner.invoke(app, ["config", "--json"])
     assert config_result.exit_code == 0
     assert '"github_token": "<redacted>"' in config_result.stdout
+    assert '"hibp_api_key": "<redacted>"' not in config_result.stdout
     assert '"projectdiscovery"' in config_result.stdout
+    assert '"hibp"' in config_result.stdout
+    assert '"dehashed"' in config_result.stdout
+    assert '"intelligencex"' in config_result.stdout
+    assert '"all-enriched"' in config_result.stdout
     assert '"whois"' in config_result.stdout
     assert '"detect-secrets"' in config_result.stdout
     assert '"yara"' in config_result.stdout
@@ -137,6 +142,9 @@ def test_cli_config_and_init_config(monkeypatch, tmp_path: Path) -> None:
     assert init_result.exit_code == 0
     assert env_path.exists()
     assert "ORGSCAN_DETECT_SECRETS_BINARY=detect-secrets" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_HIBP_API_KEY=" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_DEHASHED_API_KEY=" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_INTELLIGENCEX_API_KEY=" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_YARA_BINARY=yara" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_RG_BINARY=rg" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_SUBFINDER_BINARY=subfinder" in env_path.read_text(encoding="utf-8")
@@ -235,6 +243,13 @@ def test_cli_discover_report_export_and_dashboard(monkeypatch, tmp_path: Path) -
     assert dashboard_result.exit_code == 0
     assert dashboard_path.exists()
     assert "orgscan dashboard" in dashboard_path.read_text(encoding="utf-8")
+    assert "Client-side trend chart" in dashboard_path.read_text(encoding="utf-8")
+
+    pdf_export = tmp_path / "findings.pdf"
+    pdf_result = runner.invoke(app, ["export", str(pdf_export), "--format", "pdf"])
+    assert pdf_result.exit_code == 0
+    assert pdf_export.exists()
+    assert pdf_export.read_bytes().startswith(b"%PDF")
 
     domain_result = runner.invoke(app, ["discover", "domain", "example.org", "--json"])
     assert domain_result.exit_code == 0
@@ -440,6 +455,73 @@ def test_cli_aggregate_domain_discovery_collects_warnings(monkeypatch, tmp_path:
     assert "whois example.org" in payload["domain_exposures"]
     assert "dns example.org" in payload["domain_exposures"]
     assert any("projectdiscovery:" in warning for warning in payload["warnings"])
+
+    get_settings.cache_clear()
+
+
+def test_cli_paid_domain_discovery_and_enriched_aggregate(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'paid-providers.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ORGSCAN_HIBP_API_KEY", "test-hibp")
+    monkeypatch.setenv("ORGSCAN_DEHASHED_EMAIL", "user@example.org")
+    monkeypatch.setenv("ORGSCAN_DEHASHED_API_KEY", "test-dehashed")
+    monkeypatch.setenv("ORGSCAN_INTELLIGENCEX_API_KEY", "test-intelx")
+    get_settings.cache_clear()
+
+    monkeypatch.setattr(
+        "orgscan.providers.HaveIBeenPwnedDomainProvider._fetch_breaches",
+        lambda self: [{"Name": "ExampleBreach", "Title": "Example Breach", "Domain": "example.org", "BreachDate": "2024-01-01"}],
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.DeHashedDomainProvider._fetch_records",
+        lambda self, domain_name: [{"email": f"alice@{domain_name}", "username": "alice", "database_name": "breach-set"}],
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.IntelligenceXDomainProvider._search_results",
+        lambda self, domain_name: [{"type": "paste", "name": "public-paste", "selectorvalue": f"ops@{domain_name}"}],
+    )
+
+    hibp_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "hibp", "--json"])
+    assert hibp_result.exit_code == 0
+    assert "HIBP breach linked to example.org: Example Breach" in hibp_result.stdout
+
+    dehashed_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "dehashed", "--json"])
+    assert dehashed_result.exit_code == 0
+    assert "DeHashed exposure for example.org: email=alice@example.org" in dehashed_result.stdout
+
+    intelx_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "intelligencex", "--json"])
+    assert intelx_result.exit_code == 0
+    assert "Intelligence X exposure for example.org: type=paste name=public-paste" in intelx_result.stdout
+
+    monkeypatch.setattr(
+        "orgscan.providers.LocalMetadataDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(exposures=[f"local {domain_name}"], identity_correlations=[], warnings=[]),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.CrtShDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(exposures=[f"crtsh {domain_name}"], identity_correlations=[], warnings=[]),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.ProjectDiscoveryDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(exposures=[f"pd {domain_name}"], identity_correlations=[], warnings=[]),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.WhoisDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(exposures=[f"whois {domain_name}"], identity_correlations=[], warnings=[]),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.DnsDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(exposures=[f"dns {domain_name}"], identity_correlations=[], warnings=[]),
+    )
+
+    aggregate_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "all-enriched", "--json"])
+    assert aggregate_result.exit_code == 0
+    aggregate_payload = json.loads(aggregate_result.stdout)
+    assert "local example.org" in aggregate_payload["domain_exposures"]
+    assert any("HIBP breach linked to example.org" in item for item in aggregate_payload["domain_exposures"])
+    assert any("DeHashed exposure for example.org" in item for item in aggregate_payload["domain_exposures"])
+    assert any("Intelligence X exposure for example.org" in item for item in aggregate_payload["domain_exposures"])
 
     get_settings.cache_clear()
 

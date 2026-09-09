@@ -81,6 +81,46 @@ class OrgscanApiService:
                 ]
             }
 
+    def _domain_exposures_payload(
+        self,
+        *,
+        domain_id: int | None = None,
+        source_name: str | None = None,
+        source_class: str | None = None,
+        confidence: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, object]:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            exposures = storage.list_domain_exposures(
+                domain_id,
+                source_name=source_name,
+                source_class=source_class,
+                confidence=confidence,
+                limit=limit,
+            )
+            provider_summary: dict[str, int] = {}
+            for exposure in exposures:
+                provider_summary[exposure.source_name] = provider_summary.get(exposure.source_name, 0) + 1
+            return {
+                "exposures": [
+                    {
+                        "id": exposure.id,
+                        "domain_id": exposure.domain_id,
+                        "source": exposure.source,
+                        "source_name": exposure.source_name,
+                        "source_class": exposure.source_class,
+                        "query_used": exposure.query_used,
+                        "result_summary": exposure.result_summary,
+                        "confidence": exposure.confidence,
+                        "severity": exposure.severity,
+                        "evidence_url": exposure.evidence_url,
+                    }
+                    for exposure in exposures
+                ],
+                "provider_summary": provider_summary,
+            }
+
     def _relationship_graph_payload(self, *, limit: int = 200) -> dict[str, object]:
         with self.session_factory() as session:
             return relationship_graph(Storage(session), limit=limit)
@@ -88,6 +128,14 @@ class OrgscanApiService:
     def _finding_trends_payload(self, *, days: int = 30) -> dict[str, object]:
         with self.session_factory() as session:
             return {"days": days, "trends": finding_trends(Storage(session), days=days)}
+
+    def _organization_comparison_payload(self) -> dict[str, object]:
+        with self.session_factory() as session:
+            return {"organizations": build_summary(Storage(session)).get("organization_comparison", [])}
+
+    def _remediation_suggestions_payload(self) -> dict[str, object]:
+        with self.session_factory() as session:
+            return {"suggestions": build_summary(Storage(session)).get("remediation_suggestions", [])}
 
     def _dashboard_html(
         self,
@@ -164,10 +212,22 @@ class OrgscanApiService:
             )
         if route == "/scheduled-scans":
             return 200, self._scheduled_scans_payload()
+        if route == "/domain-exposures":
+            return 200, self._domain_exposures_payload(
+                domain_id=int(params["domain_id"][0]) if "domain_id" in params and params["domain_id"][0] else None,
+                source_name=params.get("source_name", [None])[0],
+                source_class=params.get("source_class", [None])[0],
+                confidence=params.get("confidence", [None])[0],
+                limit=int(params.get("limit", ["100"])[0]),
+            )
         if route == "/relationships/graph":
             return 200, self._relationship_graph_payload(limit=int(params.get("limit", ["200"])[0]))
         if route == "/trends/findings":
             return 200, self._finding_trends_payload(days=int(params.get("days", ["30"])[0]))
+        if route == "/comparisons/organizations":
+            return 200, self._organization_comparison_payload()
+        if route == "/remediation/suggestions":
+            return 200, self._remediation_suggestions_payload()
         return 404, {"error": f"Unknown route: {route}"}
 
 
@@ -207,6 +267,22 @@ def create_app(database_url: str) -> FastAPI:
     def scheduled_scans() -> dict[str, object]:
         return service._scheduled_scans_payload()
 
+    @app.get("/domain-exposures")
+    def domain_exposures(
+        limit: int = Query(100, ge=1, le=500),
+        domain_id: int | None = None,
+        source_name: str | None = None,
+        source_class: str | None = None,
+        confidence: str | None = None,
+    ) -> dict[str, object]:
+        return service._domain_exposures_payload(
+            domain_id=domain_id,
+            source_name=source_name,
+            source_class=source_class,
+            confidence=confidence,
+            limit=limit,
+        )
+
     @app.get("/relationships/graph")
     def relationships(limit: int = Query(200, ge=1, le=1000)) -> dict[str, object]:
         return service._relationship_graph_payload(limit=limit)
@@ -214,6 +290,14 @@ def create_app(database_url: str) -> FastAPI:
     @app.get("/trends/findings")
     def trends(days: int = Query(30, ge=1, le=365)) -> dict[str, object]:
         return service._finding_trends_payload(days=days)
+
+    @app.get("/comparisons/organizations")
+    def organization_comparisons() -> dict[str, object]:
+        return service._organization_comparison_payload()
+
+    @app.get("/remediation/suggestions")
+    def remediation_suggestions_route() -> dict[str, object]:
+        return service._remediation_suggestions_payload()
 
     @app.get("/dashboard", response_class=HTMLResponse)
     def dashboard(

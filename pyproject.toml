@@ -16,6 +16,7 @@ dependencies = [
   "fastapi>=0.116,<1",
   "pydantic>=2.8,<3",
   "pydantic-settings>=2.4,<3",
+  "reportlab>=5.0.1,<6",
   "redis>=6.4,<7",
   "rq>=2.6,<3",
   "SQLAlchemy>=2.0.34,<3",

@@ -6,6 +6,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+
 from orgscan.repositories import Storage
 
 
@@ -15,6 +18,8 @@ def build_summary(storage: Storage) -> dict[str, Any]:
     repository_breakdown = storage.finding_counts_by_repository(limit=10)
     trend_rows = finding_trends(storage, days=30)
     graph = relationship_graph(storage, limit=200)
+    comparison = organization_comparison(storage, limit=10)
+    suggestions = remediation_suggestions(storage, limit=10)
 
     return {
         "counts": dict(storage.counts()),
@@ -28,6 +33,8 @@ def build_summary(storage: Storage) -> dict[str, Any]:
         "domain_exposures": [exposure.result_summary for exposure in storage.list_domain_exposures()],
         "finding_trends": trend_rows,
         "relationship_graph": graph,
+        "organization_comparison": comparison,
+        "remediation_suggestions": suggestions,
         "identity_correlations": [
             {
                 "domain_id": correlation.domain_id,
@@ -128,6 +135,8 @@ def relationship_graph(storage: Storage, limit: int = 200) -> dict[str, Any]:
     domain_names = {str(domain.id): domain.name for domain in storage.list_domains()}
 
     nodes: dict[tuple[str, str], dict[str, str]] = {}
+    degrees: dict[str, int] = {}
+    relation_breakdown: dict[str, int] = {}
 
     def resolve_label(entity_type: str, entity_id: str) -> str:
         if entity_type == "repository":
@@ -172,8 +181,90 @@ def relationship_graph(storage: Storage, limit: int = 200) -> dict[str, Any]:
                 "source": relationship.source or "",
             }
         )
+        from_id = f"{relationship.from_entity_type}:{relationship.from_entity_id}"
+        to_id = f"{relationship.to_entity_type}:{relationship.to_entity_id}"
+        degrees[from_id] = degrees.get(from_id, 0) + 1
+        degrees[to_id] = degrees.get(to_id, 0) + 1
+        relation_breakdown[relationship.relation_type] = relation_breakdown.get(relationship.relation_type, 0) + 1
 
-    return {"nodes": list(nodes.values()), "edges": edges}
+    for node in nodes.values():
+        node["degree"] = str(degrees.get(node["id"], 0))
+
+    return {
+        "nodes": list(nodes.values()),
+        "edges": edges,
+        "summary": {
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "relation_breakdown": relation_breakdown,
+            "entity_breakdown": {
+                entity_type: sum(1 for node in nodes.values() if node["entity_type"] == entity_type)
+                for entity_type in sorted({node["entity_type"] for node in nodes.values()})
+            },
+        },
+    }
+
+
+def organization_comparison(storage: Storage, limit: int = 10) -> list[dict[str, Any]]:
+    findings = storage.list_findings(limit=5000)
+    organizations = {org.id: org.name for org in storage.list_organizations()}
+    grouped: dict[str, dict[str, Any]] = {}
+    for finding in findings:
+        label = organizations.get(finding.organization_id or -1, "unassigned")
+        entry = grouped.setdefault(
+            label,
+            {"organization": label, "findings": 0, "critical_high": 0, "open_findings": 0, "average_risk_score": 0.0, "_risk_values": []},
+        )
+        entry["findings"] += 1
+        if finding.severity in {"critical", "high"}:
+            entry["critical_high"] += 1
+        if finding.status == "open":
+            entry["open_findings"] += 1
+        if finding.risk_score is not None:
+            entry["_risk_values"].append(float(finding.risk_score))
+    rows = []
+    for entry in grouped.values():
+        risk_values = entry.pop("_risk_values")
+        entry["average_risk_score"] = round(sum(risk_values) / len(risk_values), 1) if risk_values else 0.0
+        rows.append(entry)
+    rows.sort(key=lambda item: (-int(item["findings"]), str(item["organization"])))
+    return rows[:limit]
+
+
+def remediation_suggestions(storage: Storage, limit: int = 10) -> list[dict[str, Any]]:
+    findings = storage.list_findings(limit=5000)
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for finding in findings:
+        hint = finding.remediation_hint or _default_remediation_hint(finding.category)
+        key = (finding.category, hint)
+        entry = grouped.setdefault(
+            key,
+            {
+                "category": finding.category,
+                "suggestion": hint,
+                "findings": 0,
+                "critical_high": 0,
+                "open_findings": 0,
+            },
+        )
+        entry["findings"] += 1
+        if finding.severity in {"critical", "high"}:
+            entry["critical_high"] += 1
+        if finding.status == "open":
+            entry["open_findings"] += 1
+    suggestions = list(grouped.values())
+    suggestions.sort(key=lambda item: (-int(item["critical_high"]), -int(item["findings"]), str(item["category"])))
+    return suggestions[:limit]
+
+
+def _default_remediation_hint(category: str) -> str:
+    if category == "secret":
+        return "Rotate exposed credentials, remove them from source control, and move them into managed secret storage."
+    if category in {"governance", "supply-chain", "code-policy"}:
+        return "Tighten repository governance and workflow controls, then verify that risky configuration paths are minimized."
+    if category in {"infrastructure-exposure", "domain-exposure", "org-exposure"}:
+        return "Reduce publicly exposed internal identifiers, hosts, and environment references where they are not required."
+    return "Review the finding, validate impact, and track a remediation action with ownership and due date."
 
 
 def write_json(output_path: Path, payload: Any) -> Path:
@@ -255,12 +346,35 @@ def render_dashboard_html(
         "</tr>"
         for edge in (graph or {}).get("edges", [])
     ) or "<tr><td colspan='4'>No relationships</td></tr>"
-    graph_nodes = len((graph or {}).get("nodes", []))
-    graph_edges = len((graph or {}).get("edges", []))
+    graph_summary = (graph or {}).get("summary", {})
+    graph_nodes = graph_summary.get("node_count", len((graph or {}).get("nodes", [])))
+    graph_edges = graph_summary.get("edge_count", len((graph or {}).get("edges", [])))
+    comparison_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(row['organization']))}</td>"
+        f"<td>{html.escape(str(row['findings']))}</td>"
+        f"<td>{html.escape(str(row['critical_high']))}</td>"
+        f"<td>{html.escape(str(row['open_findings']))}</td>"
+        f"<td>{html.escape(str(row['average_risk_score']))}</td>"
+        "</tr>"
+        for row in summary.get("organization_comparison", [])
+    ) or "<tr><td colspan='5'>No organization comparison data</td></tr>"
+    remediation_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(row['category']))}</td>"
+        f"<td>{html.escape(str(row['findings']))}</td>"
+        f"<td>{html.escape(str(row['critical_high']))}</td>"
+        f"<td>{html.escape(str(row['open_findings']))}</td>"
+        f"<td>{html.escape(str(row['suggestion']))}</td>"
+        "</tr>"
+        for row in summary.get("remediation_suggestions", [])
+    ) or "<tr><td colspan='5'>No remediation suggestions</td></tr>"
     identity_labels = [
         f"{item['username'] or 'unknown'} / {item['email'] or 'unknown'} ({item['relation_type']})"
         for item in summary["identity_correlations"]
     ]
+    trend_json = json.dumps(trends or []).replace("</", "<\\/")
+    graph_json = json.dumps(graph or {}).replace("</", "<\\/")
     live_header = """
     <section>
       <h2>Live filters</h2>
@@ -287,6 +401,7 @@ def render_dashboard_html(
 <html lang=\"en\">
   <head>
     <meta charset=\"utf-8\">
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
     <title>orgscan dashboard</title>
     <style>
       body {{ font-family: sans-serif; margin: 2rem; background: #f8fafc; color: #0f172a; }}
@@ -301,6 +416,18 @@ def render_dashboard_html(
       label {{ display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.95rem; }}
       input {{ padding: 0.45rem; border: 1px solid #cbd5e1; border-radius: 8px; }}
       button {{ padding: 0.6rem 1rem; border: 0; border-radius: 8px; background: #2563eb; color: white; cursor: pointer; }}
+      .chart-shell {{ display: grid; gap: 1rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+      .chart-card {{ border: 1px solid #dbe3ef; border-radius: 12px; padding: 0.75rem; background: #f8fbff; }}
+      .bar-row {{ display: grid; grid-template-columns: 7rem 1fr 3rem; gap: 0.75rem; align-items: center; margin: 0.35rem 0; }}
+      .bar {{ height: 0.9rem; border-radius: 999px; background: linear-gradient(90deg, #2563eb, #60a5fa); }}
+      .graph-canvas {{ width: 100%; min-height: 420px; border: 1px solid #dbe3ef; border-radius: 12px; background: linear-gradient(180deg, #ffffff, #f8fbff); }}
+      .graph-legend {{ display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.9rem; color: #334155; }}
+      .muted {{ color: #475569; font-size: 0.95rem; }}
+      @media (max-width: 900px) {{
+        body {{ margin: 1rem; }}
+        .grid, .hero, .filters, .chart-shell {{ grid-template-columns: 1fr; }}
+        table {{ display: block; overflow-x: auto; }}
+      }}
     </style>
   </head>
   <body>
@@ -349,6 +476,10 @@ def render_dashboard_html(
     </section>
     <section>
       <h2>Finding trends</h2>
+      <div class="chart-card">
+        <h3>Client-side trend chart</h3>
+        <div id="trend-chart"></div>
+      </div>
       <table>
         <thead>
           <tr><th>Date</th><th>Total findings</th><th>Severity mix</th></tr>
@@ -357,8 +488,10 @@ def render_dashboard_html(
       </table>
     </section>
     <section>
-      <h2>Relationship graph edges</h2>
+      <h2>Relationship graph explorer</h2>
       <p>Nodes: {html.escape(str(graph_nodes))} · Edges: {html.escape(str(graph_edges))}</p>
+      <div class="graph-legend" id="graph-summary"></div>
+      <svg id="graph-canvas" class="graph-canvas" viewBox="0 0 900 420" role="img" aria-label="Relationship graph visualization"></svg>
       <table>
         <thead>
           <tr><th>From</th><th>Relation</th><th>To</th><th>Confidence</th></tr>
@@ -373,6 +506,24 @@ def render_dashboard_html(
           <tr><th>ID</th><th>Title</th><th>Tool</th><th>Risk score</th><th>Status</th></tr>
         </thead>
         <tbody>{top_findings}</tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Organization comparison</h2>
+      <table>
+        <thead>
+          <tr><th>Organization</th><th>Findings</th><th>Critical/High</th><th>Open</th><th>Average risk</th></tr>
+        </thead>
+        <tbody>{comparison_rows}</tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Automatic remediation suggestions</h2>
+      <table>
+        <thead>
+          <tr><th>Category</th><th>Findings</th><th>Critical/High</th><th>Open</th><th>Suggested action</th></tr>
+        </thead>
+        <tbody>{remediation_rows}</tbody>
       </table>
     </section>
     <section>
@@ -394,6 +545,51 @@ def render_dashboard_html(
         <ul>{list_items(identity_labels)}</ul>
       </section>
     </div>
+    <script id="trend-data" type="application/json">{trend_json}</script>
+    <script id="graph-data" type="application/json">{graph_json}</script>
+    <script>
+      const trendData = JSON.parse(document.getElementById("trend-data").textContent || "[]");
+      const graphData = JSON.parse(document.getElementById("graph-data").textContent || "{{}}");
+      const trendChart = document.getElementById("trend-chart");
+      const maxTrend = Math.max(1, ...trendData.map((item) => Number(item.total || 0)));
+      trendChart.innerHTML = trendData.map((item) => {{
+        const width = Math.max(4, Math.round((Number(item.total || 0) / maxTrend) * 100));
+        return `<div class="bar-row"><span>${{item.date}}</span><div class="bar" style="width:${{width}}%"></div><strong>${{item.total}}</strong></div>`;
+      }}).join("") || "<p class='muted'>No trend data available.</p>";
+
+      const graphSummary = document.getElementById("graph-summary");
+      const relationBreakdown = (graphData.summary && graphData.summary.relation_breakdown) || {{}};
+      graphSummary.innerHTML = Object.entries(relationBreakdown).map(([key, value]) => `<span><strong>${{key}}</strong>: ${{value}}</span>`).join("") || "<span>No graph relationships</span>";
+
+      const svg = document.getElementById("graph-canvas");
+      const nodes = graphData.nodes || [];
+      const edges = graphData.edges || [];
+      const width = 900;
+      const height = 420;
+      const radius = Math.min(width, height) / 2 - 48;
+      const centerX = width / 2;
+      const centerY = height / 2;
+      const positioned = nodes.map((node, index) => {{
+        const angle = (Math.PI * 2 * index) / Math.max(nodes.length, 1);
+        return {{
+          ...node,
+          x: centerX + Math.cos(angle) * radius,
+          y: centerY + Math.sin(angle) * radius,
+        }};
+      }});
+      const byId = Object.fromEntries(positioned.map((node) => [node.id, node]));
+      const edgeSvg = edges.map((edge) => {{
+        const start = byId[edge.from];
+        const end = byId[edge.to];
+        if (!start || !end) return "";
+        return `<line x1="${{start.x}}" y1="${{start.y}}" x2="${{end.x}}" y2="${{end.y}}" stroke="#94a3b8" stroke-width="1.5" />`;
+      }}).join("");
+      const nodeSvg = positioned.map((node) => {{
+        const fill = node.entity_type === "organization" ? "#1d4ed8" : node.entity_type === "repository" ? "#0f766e" : node.entity_type === "domain" ? "#7c3aed" : "#475569";
+        return `<g><circle cx="${{node.x}}" cy="${{node.y}}" r="18" fill="${{fill}}" opacity="0.9" /><title>${{node.label}} (degree=${{node.degree || 0}})</title><text x="${{node.x}}" y="${{node.y + 34}}" text-anchor="middle" font-size="11" fill="#0f172a">${{node.label}}</text></g>`;
+      }}).join("");
+      svg.innerHTML = edgeSvg + nodeSvg;
+    </script>
   </body>
 </html>
 """
@@ -410,4 +606,47 @@ def write_html(output_path: Path, summary: dict[str, Any], findings: list[dict[s
         ),
         encoding="utf-8",
     )
+    return output_path
+
+
+def write_pdf(output_path: Path, summary: dict[str, Any], findings: list[dict[str, Any]]) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf = canvas.Canvas(str(output_path), pagesize=letter)
+    width, height = letter
+    y = height - 40
+
+    def line(text: str, *, indent: int = 0) -> None:
+        nonlocal y
+        if y < 50:
+            pdf.showPage()
+            y = height - 40
+        pdf.drawString(40 + indent, y, text[:110])
+        y -= 14
+
+    pdf.setTitle("orgscan report")
+    pdf.setFont("Helvetica-Bold", 16)
+    line("orgscan report")
+    pdf.setFont("Helvetica", 10)
+    line("")
+    line("Counts")
+    for key, value in summary.get("counts", {}).items():
+        line(f"{key}: {value}", indent=12)
+    line("")
+    line("Organization comparison")
+    for row in summary.get("organization_comparison", []):
+        line(
+            f"{row['organization']}: findings={row['findings']} critical_high={row['critical_high']} "
+            f"open={row['open_findings']} avg_risk={row['average_risk_score']}",
+            indent=12,
+        )
+    line("")
+    line("Remediation suggestions")
+    for row in summary.get("remediation_suggestions", []):
+        line(f"{row['category']}: {row['suggestion']}", indent=12)
+    line("")
+    line("Recent findings")
+    for finding in findings[:30]:
+        line(f"#{finding['id']} [{finding['severity']}] {finding['title']}", indent=12)
+
+    pdf.save()
     return output_path
