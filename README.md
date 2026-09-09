@@ -46,6 +46,11 @@ ORGSCAN_LOG_LEVEL=INFO
 ORGSCAN_CRTSH_BASE_URL=https://crt.sh
 ORGSCAN_REDIS_URL=redis://127.0.0.1:6379/0
 ORGSCAN_SCAN_QUEUE_NAME=orgscan:scans
+ORGSCAN_SCAN_QUEUE_RETRY_MAX=2
+ORGSCAN_SCAN_QUEUE_RETRY_INTERVALS=30,120
+ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE=0
+ORGSCAN_OUTBOUND_MIN_INTERVAL_SECONDS=0
+ORGSCAN_API_TOKENS_JSON=[{"name":"viewer","token":"change-me","role":"reader","tenants":["*"]}]
 ORGSCAN_HIBP_API_KEY=
 ORGSCAN_DEHASHED_EMAIL=
 ORGSCAN_DEHASHED_API_KEY=
@@ -94,7 +99,8 @@ Add a target:
 
 ```bash
 orgscan add-target organization example-org
-orgscan add-target domain example.com --organization example-org
+orgscan add-target organization tenant-org --tenant-key tenant-a
+orgscan add-target domain example.com --organization example-org --tenant-key tenant-a
 ```
 
 List stored findings:
@@ -116,6 +122,7 @@ Run the built-in custom pattern scanner against a file or directory:
 
 ```bash
 orgscan scan path ./path/to/scan --organization example-org --repository example-org/app
+orgscan scan path ./path/to/scan --organization example-org --repository example-org/app --tenant-key tenant-a
 ```
 
 If `repo-governance`, `gitleaks`, `detect-secrets`, `semgrep`, `trufflehog`, `yara`, `ripgrep-heuristics`, or `git-history-patterns` are available, you can run them through the same workflow:
@@ -195,7 +202,15 @@ orgscan run-worker --burst --max-jobs 5
 orgscan jobs --json
 ```
 
-Use `run-scheduled` for local in-process execution, or `enqueue-scheduled` plus `run-worker` to process scheduled scans through Redis/RQ workers.
+Use `run-scheduled` for local in-process execution, or `enqueue-scheduled` plus `run-worker` to process scheduled scans through Redis/RQ workers. Queue retries and backoff are controlled with `ORGSCAN_SCAN_QUEUE_RETRY_MAX` and `ORGSCAN_SCAN_QUEUE_RETRY_INTERVALS`, and outbound provider/GitHub requests can be throttled with `ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE` and `ORGSCAN_OUTBOUND_MIN_INTERVAL_SECONDS`.
+
+Mirror repositories for larger-history or repeat scanning workflows:
+
+```bash
+orgscan sync-mirror example-org/app
+orgscan sync-mirrors --organization example-org
+orgscan scan-mirror example-org/app --scanner git-history-patterns
+```
 
 Serve the live dashboard and API:
 
@@ -203,9 +218,12 @@ Serve the live dashboard and API:
 orgscan serve-api --host 127.0.0.1 --port 8000
 ```
 
+When `ORGSCAN_API_TOKENS_JSON` is configured, API requests must include `X-Orgscan-Token`. Tokens map to `reader`, `analyst`, or `admin` roles and can be restricted to specific `tenant_key` values. API consumers can also pass `tenant_key` as a query parameter to further narrow results within their allowed scope.
+
 Key routes:
 
 - `/dashboard` live HTML dashboard with filter controls
+- `/auth/context` resolved API auth and tenant scope JSON
 - `/summary` summary JSON
 - `/findings` filtered findings JSON
 - `/domain-exposures` filtered domain exposure JSON
@@ -243,8 +261,9 @@ pytest
 - Additional built-in scanners cover YARA rule matching, ripgrep-based heuristics, and git history scanning for regex-based secret exposures.
 - The `discover` command uses the public GitHub REST API and can use `ORGSCAN_GITHUB_TOKEN` when configured for higher rate limits.
 - External scanner output from `gitleaks`, `detect-secrets`, `semgrep`, and `trufflehog` can be normalized through `orgscan ingest-results` without rerunning the original tool.
-- The local web surface now runs on FastAPI and serves both live HTML dashboard views and JSON endpoints from the same application, including multi-org comparison, remediation, and filtered domain exposure views.
+- The local web surface now runs on FastAPI and serves both live HTML dashboard views and JSON endpoints from the same application, including token-based tenant scoping, multi-org comparison, remediation, and filtered domain exposure views.
 - Reporting exports now include PDF alongside JSON, CSV, and HTML outputs.
-- Scheduled scans can also be enqueued onto Redis/RQ workers for queue-based execution in addition to the local synchronous scheduler flow.
+- Scheduled scans can also be enqueued onto Redis/RQ workers for queue-based execution in addition to the local synchronous scheduler flow, with configurable retry/backoff metadata.
+- Repository mirrors can be synchronized into the local data directory and re-scanned for repeatable branch/history analysis workflows.
 - The current roadmap status and remaining gaps relative to the full project spec are documented in `docs/roadmap.md`.
 - Additional open-source tools that can close current capability gaps are documented in `docs/open-source-tooling-gaps.md`; Semgrep is now available as an optional external scanner integration.

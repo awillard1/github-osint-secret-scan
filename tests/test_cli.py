@@ -64,6 +64,7 @@ def test_cli_add_target_and_findings(monkeypatch, tmp_path: Path) -> None:
         org = storage.get_organization_by_name("example-org")
         tenant_org = storage.get_organization_by_name("tenant-org")
         domain = storage.get_domain_by_name("example.com")
+        tenant_key = tenant_org.tenant_key if tenant_org else None
         storage.create_finding(
             CanonicalFinding(
                 source_tool="custom-regex",
@@ -77,8 +78,7 @@ def test_cli_add_target_and_findings(monkeypatch, tmp_path: Path) -> None:
             )
         )
         session.commit()
-    assert tenant_org is not None
-    assert tenant_org.tenant_key == "tenant-a"
+    assert tenant_key == "tenant-a"
 
     findings_result = runner.invoke(app, ["findings"])
     assert findings_result.exit_code == 0

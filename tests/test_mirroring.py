@@ -39,6 +39,7 @@ def test_sync_and_scan_repository_mirror(tmp_path: Path) -> None:
             clone_url=str(remote),
         )
         session.commit()
+        mirror_path = record.mirror_path
         result = scan_repository_mirror(
             storage,
             settings=settings,
@@ -49,7 +50,7 @@ def test_sync_and_scan_repository_mirror(tmp_path: Path) -> None:
         findings = storage.list_findings()
 
     assert created is True
-    assert record.mirror_path is not None
-    assert (Path(record.mirror_path) / "config.py").exists()
+    assert mirror_path is not None
+    assert (Path(mirror_path) / "config.py").exists()
     assert result.findings == 1
     assert len(findings) == 1

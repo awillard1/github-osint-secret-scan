@@ -281,12 +281,13 @@ def finding_rows(
 
 
 def finding_trends(storage: Storage, days: int = 30, *, tenant_keys: list[str] | None = None) -> list[dict[str, Any]]:
-    cutoff = datetime.now(UTC) - timedelta(days=max(days, 1) - 1)
+    cutoff_date = (datetime.now(UTC) - timedelta(days=max(days, 1) - 1)).date()
     series: dict[str, dict[str, Any]] = {}
     for finding in _filtered_findings(storage, tenant_keys=tenant_keys):
-        if finding.detected_at < cutoff:
+        detected_date = finding.detected_at.date()
+        if detected_date < cutoff_date:
             continue
-        day = finding.detected_at.date().isoformat()
+        day = detected_date.isoformat()
         entry = series.setdefault(day, {'date': day, 'total': 0, 'by_severity': {}})
         entry['total'] += 1
         entry['by_severity'][finding.severity] = entry['by_severity'].get(finding.severity, 0) + 1
