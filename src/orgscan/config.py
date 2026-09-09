@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     http_timeout_seconds: int = 15
     outbound_requests_per_minute: int = 0
     outbound_min_interval_seconds: float = 0.0
+    rate_limit_backend: str = "db"
+    rate_limit_scope_overrides_json: str = ""
+    rate_limit_poll_interval_seconds: float = 1.0
     redis_url: str = "redis://127.0.0.1:6379/0"
     scan_queue_backend: str = "rq"
     scan_queue_name: str = "orgscan:scans"
@@ -102,6 +105,9 @@ def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
         "ORGSCAN_HTTP_TIMEOUT_SECONDS": 15,
         "ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE": 0,
         "ORGSCAN_OUTBOUND_MIN_INTERVAL_SECONDS": 0,
+        "ORGSCAN_RATE_LIMIT_BACKEND": "db",
+        "ORGSCAN_RATE_LIMIT_SCOPE_OVERRIDES_JSON": "",
+        "ORGSCAN_RATE_LIMIT_POLL_INTERVAL_SECONDS": 1,
         "ORGSCAN_REDIS_URL": "redis://127.0.0.1:6379/0",
         "ORGSCAN_SCAN_QUEUE_BACKEND": "rq",
         "ORGSCAN_SCAN_QUEUE_NAME": "orgscan:scans",

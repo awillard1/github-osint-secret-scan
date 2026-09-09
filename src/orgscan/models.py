@@ -380,6 +380,21 @@ class QueueTask(TimestampMixin, Base):
     scheduled_scan: Mapped[ScheduledScan] = relationship()
 
 
+class RateLimitState(TimestampMixin, Base):
+    __tablename__ = "rate_limit_states"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scope: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    backend: Mapped[str] = mapped_column(String(32), default="db", index=True)
+    requests_per_minute: Mapped[int] = mapped_column(Integer, default=0)
+    min_interval_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    window_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_request_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_allowed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class DomainExposure(TimestampMixin, Base):
     __tablename__ = "domain_exposures"
 

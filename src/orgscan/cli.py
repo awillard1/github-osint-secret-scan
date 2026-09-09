@@ -21,6 +21,7 @@ from orgscan.mirroring import MirrorError, scan_repository_mirror_refs, sync_rep
 from orgscan.models import Finding
 from orgscan.providers import DomainProviderError, available_domain_provider_names, get_domain_provider
 from orgscan.queueing import QueueBackendError, enqueue_due_scheduled_scans, queue_status, run_worker
+from orgscan.rate_limit import list_rate_limit_states
 from orgscan.repositories import Storage
 from orgscan.reporting import build_summary, finding_rows, write_export, write_html
 from orgscan.runner import execute_scan, record_scan_results
@@ -1228,6 +1229,23 @@ def queue_status_command(
             f"retry_max={payload['retry_max']} retry_intervals={payload['retry_intervals']}"
             + (f" completed={payload['completed_jobs']}" if 'completed_jobs' in payload else "")
         )
+
+
+@app.command("rate-limit-status")
+def rate_limit_status_command(
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    payload = {
+        "backend": settings.rate_limit_backend,
+        "default_requests_per_minute": settings.outbound_requests_per_minute,
+        "default_min_interval_seconds": settings.outbound_min_interval_seconds,
+        "states": list_rate_limit_states(settings),
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        typer.echo(f"backend={payload['backend']} scopes={len(payload['states'])}")
 
 
 @app.command("run-worker")

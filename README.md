@@ -53,6 +53,9 @@ ORGSCAN_SCAN_QUEUE_LEASE_SECONDS=300
 ORGSCAN_SCAN_QUEUE_POLL_INTERVAL_SECONDS=5
 ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE=0
 ORGSCAN_OUTBOUND_MIN_INTERVAL_SECONDS=0
+ORGSCAN_RATE_LIMIT_BACKEND=db
+ORGSCAN_RATE_LIMIT_SCOPE_OVERRIDES_JSON={"github-api":{"requests_per_minute":120},"hibp":{"min_interval_seconds":2}}
+ORGSCAN_RATE_LIMIT_POLL_INTERVAL_SECONDS=1
 ORGSCAN_API_TOKENS_JSON=[{"name":"viewer","token":"change-me","role":"reader","tenants":["*"]}]
 ORGSCAN_HIBP_API_KEY=
 ORGSCAN_DEHASHED_EMAIL=
@@ -210,11 +213,12 @@ orgscan schedule-mirror-scan example-org/app --scanner git-history-patterns --re
 orgscan run-scheduled --limit 5
 orgscan enqueue-scheduled --limit 5
 orgscan queue-status
+orgscan rate-limit-status --json
 orgscan run-worker --burst --max-jobs 5
 orgscan jobs --json
 ```
 
-Use `run-scheduled` for local in-process execution, or `enqueue-scheduled` plus `run-worker` to process scheduled scans through either Redis/RQ (`ORGSCAN_SCAN_QUEUE_BACKEND=rq`) or the built-in database-backed queue backend (`ORGSCAN_SCAN_QUEUE_BACKEND=db`). Queue retries and backoff are controlled with `ORGSCAN_SCAN_QUEUE_RETRY_MAX` and `ORGSCAN_SCAN_QUEUE_RETRY_INTERVALS`; DB workers also use `ORGSCAN_SCAN_QUEUE_LEASE_SECONDS`, `ORGSCAN_SCAN_QUEUE_POLL_INTERVAL_SECONDS`, and optional `ORGSCAN_SCAN_QUEUE_WORKER_ID` for distributed worker coordination. Outbound provider/GitHub requests can still be throttled with `ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE` and `ORGSCAN_OUTBOUND_MIN_INTERVAL_SECONDS`.
+Use `run-scheduled` for local in-process execution, or `enqueue-scheduled` plus `run-worker` to process scheduled scans through either Redis/RQ (`ORGSCAN_SCAN_QUEUE_BACKEND=rq`) or the built-in database-backed queue backend (`ORGSCAN_SCAN_QUEUE_BACKEND=db`). Queue retries and backoff are controlled with `ORGSCAN_SCAN_QUEUE_RETRY_MAX` and `ORGSCAN_SCAN_QUEUE_RETRY_INTERVALS`; DB workers also use `ORGSCAN_SCAN_QUEUE_LEASE_SECONDS`, `ORGSCAN_SCAN_QUEUE_POLL_INTERVAL_SECONDS`, and optional `ORGSCAN_SCAN_QUEUE_WORKER_ID` for distributed worker coordination. Outbound provider/GitHub requests can be coordinated across workers with `ORGSCAN_RATE_LIMIT_BACKEND=db`, global defaults via `ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE` / `ORGSCAN_OUTBOUND_MIN_INTERVAL_SECONDS`, and per-scope overrides in `ORGSCAN_RATE_LIMIT_SCOPE_OVERRIDES_JSON`.
 
 Mirror repositories for larger-history or repeat scanning workflows:
 
@@ -252,6 +256,7 @@ Key routes:
 - `/scheduled-reports` list/create scheduled reports
 - `/scheduled-reports/run` trigger due scheduled reports (admin)
 - `/queue-status` queue backend status JSON (admin)
+- `/rate-limits` distributed rate-limit state JSON (admin)
 - `/domain-exposures` filtered domain exposure JSON
 - `/relationships/graph` relationship graph JSON
 - `/trends/findings` findings trend JSON

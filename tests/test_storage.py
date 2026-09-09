@@ -90,6 +90,7 @@ def test_storage_crud_round_trip(tmp_path: Path) -> None:
         "scheduled_scans": 0,
         "scheduled_reports": 0,
         "queue_tasks": 0,
+        "rate_limit_states": 0,
         "suppressions": 0,
         "tool_runs": 0,
         "users": 0,

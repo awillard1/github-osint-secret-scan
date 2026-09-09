@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from orgscan.models import (
     QueueTask,
+    RateLimitState,
     Account,
     Domain,
     DomainExposure,
@@ -544,6 +545,30 @@ class Storage:
         self.session.flush()
         return task
 
+    def get_rate_limit_state(self, scope: str) -> RateLimitState | None:
+        return self.session.scalar(select(RateLimitState).where(RateLimitState.scope == scope))
+
+    def get_or_create_rate_limit_state(self, scope: str, **kwargs: Any) -> tuple[RateLimitState, bool]:
+        existing = self.get_rate_limit_state(scope)
+        if existing is not None:
+            for key, value in kwargs.items():
+                if value is not None:
+                    setattr(existing, key, value)
+            self.session.flush()
+            return existing, False
+        state = RateLimitState(scope=scope, **kwargs)
+        self.session.add(state)
+        self.session.flush()
+        return state, True
+
+    def list_rate_limit_states(self, backend: str | None = None, limit: int | None = 100) -> Sequence[RateLimitState]:
+        query = select(RateLimitState).order_by(RateLimitState.scope.asc())
+        if backend is not None:
+            query = query.where(RateLimitState.backend == backend)
+        if limit is not None:
+            query = query.limit(limit)
+        return list(self.session.scalars(query))
+
     def list_findings(
         self,
         limit: int | None = 50,
@@ -813,6 +838,7 @@ class Storage:
             "scheduled_scans": ScheduledScan,
             "scheduled_reports": ScheduledReport,
             "queue_tasks": QueueTask,
+            "rate_limit_states": RateLimitState,
             "suppressions": Suppression,
             "tool_runs": ToolRun,
             "users": User,

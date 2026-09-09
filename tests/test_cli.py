@@ -30,12 +30,12 @@ def test_cli_init_db_and_status(monkeypatch, tmp_path: Path) -> None:
     init_result = runner.invoke(app, ["init-db"])
     assert init_result.exit_code == 0
     assert "Initialized database" in init_result.stdout
-    assert "schema_revision: 20260909_0004" in init_result.stdout
+    assert "schema_revision: 20260909_0005" in init_result.stdout
 
     status_result = runner.invoke(app, ["status"])
     assert status_result.exit_code == 0
     assert f"database_url: {database_url}" in status_result.stdout
-    assert "schema_revision: 20260909_0004" in status_result.stdout
+    assert "schema_revision: 20260909_0005" in status_result.stdout
     assert "organizations: 0" in status_result.stdout
 
     setup_result = runner.invoke(app, ["setup", "--verify-only"])
@@ -184,6 +184,9 @@ def test_cli_config_and_init_config(monkeypatch, tmp_path: Path) -> None:
     assert "ORGSCAN_DEHASHED_API_KEY=" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_INTELLIGENCEX_API_KEY=" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE=0" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_RATE_LIMIT_BACKEND=db" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_RATE_LIMIT_SCOPE_OVERRIDES_JSON=" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_RATE_LIMIT_POLL_INTERVAL_SECONDS=1" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_SCAN_QUEUE_BACKEND=rq" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_SCAN_QUEUE_RETRY_INTERVALS=30,120" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_SCAN_QUEUE_LEASE_SECONDS=300" in env_path.read_text(encoding="utf-8")
@@ -836,6 +839,22 @@ def test_cli_db_queue_backend_commands(monkeypatch, tmp_path: Path) -> None:
     jobs_result = runner.invoke(app, ["jobs", "--json"])
     assert jobs_result.exit_code == 0
     assert '"queue_tasks"' in jobs_result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_cli_rate_limit_status(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'rate-limit-cli.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ORGSCAN_OUTBOUND_MIN_INTERVAL_SECONDS", "0.01")
+    monkeypatch.setenv("ORGSCAN_RATE_LIMIT_BACKEND", "db")
+    get_settings.cache_clear()
+
+    result = runner.invoke(app, ["rate-limit-status", "--json"])
+    assert result.exit_code == 0
+    assert '"backend": "db"' in result.stdout
+    assert '"states": []' in result.stdout
 
     get_settings.cache_clear()
 

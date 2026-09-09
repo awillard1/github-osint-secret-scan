@@ -11,6 +11,7 @@ from orgscan.auth import AuthContext, auth_dependency, resolve_requested_tenants
 from orgscan.config import Settings
 from orgscan.db import create_session_factory, init_db
 from orgscan.queueing import QueueBackendError, queue_status
+from orgscan.rate_limit import list_rate_limit_states
 from orgscan.reporting import build_summary, finding_rows, finding_trends, relationship_graph, render_dashboard_html
 from orgscan.repositories import Storage
 from orgscan.scheduler import next_run_from_cadence, run_due_reports, run_due_scans
@@ -463,6 +464,15 @@ def create_app(database_url: str) -> FastAPI:
             return queue_status(settings)
         except QueueBackendError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/rate-limits")
+    def rate_limits_route(auth: AuthContext = Depends(admin_auth)) -> dict[str, object]:
+        return {
+            "backend": settings.rate_limit_backend,
+            "default_requests_per_minute": settings.outbound_requests_per_minute,
+            "default_min_interval_seconds": settings.outbound_min_interval_seconds,
+            "states": list_rate_limit_states(settings),
+        }
 
     @app.get("/domain-exposures")
     def domain_exposures(
