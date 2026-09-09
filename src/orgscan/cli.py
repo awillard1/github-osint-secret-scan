@@ -21,11 +21,11 @@ from orgscan.models import Finding
 from orgscan.providers import DomainProviderError, available_domain_provider_names, get_domain_provider
 from orgscan.queueing import QueueBackendError, enqueue_due_scheduled_scans, queue_status, run_worker
 from orgscan.repositories import Storage
-from orgscan.reporting import build_summary, finding_rows, write_csv, write_html, write_json
+from orgscan.reporting import build_summary, finding_rows, write_export, write_html
 from orgscan.runner import execute_scan, record_scan_results
 from orgscan.scanners import ScannerExecutionError, available_scanner_names, load_report
 from orgscan.scanners.base import ScanMatch
-from orgscan.scheduler import next_run_from_cadence, run_due_scans
+from orgscan.scheduler import next_run_from_cadence, run_due_reports, run_due_scans
 
 app = typer.Typer(help="OSINT Security Platform CLI foundation")
 
@@ -105,15 +105,7 @@ def _serialize_finding(finding: Finding) -> dict[str, object]:
 
 
 def _write_export(output_path: Path, export_format: ExportFormat, summary: dict[str, object], rows: list[dict[str, object]]) -> Path:
-    if export_format == ExportFormat.JSON:
-        return write_json(output_path, {"summary": summary, "findings": rows})
-    if export_format == ExportFormat.CSV:
-        return write_csv(output_path, rows)
-    if export_format == ExportFormat.PDF:
-        from orgscan.reporting import write_pdf
-
-        return write_pdf(output_path, summary, rows)
-    return write_html(output_path, summary, rows)
+    return write_export(output_path, export_format.value, summary, rows)
 
 
 def _parse_due_date(value: str | None) -> date | None:
@@ -869,6 +861,63 @@ def run_scheduled(
         typer.echo(f"Ran {len(results)} scheduled scan(s).")
 
 
+@app.command("schedule-report")
+def schedule_report(
+    export_format: ExportFormat = typer.Option(ExportFormat.JSON, "--format", help="Output format."),
+    cadence: ScanCadence = typer.Option(ScanCadence.DAILY, "--cadence", help="How often to generate the report."),
+    tenant_key: str | None = typer.Option(None, "--tenant-key", help="Optional tenant scope for this report."),
+    output_path: Path | None = typer.Option(None, "--output-path", help="Optional fixed output path for the generated report."),
+    webhook_url: str | None = typer.Option(None, "--webhook-url", help="Optional webhook URL for alert delivery."),
+    enabled: bool = typer.Option(True, "--enabled/--disabled", help="Whether the schedule starts enabled."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        scheduled = storage.create_scheduled_report(
+            "tenant" if tenant_key else "global",
+            next_run_from_cadence(cadence.value),
+            target_value=tenant_key,
+            output_format=export_format.value,
+            cadence=cadence.value,
+            enabled=enabled,
+            output_path=str(output_path.resolve()) if output_path is not None else None,
+            webhook_url=webhook_url,
+            metadata_json={"delivery": "webhook" if webhook_url else "filesystem"},
+        )
+        session.commit()
+    typer.echo(f"Scheduled report {scheduled.id} ({scheduled.output_format})")
+
+
+@app.command("run-scheduled-reports")
+def run_scheduled_reports_command(
+    limit: int = typer.Option(10, "--limit", min=1, help="Maximum number of due report schedules to run."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        results = run_due_reports(storage, limit=limit, settings=settings)
+        session.commit()
+    payload = [
+        {
+            "scheduled_report_id": result.scheduled_report_id,
+            "output_path": result.output_path,
+            "output_format": result.output_format,
+            "delivered": result.delivered,
+            "tool_run_id": result.tool_run_id,
+        }
+        for result in results
+    ]
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        typer.echo(f"Ran {len(results)} scheduled report(s).")
+
+
 @app.command("enqueue-scheduled")
 def enqueue_scheduled(
     limit: int = typer.Option(10, "--limit", min=1, help="Maximum number of due scheduled scans to enqueue."),
@@ -1050,6 +1099,7 @@ def jobs(
         scan_jobs = storage.list_scan_jobs()
         tool_runs = storage.list_tool_runs()
         scheduled_scans = storage.list_scheduled_scans()
+        scheduled_reports = storage.list_scheduled_reports()
     payload = {
         "scan_jobs": [
             {
@@ -1081,13 +1131,27 @@ def jobs(
             }
             for scan in scheduled_scans
         ],
+        "scheduled_reports": [
+            {
+                "id": report.id,
+                "target_type": report.target_type,
+                "target_value": report.target_value,
+                "output_format": report.output_format,
+                "cadence": report.cadence,
+                "enabled": report.enabled,
+                "delivery": "webhook" if report.webhook_url else "filesystem",
+                "last_output_path": (report.metadata_json or {}).get("last_output_path"),
+            }
+            for report in scheduled_reports
+        ],
     }
     if json_output:
         typer.echo(json.dumps(payload, indent=2, default=str))
     else:
         typer.echo(
             f"scan_jobs={len(payload['scan_jobs'])} tool_runs={len(payload['tool_runs'])} "
-            f"scheduled_scans={len(payload['scheduled_scans'])}"
+            f"scheduled_scans={len(payload['scheduled_scans'])} "
+            f"scheduled_reports={len(payload['scheduled_reports'])}"
         )
 
 

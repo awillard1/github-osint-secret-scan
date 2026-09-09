@@ -183,6 +183,14 @@ Print a stored summary report:
 orgscan report
 ```
 
+Schedule recurring reports and optional webhook alerts:
+
+```bash
+orgscan schedule-report --format json --cadence daily
+orgscan schedule-report --format pdf --tenant-key tenant-a --webhook-url https://alerts.example.test/orgscan
+orgscan run-scheduled-reports --limit 5
+```
+
 Export findings and generate a static HTML dashboard:
 
 ```bash
@@ -264,6 +272,7 @@ pytest
 - The local web surface now runs on FastAPI and serves both live HTML dashboard views and JSON endpoints from the same application, including token-based tenant scoping, multi-org comparison, remediation, and filtered domain exposure views.
 - Reporting exports now include PDF alongside JSON, CSV, and HTML outputs.
 - Scheduled scans can also be enqueued onto Redis/RQ workers for queue-based execution in addition to the local synchronous scheduler flow, with configurable retry/backoff metadata.
+- Scheduled reports can generate JSON/CSV/HTML/PDF artifacts on a cadence and optionally POST summary payloads to webhook-based alert integrations.
 - Repository mirrors can be synchronized into the local data directory and re-scanned for repeatable branch/history analysis workflows.
 - The current roadmap status and remaining gaps relative to the full project spec are documented in `docs/roadmap.md`.
 - Additional open-source tools that can close current capability gaps are documented in `docs/open-source-tooling-gaps.md`; Semgrep is now available as an optional external scanner integration.

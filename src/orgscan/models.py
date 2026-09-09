@@ -290,6 +290,22 @@ class ScheduledScan(TimestampMixin, Base):
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class ScheduledReport(TimestampMixin, Base):
+    __tablename__ = "scheduled_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_type: Mapped[str] = mapped_column(String(64), index=True, default="global")
+    target_value: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    output_format: Mapped[str] = mapped_column(String(32), default="json")
+    cadence: Mapped[str] = mapped_column(String(32), default="daily")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    output_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    webhook_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
 class DomainExposure(TimestampMixin, Base):
     __tablename__ = "domain_exposures"
 

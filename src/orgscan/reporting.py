@@ -6,10 +6,13 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
+from orgscan.config import Settings
 from orgscan.repositories import Storage
 
 
@@ -73,6 +76,13 @@ def _scoped_assets(storage: Storage, tenant_keys: list[str] | None = None) -> di
         or (scheduled.metadata_json or {}).get('organization_id') in organization_ids
         or (scheduled.metadata_json or {}).get('repository_id') in repository_ids
     ]
+    scheduled_reports = [
+        scheduled
+        for scheduled in storage.list_scheduled_reports()
+        if tenant_keys is None
+        or scheduled.target_type == "global"
+        or (scheduled.target_type == "tenant" and scheduled.target_value in tenant_keys)
+    ]
 
     return {
         'organizations': organizations,
@@ -89,6 +99,7 @@ def _scoped_assets(storage: Storage, tenant_keys: list[str] | None = None) -> di
         'scan_job_ids': scan_job_ids,
         'tool_runs': tool_runs,
         'scheduled_scans': scheduled_scans,
+        'scheduled_reports': scheduled_reports,
         'domain_exposures': domain_exposures,
         'identity_correlations': identity_correlations,
         'relationships': relationships,
@@ -166,6 +177,7 @@ def build_summary(storage: Storage, *, tenant_keys: list[str] | None = None) -> 
             'relationships': len(scope['relationships']),
             'risk_scores': risk_score_count,
             'scheduled_scans': len(scope['scheduled_scans']),
+            'scheduled_reports': len(scope['scheduled_reports']),
             'suppressions': 0,
             'tool_runs': len(scope['tool_runs']),
         },
@@ -449,6 +461,55 @@ def write_csv(output_path: Path, rows: list[dict[str, Any]]) -> Path:
         writer.writeheader()
         writer.writerows(rows)
     return output_path
+
+
+def write_export(output_path: Path, export_format: str, summary: dict[str, Any], rows: list[dict[str, Any]]) -> Path:
+    normalized = export_format.lower()
+    if normalized == "json":
+        return write_json(output_path, {"summary": summary, "findings": rows})
+    if normalized == "csv":
+        return write_csv(output_path, rows)
+    if normalized == "pdf":
+        return write_pdf(output_path, summary, rows)
+    return write_html(output_path, summary, rows)
+
+
+def scheduled_reports_directory(settings: Settings) -> Path:
+    path = settings.ensure_data_dir() / "reports"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def scheduled_report_output_path(settings: Settings, *, schedule_id: int, export_format: str, configured_path: str | None = None) -> Path:
+    if configured_path:
+        return Path(configured_path)
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    extension = export_format.lower()
+    return scheduled_reports_directory(settings) / f"scheduled-report-{schedule_id}-{timestamp}.{extension}"
+
+
+def deliver_report_webhook(
+    webhook_url: str,
+    *,
+    timeout: int,
+    payload: dict[str, Any],
+) -> None:
+    request = Request(
+        webhook_url,
+        method="POST",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "orgscan/0.1.0",
+        },
+    )
+    try:
+        with urlopen(request, timeout=timeout):
+            return
+    except HTTPError as exc:
+        raise RuntimeError(f"alert delivery failed with status {exc.code}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"alert delivery failed: {exc.reason}") from exc
 
 
 def render_dashboard_html(

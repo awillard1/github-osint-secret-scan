@@ -42,6 +42,7 @@ This roadmap maps the current repository implementation to the phased goals from
 - ProjectDiscovery-backed domain enrichment through `subfinder` and `httpx`
 - paid domain enrichment adapters for Have I Been Pwned, DeHashed, and Intelligence X
 - summary reporting, JSON/CSV/HTML/PDF export, and richer static dashboard generation
+- scheduled report generation with optional webhook alert delivery
 
 ### Phase 5 — Domain intelligence providers
 - provider abstraction for domain intelligence
@@ -88,7 +89,7 @@ This roadmap maps the current repository implementation to the phased goals from
 ## Remaining gaps versus the full project spec
 - no advanced distributed orchestration beyond the initial Redis/RQ worker backend, such as Celery/Dramatiq-style distributed scheduling and worker autoscaling
 - no full database-backed user management or granular RBAC beyond token/tenant scoping for the API surface
-- no graph database backend, scheduled alert integrations, or multi-org remediation workflow automation
+- no graph database backend or multi-org remediation workflow automation beyond the current SQLite relationship graph and dashboard summaries
 - no branch-aware multi-ref mirror orchestration for very large repositories beyond the initial local mirror sync foundation
 
 ## Current implementation stance

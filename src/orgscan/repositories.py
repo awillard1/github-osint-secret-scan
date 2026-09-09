@@ -18,6 +18,7 @@ from orgscan.models import (
     Relationship,
     Repository,
     RiskScore,
+    ScheduledReport,
     ScheduledScan,
     ScanJob,
     Suppression,
@@ -332,6 +333,21 @@ class Storage:
         self.session.flush()
         return scheduled_scan
 
+    def create_scheduled_report(
+        self,
+        target_type: str,
+        next_run_at: datetime,
+        **kwargs: Any,
+    ) -> ScheduledReport:
+        scheduled_report = ScheduledReport(
+            target_type=target_type,
+            next_run_at=next_run_at,
+            **kwargs,
+        )
+        self.session.add(scheduled_report)
+        self.session.flush()
+        return scheduled_report
+
     def list_findings(
         self,
         limit: int | None = 50,
@@ -468,6 +484,12 @@ class Storage:
             query = query.where(ScheduledScan.enabled.is_(True))
         return list(self.session.scalars(query))
 
+    def list_scheduled_reports(self, enabled_only: bool = False) -> Sequence[ScheduledReport]:
+        query = select(ScheduledReport).order_by(ScheduledReport.next_run_at.asc(), ScheduledReport.id.asc())
+        if enabled_only:
+            query = query.where(ScheduledReport.enabled.is_(True))
+        return list(self.session.scalars(query))
+
     def list_relationships(self, limit: int | None = 250) -> Sequence[Relationship]:
         query = select(Relationship).order_by(Relationship.created_at.desc(), Relationship.id.desc())
         if limit is not None:
@@ -480,6 +502,15 @@ class Storage:
             select(ScheduledScan)
             .where(ScheduledScan.enabled.is_(True), ScheduledScan.next_run_at <= current)
             .order_by(ScheduledScan.next_run_at.asc(), ScheduledScan.id.asc())
+        )
+        return list(self.session.scalars(query))
+
+    def list_due_scheduled_reports(self, now: datetime | None = None) -> Sequence[ScheduledReport]:
+        current = now or datetime.now(UTC)
+        query = (
+            select(ScheduledReport)
+            .where(ScheduledReport.enabled.is_(True), ScheduledReport.next_run_at <= current)
+            .order_by(ScheduledReport.next_run_at.asc(), ScheduledReport.id.asc())
         )
         return list(self.session.scalars(query))
 
@@ -499,6 +530,23 @@ class Storage:
 
     def get_scheduled_scan(self, scheduled_scan_id: int) -> ScheduledScan | None:
         return self.session.get(ScheduledScan, scheduled_scan_id)
+
+    def mark_scheduled_report_run(
+        self,
+        scheduled_report: ScheduledReport,
+        next_run_at: datetime,
+        *,
+        enabled: bool | None = None,
+    ) -> ScheduledReport:
+        scheduled_report.last_run_at = datetime.now(UTC)
+        scheduled_report.next_run_at = next_run_at
+        if enabled is not None:
+            scheduled_report.enabled = enabled
+        self.session.flush()
+        return scheduled_report
+
+    def get_scheduled_report(self, scheduled_report_id: int) -> ScheduledReport | None:
+        return self.session.get(ScheduledReport, scheduled_report_id)
 
     def finding_counts_by_severity(self) -> Mapping[str, int]:
         rows = self.session.execute(
@@ -567,6 +615,7 @@ class Storage:
             "relationships": Relationship,
             "risk_scores": RiskScore,
             "scheduled_scans": ScheduledScan,
+            "scheduled_reports": ScheduledReport,
             "suppressions": Suppression,
             "tool_runs": ToolRun,
         }
