@@ -215,9 +215,18 @@ Use `run-scheduled` for local in-process execution, or `enqueue-scheduled` plus 
 Mirror repositories for larger-history or repeat scanning workflows:
 
 ```bash
-orgscan sync-mirror example-org/app
-orgscan sync-mirrors --organization example-org
-orgscan scan-mirror example-org/app --scanner git-history-patterns
+orgscan sync-mirror example-org/app --ref main --ref release/2026
+orgscan sync-mirrors --organization example-org --ref main
+orgscan scan-mirror example-org/app --ref release/2026 --scanner git-history-patterns
+```
+
+Create DB-backed users, tenant roles, and session tokens for API access:
+
+```bash
+orgscan create-user alice --email alice@example.com
+orgscan grant-tenant-role alice tenant-a --role analyst
+orgscan create-session alice --tenant tenant-a --json
+orgscan revoke-session 1
 ```
 
 Serve the live dashboard and API:
@@ -226,7 +235,7 @@ Serve the live dashboard and API:
 orgscan serve-api --host 127.0.0.1 --port 8000
 ```
 
-When `ORGSCAN_API_TOKENS_JSON` is configured, API requests must include `X-Orgscan-Token`. Tokens map to `reader`, `analyst`, or `admin` roles and can be restricted to specific `tenant_key` values. API consumers can also pass `tenant_key` as a query parameter to further narrow results within their allowed scope.
+When `ORGSCAN_API_TOKENS_JSON` is configured, API requests must include `X-Orgscan-Token`. Tokens map to `reader`, `analyst`, or `admin` roles and can be restricted to specific `tenant_key` values. API consumers can also pass `tenant_key` as a query parameter to further narrow results within their allowed scope. If environment tokens are not configured, the API can also authenticate DB-backed session tokens created with `create-user`, `grant-tenant-role`, and `create-session`.
 
 Key routes:
 
@@ -234,6 +243,10 @@ Key routes:
 - `/auth/context` resolved API auth and tenant scope JSON
 - `/summary` summary JSON
 - `/findings` filtered findings JSON
+- `/scheduled-scans` list/create scheduled scans
+- `/scheduled-scans/run` trigger due scheduled scans (admin)
+- `/scheduled-reports` list/create scheduled reports
+- `/scheduled-reports/run` trigger due scheduled reports (admin)
 - `/domain-exposures` filtered domain exposure JSON
 - `/relationships/graph` relationship graph JSON
 - `/trends/findings` findings trend JSON
