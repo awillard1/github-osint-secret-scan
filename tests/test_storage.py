@@ -88,6 +88,7 @@ def test_storage_crud_round_trip(tmp_path: Path) -> None:
         "relationships": 1,
         "risk_scores": 1,
         "scheduled_scans": 0,
+        "scheduled_reports": 0,
         "suppressions": 0,
         "tool_runs": 0,
     }
