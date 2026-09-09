@@ -138,9 +138,9 @@ orgscan scan path ./path/to/scan --scanner ripgrep-heuristics
 orgscan scan path ./path/to/repository --scanner git-history-patterns
 ```
 
-The built-in `repo-governance` scanner checks for missing `CODEOWNERS`, missing `SECURITY.md`, missing Dependabot coverage, unpinned GitHub Actions references, `pull_request_target` workflow triggers, and broad workflow write permissions.
+The built-in `repo-governance` scanner checks for missing `CODEOWNERS`, missing `SECURITY.md`, missing Dependabot coverage, missing contributor/issue/PR workflow templates, unpinned GitHub Actions references, `pull_request_target` workflow triggers, self-hosted runner usage, missing explicit workflow permissions, and broad workflow write permissions.
 
-The built-in `yara` scanner uses bundled default rules for GitHub tokens, AWS access keys, and private key material unless `ORGSCAN_YARA_RULES_PATH` points at a custom ruleset. The built-in `ripgrep-heuristics` scanner uses ripgrep to look for internal hostnames, internal URLs, and configured `ORGSCAN_HEURISTIC_TERMS` strings. The built-in `git-history-patterns` scanner scans repository history across all refs with the core secret regex patterns and persists commit-linked evidence.
+The built-in `yara` scanner uses bundled default rules for GitHub tokens, AWS access keys, and private key material unless `ORGSCAN_YARA_RULES_PATH` points at a custom ruleset. The built-in `ripgrep-heuristics` scanner uses ripgrep to look for internal hostnames, internal URLs, and configured `ORGSCAN_HEURISTIC_TERMS` strings. The built-in `git-history-patterns` scanner scans repository history with the core secret regex patterns, can target individual refs during mirror scans, and persists commit-linked evidence.
 
 External scanner wrappers honor the configured `ORGSCAN_*_BINARY` settings, and additional scanners can be registered through Python entry points in the `orgscan.scanners` group.
 
@@ -203,6 +203,7 @@ Schedule recurring scans and inspect execution history:
 
 ```bash
 orgscan schedule-scan ./path/to/scan --repository example-org/app --cadence daily
+orgscan schedule-mirror-scan example-org/app --scanner git-history-patterns --ref main --ref release/2026 --cadence daily
 orgscan run-scheduled --limit 5
 orgscan enqueue-scheduled --limit 5
 orgscan queue-status
@@ -217,7 +218,7 @@ Mirror repositories for larger-history or repeat scanning workflows:
 ```bash
 orgscan sync-mirror example-org/app --ref main --ref release/2026
 orgscan sync-mirrors --organization example-org --ref main
-orgscan scan-mirror example-org/app --ref release/2026 --scanner git-history-patterns
+orgscan scan-mirror example-org/app --ref main --ref release/2026 --scanner git-history-patterns
 ```
 
 Create DB-backed users, tenant roles, and session tokens for API access:
@@ -277,7 +278,7 @@ pytest
 - The optional WHOIS integration adds registrar and nameserver enrichment for tracked domains.
 - The optional DNS integration adds record-level enrichment for tracked domains and previously discovered subdomains.
 - Optional paid domain intelligence integrations are available for Have I Been Pwned, DeHashed, and Intelligence X.
-- The built-in repo-governance scanner checks for missing ownership/security policy files, missing Dependabot configuration, risky workflow triggers, broad workflow permissions, and unpinned GitHub Actions references.
+- The built-in repo-governance scanner checks for missing ownership/security policy files, contributor and review templates, risky workflow triggers, self-hosted runners, broad or implicit workflow permissions, and unpinned GitHub Actions references.
 - The initial `scan` command uses the built-in `custom-patterns` scanner and stores scan jobs, findings, and evidence in SQLite for later reporting.
 - Additional built-in scanners cover YARA rule matching, ripgrep-based heuristics, and git history scanning for regex-based secret exposures.
 - The `discover` command uses the public GitHub REST API and can use `ORGSCAN_GITHUB_TOKEN` when configured for higher rate limits.

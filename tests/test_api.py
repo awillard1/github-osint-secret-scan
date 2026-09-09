@@ -242,6 +242,20 @@ def test_fastapi_db_session_auth_and_schedule_management(monkeypatch, tmp_path: 
         headers={"X-Orgscan-Token": analyst_token},
         json={"cadence": "daily", "output_format": "json", "tenant_key": "tenant-a", "enabled": True},
     )
+    create_mirror_scan = client.post(
+        "/scheduled-scans",
+        headers={"X-Orgscan-Token": analyst_token},
+        json={
+            "target_type": "mirror",
+            "target_value": "tenant-a/app",
+            "scanner_name": "git-history-patterns",
+            "cadence": "daily",
+            "tenant_key": "tenant-a",
+            "repository": "tenant-a/app",
+            "refs": ["main", "release/test"],
+            "resync_before_run": False,
+        },
+    )
     list_scans = client.get("/scheduled-scans", headers={"X-Orgscan-Token": analyst_token})
     list_reports = client.get("/scheduled-reports", headers={"X-Orgscan-Token": analyst_token})
     forbidden_run = client.post("/scheduled-scans/run", headers={"X-Orgscan-Token": analyst_token}, json={})
@@ -254,8 +268,13 @@ def test_fastapi_db_session_auth_and_schedule_management(monkeypatch, tmp_path: 
     assert create_scan.json()["scheduled_scan"]["tenant_key"] == "tenant-a"
     assert create_report.status_code == 200
     assert create_report.json()["scheduled_report"]["tenant_key"] == "tenant-a"
+    assert create_mirror_scan.status_code == 200
+    assert create_mirror_scan.json()["scheduled_scan"]["target_type"] == "mirror"
+    assert create_mirror_scan.json()["scheduled_scan"]["refs"] == ["main", "release/test"]
     assert list_scans.status_code == 200
-    assert len(list_scans.json()["scheduled_scans"]) == 1
+    assert len(list_scans.json()["scheduled_scans"]) == 2
+    mirror_schedule = next(row for row in list_scans.json()["scheduled_scans"] if row["target_type"] == "mirror")
+    assert mirror_schedule["refs"] == ["main", "release/test"]
     assert list_reports.status_code == 200
     assert len(list_reports.json()["scheduled_reports"]) == 1
     assert forbidden_run.status_code == 403

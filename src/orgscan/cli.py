@@ -17,7 +17,7 @@ from orgscan.db import create_session_factory, current_db_revision, init_db
 from orgscan.discovery import DiscoveryError, GitHubDiscoveryClient
 from orgscan.expansion import GitHubExpansionEngine
 from orgscan.logging_config import setup_logging
-from orgscan.mirroring import MirrorError, scan_repository_mirror, sync_repository_mirror
+from orgscan.mirroring import MirrorError, scan_repository_mirror_refs, sync_repository_mirror
 from orgscan.models import Finding
 from orgscan.providers import DomainProviderError, available_domain_provider_names, get_domain_provider
 from orgscan.queueing import QueueBackendError, enqueue_due_scheduled_scans, queue_status, run_worker
@@ -915,10 +915,50 @@ def schedule_scan(
             metadata_json={
                 "organization_id": organization_id,
                 "repository_id": repository_id,
+                "tenant_key": tenant_key,
             },
         )
         session.commit()
     typer.echo(f"Scheduled scan {scheduled.id} for {target.resolve()} ({cadence.value})")
+
+
+@app.command("schedule-mirror-scan")
+def schedule_mirror_scan(
+    repository: str = typer.Argument(..., help="Repository full name, such as owner/name."),
+    scanner: str = typer.Option("git-history-patterns", "--scanner", help="Scanner to schedule against the repository mirror."),
+    cadence: ScanCadence = typer.Option(ScanCadence.DAILY, "--cadence", help="How often to rerun the mirror scan."),
+    ref: list[str] = typer.Option([], "--ref", help="Specific branch or tag refs to scan; repeat for multiple refs."),
+    provider: str = typer.Option("github", "--provider", help="Repository provider name."),
+    clone_url: str | None = typer.Option(None, "--clone-url", help="Optional explicit clone URL."),
+    tenant_key: str | None = typer.Option(None, "--tenant-key", help="Optional tenant scope for this scheduled mirror scan."),
+    resync_before_run: bool = typer.Option(True, "--resync/--no-resync", help="Whether to refresh the mirror before each scheduled run."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        repository_record = storage.get_repository_by_full_name(repository)
+        organization_id = repository_record.organization_id if repository_record else None
+        repository_id = repository_record.id if repository_record else None
+        scheduled = storage.create_scheduled_scan(
+            "mirror",
+            repository,
+            scanner,
+            next_run_from_cadence(cadence.value),
+            cadence=cadence.value,
+            metadata_json={
+                "organization_id": organization_id,
+                "repository_id": repository_id,
+                "provider": provider,
+                "clone_url": clone_url,
+                "refs": list(ref),
+                "tenant_key": tenant_key,
+                "resync_before_run": resync_before_run,
+            },
+        )
+        session.commit()
+    typer.echo(f"Scheduled mirror scan {scheduled.id} for {repository} ({cadence.value})")
 
 
 @app.command("run-scheduled")
@@ -1124,7 +1164,8 @@ def sync_mirrors(
 def scan_mirror(
     repository: str = typer.Argument(..., help="Repository full name, such as owner/name."),
     scanner: str = typer.Option("git-history-patterns", "--scanner", help="Scanner implementation to run against the mirror."),
-    ref: str | None = typer.Option(None, "--ref", help="Specific branch or tag ref to scan from the mirror."),
+    ref: list[str] = typer.Option([], "--ref", help="Specific branch or tag refs to scan from the mirror; repeat for multiple refs."),
+    resync: bool = typer.Option(False, "--resync/--no-resync", help="Refresh the mirror before scanning."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
@@ -1133,12 +1174,13 @@ def scan_mirror(
     with session_factory() as session:
         storage = Storage(session)
         try:
-            result = scan_repository_mirror(
+            results = scan_repository_mirror_refs(
                 storage,
                 settings=settings,
                 repository_full_name=repository,
                 scanner_name=scanner,
-                ref_name=ref,
+                refs=list(ref),
+                resync=resync,
             )
         except MirrorError as exc:
             typer.echo(f"Mirror scan failed: {exc}", err=True)
@@ -1146,18 +1188,24 @@ def scan_mirror(
         session.commit()
     payload = {
         "repository": repository,
-        "scanner": result.scanner,
-        "target": result.target,
-        "scan_job_id": result.scan_job_id,
-        "tool_run_id": result.tool_run_id,
-        "findings": result.findings,
-        "finding_ids": result.finding_ids,
-        "ref": ref,
+        "scanner": scanner,
+        "refs": list(ref),
+        "resync": resync,
+        "results": [
+            {
+                "target": result.target,
+                "scan_job_id": result.scan_job_id,
+                "tool_run_id": result.tool_run_id,
+                "findings": result.findings,
+                "finding_ids": result.finding_ids,
+            }
+            for result in results
+        ],
     }
     if json_output:
         typer.echo(json.dumps(payload, indent=2, default=str))
     else:
-        typer.echo(f"Completed mirror scan for {repository} with {result.findings} finding(s).")
+        typer.echo(f"Completed {len(results)} mirror scan(s) for {repository}.")
 
 
 @app.command("queue-status")
@@ -1214,8 +1262,10 @@ def jobs(
         "scan_jobs": [
             {
                 "id": job.id,
+                "target_type": job.target_type,
                 "scanner_name": job.scanner_name,
                 "target_id": job.target_id,
+                "target_ref": job.target_ref,
                 "status": job.status,
             }
             for job in scan_jobs
@@ -1232,8 +1282,10 @@ def jobs(
         "scheduled_scans": [
             {
                 "id": scan.id,
+                "target_type": scan.target_type,
                 "scanner_name": scan.scanner_name,
                 "target_value": scan.target_value,
+                "refs": (scan.metadata_json or {}).get("refs", []),
                 "cadence": scan.cadence,
                 "enabled": scan.enabled,
                 "queue_status": (scan.metadata_json or {}).get("queue_status"),

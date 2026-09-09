@@ -4,7 +4,7 @@ from urllib.parse import parse_qs, urlparse
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from orgscan.auth import AuthContext, auth_dependency, resolve_requested_tenants, serialize_auth_context
@@ -16,6 +16,7 @@ from orgscan.scheduler import next_run_from_cadence, run_due_reports, run_due_sc
 
 
 class ScheduledScanCreateRequest(BaseModel):
+    target_type: str = "path"
     target_value: str
     scanner_name: str = "custom-patterns"
     cadence: str = "daily"
@@ -23,6 +24,9 @@ class ScheduledScanCreateRequest(BaseModel):
     repository: str | None = None
     provider: str = "github"
     tenant_key: str | None = None
+    refs: list[str] = Field(default_factory=list)
+    clone_url: str | None = None
+    resync_before_run: bool = True
 
 
 class ScheduledReportCreateRequest(BaseModel):
@@ -84,6 +88,8 @@ class OrgscanApiService:
                     "enabled": scan.enabled,
                     "next_run_at": scan.next_run_at.isoformat(),
                     "tenant_key": (scan.metadata_json or {}).get("tenant_key"),
+                    "refs": (scan.metadata_json or {}).get("refs", []),
+                    "resync_before_run": (scan.metadata_json or {}).get("resync_before_run"),
                 }
                 for scan in storage.list_scheduled_scans()
                 if tenant_keys is None or (scan.metadata_json or {}).get("tenant_key") in tenant_keys
@@ -351,7 +357,7 @@ def create_app(database_url: str) -> FastAPI:
                 )
                 repository_id = repo_record.id
             scheduled = storage.create_scheduled_scan(
-                "path",
+                payload.target_type,
                 payload.target_value,
                 payload.scanner_name,
                 next_run_from_cadence(payload.cadence),
@@ -361,10 +367,22 @@ def create_app(database_url: str) -> FastAPI:
                     "repository_id": repository_id,
                     "tenant_key": payload.tenant_key,
                     "created_by": auth.name,
+                    "provider": payload.provider,
+                    "clone_url": payload.clone_url,
+                    "refs": payload.refs,
+                    "resync_before_run": payload.resync_before_run,
                 },
             )
             session.commit()
-            return {"scheduled_scan": {"id": scheduled.id, "scanner_name": scheduled.scanner_name, "tenant_key": payload.tenant_key}}
+            return {
+                "scheduled_scan": {
+                    "id": scheduled.id,
+                    "target_type": scheduled.target_type,
+                    "scanner_name": scheduled.scanner_name,
+                    "tenant_key": payload.tenant_key,
+                    "refs": payload.refs,
+                }
+            }
 
     @app.post("/scheduled-scans/run")
     def run_scheduled_scans_route(

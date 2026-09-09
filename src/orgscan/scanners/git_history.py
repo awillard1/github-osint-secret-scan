@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from orgscan.config import Settings
 from orgscan.scanners.base import ScanMatch
@@ -21,17 +22,27 @@ class GitHistoryPatternScanner:
         self._patterns = tuple((pattern, re.compile(pattern.regex)) for pattern in patterns)
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
+        return self.scan_path_with_context(target)
+
+    def scan_path_with_context(
+        self,
+        target: Path,
+        *,
+        target_ref: str | None = None,
+        scope_json: dict[str, Any] | None = None,
+    ) -> list[ScanMatch]:
         if not shutil.which("git"):
             raise _not_installed_error("git")
 
         repo_root = self._repo_root(target)
         relative_target = self._relative_target(repo_root, target)
+        revision_args = self._revision_args(target_ref=target_ref, scope_json=scope_json)
         command = [
             "git",
             "-C",
             str(repo_root),
             "log",
-            "--all",
+            *revision_args,
             "-p",
             "--unified=0",
             f"--max-count={self.max_commits}",
@@ -42,7 +53,8 @@ class GitHistoryPatternScanner:
         completed = subprocess.run(command, check=False, capture_output=True, text=True)
         if completed.returncode != 0:
             raise ScannerExecutionError(completed.stderr.strip() or "git history scan failed")
-        return self.parse_output(completed.stdout, repo_root=repo_root)
+        effective_ref = target_ref if target_ref and target_ref != "workspace" else "all"
+        return self.parse_output(completed.stdout, repo_root=repo_root, ref_name=effective_ref)
 
     @staticmethod
     def _repo_root(target: Path) -> Path:
@@ -66,7 +78,7 @@ class GitHistoryPatternScanner:
         except ValueError:
             raise ScannerExecutionError("scan target must be inside the selected git repository") from None
 
-    def parse_output(self, output: str, *, repo_root: Path) -> list[ScanMatch]:
+    def parse_output(self, output: str, *, repo_root: Path, ref_name: str = "all") -> list[ScanMatch]:
         results: list[ScanMatch] = []
         commit_sha: str | None = None
         active_path: str | None = None
@@ -93,12 +105,12 @@ class GitHistoryPatternScanner:
                 continue
             if raw_line.startswith("+"):
                 line_content = raw_line[1:]
-                results.extend(self._scan_diff_line(repo_root, active_path, commit_sha, "added", new_line, line_content))
+                results.extend(self._scan_diff_line(repo_root, active_path, commit_sha, "added", new_line, line_content, ref_name))
                 new_line += 1
                 continue
             if raw_line.startswith("-"):
                 line_content = raw_line[1:]
-                results.extend(self._scan_diff_line(repo_root, active_path, commit_sha, "removed", old_line, line_content))
+                results.extend(self._scan_diff_line(repo_root, active_path, commit_sha, "removed", old_line, line_content, ref_name))
                 old_line += 1
                 continue
             if raw_line.startswith(" "):
@@ -114,6 +126,7 @@ class GitHistoryPatternScanner:
         change_type: str,
         line_number: int,
         line: str,
+        ref_name: str,
     ) -> list[ScanMatch]:
         matches: list[ScanMatch] = []
         for pattern, compiled in self._patterns:
@@ -143,11 +156,20 @@ class GitHistoryPatternScanner:
                             "pattern": pattern.name,
                             "commit_sha": commit_sha,
                             "change_type": change_type,
-                            "ref_name": "all",
+                            "ref_name": ref_name,
                         },
                     )
                 )
         return matches
+
+    @staticmethod
+    def _revision_args(*, target_ref: str | None, scope_json: dict[str, Any] | None) -> list[str]:
+        if target_ref and target_ref != "workspace":
+            return [target_ref]
+        history_mode = str((scope_json or {}).get("history_mode") or "").strip().lower()
+        if history_mode == "current-ref":
+            return ["HEAD"]
+        return ["--all"]
 
     @staticmethod
     def _parse_hunk_header(header: str) -> tuple[int, int]:

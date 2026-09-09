@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -12,6 +13,11 @@ from orgscan.repositories import Storage
 from orgscan.schemas import CanonicalFinding
 
 runner = CliRunner()
+
+
+def _git(*args: str, cwd: Path) -> None:
+    completed = subprocess.run(["git", *args], cwd=cwd, check=False, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_cli_init_db_and_status(monkeypatch, tmp_path: Path) -> None:
@@ -611,6 +617,74 @@ def test_cli_expand_schedule_and_jobs(monkeypatch, tmp_path: Path) -> None:
     get_settings.cache_clear()
 
 
+def test_cli_mirror_scan_and_schedule_with_refs(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'mirror-cli.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+
+    source = tmp_path / "source"
+    source.mkdir()
+    _git("init", cwd=source)
+    _git("config", "user.email", "test@example.com", cwd=source)
+    _git("config", "user.name", "Test User", cwd=source)
+    (source / "app.py").write_text("print('main')\n", encoding="utf-8")
+    _git("add", "app.py", cwd=source)
+    _git("commit", "-m", "main", cwd=source)
+    _git("checkout", "-b", "release/test", cwd=source)
+    (source / "release.env").write_text('api_key = "example-not-real-123456789"\n', encoding="utf-8")
+    _git("add", "release.env", cwd=source)
+    _git("commit", "-m", "release", cwd=source)
+
+    remote = tmp_path / "remote.git"
+    completed = subprocess.run(["git", "clone", "--bare", str(source), str(remote)], check=False, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+
+    sync_result = runner.invoke(
+        app,
+        ["sync-mirror", "example-org/app", "--clone-url", str(remote), "--ref", "master", "--ref", "release/test", "--json"],
+    )
+    assert sync_result.exit_code == 0
+    assert '"release/test"' in sync_result.stdout
+
+    scan_result = runner.invoke(
+        app,
+        ["scan-mirror", "example-org/app", "--scanner", "custom-patterns", "--ref", "release/test", "--json"],
+    )
+    assert scan_result.exit_code == 0
+    assert '"results"' in scan_result.stdout
+    assert '"findings": 1' in scan_result.stdout
+
+    schedule_result = runner.invoke(
+        app,
+        [
+            "schedule-mirror-scan",
+            "example-org/app",
+            "--scanner",
+            "custom-patterns",
+            "--cadence",
+            "manual",
+            "--clone-url",
+            str(remote),
+            "--ref",
+            "release/test",
+        ],
+    )
+    assert schedule_result.exit_code == 0
+    assert "Scheduled mirror scan" in schedule_result.stdout
+
+    run_result = runner.invoke(app, ["run-scheduled", "--json"])
+    assert run_result.exit_code == 0
+    assert '"target": "example-org/app@release/test"' in run_result.stdout
+
+    jobs_result = runner.invoke(app, ["jobs", "--json"])
+    assert jobs_result.exit_code == 0
+    assert '"target_type": "mirror"' in jobs_result.stdout
+    assert '"refs": [' in jobs_result.stdout
+
+    get_settings.cache_clear()
+
+
 def test_cli_scan_reports_missing_external_scanner(monkeypatch, tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'missing-scanner.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
@@ -679,14 +753,18 @@ def test_cli_repo_governance_scanner_finds_governance_issues(monkeypatch, tmp_pa
 
     result = runner.invoke(app, ["scan", "path", str(tmp_path), "--scanner", "repo-governance", "--json"])
     assert result.exit_code == 0
-    assert '"findings": 4' in result.stdout
+    assert '"findings": 8' in result.stdout
 
     findings_result = runner.invoke(app, ["findings", "--json"])
     assert findings_result.exit_code == 0
     assert "Missing CODEOWNERS file" in findings_result.stdout
     assert "Missing SECURITY.md policy" in findings_result.stdout
     assert "Missing Dependabot configuration" in findings_result.stdout
+    assert "Missing CONTRIBUTING.md guidance" in findings_result.stdout
+    assert "Missing GitHub issue templates" in findings_result.stdout
+    assert "Missing pull request template" in findings_result.stdout
     assert "Unpinned GitHub Action reference" in findings_result.stdout
+    assert "Workflow omits explicit token permissions" in findings_result.stdout
 
     get_settings.cache_clear()
 

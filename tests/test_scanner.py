@@ -27,6 +27,10 @@ def test_repository_governance_scanner_detects_missing_controls_and_unpinned_act
         "on:\n  pull_request_target:\npermissions:\n  contents: write\njobs:\n  test:\n    steps:\n      - uses: actions/checkout@v4\n      - uses: ./local-action\n",
         encoding="utf-8",
     )
+    (workflow_dir / "deploy.yml").write_text(
+        "on:\n  push:\njobs:\n  deploy:\n    runs-on: [self-hosted, linux]\n    steps:\n      - run: echo deploy\n",
+        encoding="utf-8",
+    )
 
     matches = RepositoryGovernanceScanner().scan_path(tmp_path)
 
@@ -34,9 +38,14 @@ def test_repository_governance_scanner_detects_missing_controls_and_unpinned_act
     assert "Missing CODEOWNERS file" in titles
     assert "Missing SECURITY.md policy" in titles
     assert "Missing Dependabot configuration" in titles
+    assert "Missing CONTRIBUTING.md guidance" in titles
+    assert "Missing GitHub issue templates" in titles
+    assert "Missing pull request template" in titles
     assert "Unpinned GitHub Action reference" in titles
     assert "Workflow uses pull_request_target" in titles
     assert "Workflow grants scoped write permissions" in titles
+    assert "Workflow omits explicit token permissions" in titles
+    assert "Workflow targets self-hosted runners" in titles
 
 
 def test_yara_scanner_parses_rule_output_and_redacts_matches(tmp_path: Path) -> None:
@@ -88,6 +97,13 @@ def test_git_history_scanner_parses_commit_diffs() -> None:
     assert len(matches) == 1
     assert matches[0].title.endswith("in git history")
     assert matches[0].metadata["commit_sha"] == "abc123"
+    assert matches[0].metadata["ref_name"] == "all"
+
+
+def test_git_history_scanner_builds_revision_args_for_target_refs() -> None:
+    assert GitHistoryPatternScanner._revision_args(target_ref="release/test", scope_json=None) == ["release/test"]
+    assert GitHistoryPatternScanner._revision_args(target_ref=None, scope_json={"history_mode": "current-ref"}) == ["HEAD"]
+    assert GitHistoryPatternScanner._revision_args(target_ref=None, scope_json=None) == ["--all"]
 
 
 class PluginScanner:

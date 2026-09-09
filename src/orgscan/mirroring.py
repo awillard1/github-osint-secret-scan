@@ -59,7 +59,7 @@ def sync_repository_mirror(
         ],
         "sync mirror fetch",
     )
-    resolved_refs = refs or []
+    resolved_refs = _normalize_refs(refs)
     if resolved_refs:
         for ref_name in resolved_refs:
             checkout_mirror_ref(target_path, ref_name)
@@ -87,28 +87,79 @@ def scan_repository_mirror(
     scanner_name: str,
     ref_name: str | None = None,
 ):
+    results = scan_repository_mirror_refs(
+        storage,
+        settings=settings,
+        repository_full_name=repository_full_name,
+        scanner_name=scanner_name,
+        refs=[ref_name] if ref_name else None,
+    )
+    return results[0]
+
+
+def scan_repository_mirror_refs(
+    storage: Storage,
+    *,
+    settings: Settings,
+    repository_full_name: str,
+    scanner_name: str,
+    refs: list[str] | None = None,
+    provider: str = "github",
+    clone_url: str | None = None,
+    resync: bool = False,
+):
     from orgscan.runner import execute_scan
 
+    resolved_refs = _normalize_refs(refs)
     repository = storage.get_repository_by_full_name(repository_full_name)
+    if resync:
+        repository, _ = sync_repository_mirror(
+            storage,
+            settings=settings,
+            repository_full_name=repository_full_name,
+            provider=provider,
+            clone_url=clone_url,
+            refs=resolved_refs,
+        )
+    if repository is None:
+        repository = storage.get_repository_by_full_name(repository_full_name)
     if repository is None or not repository.mirror_path:
         raise MirrorError(f"Repository mirror is not configured for {repository_full_name}")
     mirror_path = Path(repository.mirror_path)
     if not mirror_path.exists():
         raise MirrorError(f"Repository mirror path does not exist: {mirror_path}")
-    if ref_name:
+    scan_refs = resolved_refs or _default_scan_refs(repository)
+    if not scan_refs:
+        scan_refs = [_current_mirror_ref(mirror_path)]
+    results = []
+    for ref_name in scan_refs:
         checkout_mirror_ref(mirror_path, ref_name)
         metadata = dict(repository.metadata_json or {})
         metadata["current_ref"] = ref_name
         repository.metadata_json = metadata
         storage.session.flush()
-    return execute_scan(
-        storage,
-        target_path=mirror_path,
-        scanner_name=scanner_name,
-        settings=settings,
-        organization_id=repository.organization_id,
-        repository_id=repository.id,
-    )
+        results.append(
+            execute_scan(
+                storage,
+                target_path=mirror_path,
+                scanner_name=scanner_name,
+                settings=settings,
+                organization_id=repository.organization_id,
+                repository_id=repository.id,
+                target_type="mirror",
+                target_id=repository.full_name,
+                target_ref=ref_name,
+                scope_json={
+                    "mode": "mirror",
+                    "repository_full_name": repository.full_name,
+                    "mirror_path": str(mirror_path),
+                    "ref_name": ref_name,
+                },
+                command_line=f"orgscan scan-mirror {repository.full_name} --scanner {scanner_name} --ref {ref_name}",
+                tool_target=f"{repository.full_name}@{ref_name}",
+            )
+        )
+    return results
 
 
 def list_remote_refs(target_path: Path) -> list[str]:
@@ -137,6 +188,33 @@ def checkout_mirror_ref(target_path: Path, ref_name: str) -> str:
         _run_git(["git", "-C", str(target_path), "checkout", "--force", "-B", ref_name, f"origin/{ref_name}"], "checkout mirror branch")
         return ref_name
     raise MirrorError(f"Requested mirror ref is not available: {ref_name}")
+
+
+def _normalize_refs(refs: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    for ref_name in refs or []:
+        value = ref_name.strip()
+        if value and value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def _default_scan_refs(repository: object) -> list[str]:
+    metadata = getattr(repository, "metadata_json", {}) or {}
+    tracked_refs = metadata.get("tracked_refs")
+    if isinstance(tracked_refs, list):
+        normalized = _normalize_refs([str(value) for value in tracked_refs])
+        if normalized:
+            return normalized
+    current_ref = str(metadata.get("current_ref") or "").strip()
+    return [current_ref] if current_ref else []
+
+
+def _current_mirror_ref(target_path: Path) -> str:
+    current = _git_stdout(["git", "-C", str(target_path), "rev-parse", "--abbrev-ref", "HEAD"], "resolve mirror branch")
+    if current and current != "HEAD":
+        return current
+    return "HEAD"
 
 
 def _run_git(command: list[str], action: str) -> None:

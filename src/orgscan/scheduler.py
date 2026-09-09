@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from orgscan.config import Settings
+from orgscan.mirroring import scan_repository_mirror_refs
 from orgscan.repositories import Storage
 from orgscan.reporting import build_summary, deliver_report_webhook, finding_rows, scheduled_report_output_path, write_export
 from orgscan.runner import ScanExecutionResult, execute_scan
@@ -34,23 +35,41 @@ def run_due_scans(storage: Storage, limit: int = 10, *, settings: Settings | Non
     results: list[ScanExecutionResult] = []
     due_scans = storage.list_due_scheduled_scans()[:limit]
     for scheduled in due_scans:
-        metadata = scheduled.metadata_json
+        metadata = scheduled.metadata_json or {}
         organization_id = metadata.get("organization_id")
         repository_id = metadata.get("repository_id")
-        result = execute_scan(
-            storage,
-            target_path=Path(scheduled.target_value),
-            scanner_name=scheduled.scanner_name,
-            settings=settings,
-            organization_id=int(organization_id) if organization_id is not None else None,
-            repository_id=int(repository_id) if repository_id is not None else None,
-        )
+        if scheduled.target_type == "mirror":
+            result_batch = scan_repository_mirror_refs(
+                storage,
+                settings=settings or Settings(),
+                repository_full_name=scheduled.target_value,
+                scanner_name=scheduled.scanner_name,
+                refs=[str(value) for value in metadata.get("refs", [])] if isinstance(metadata.get("refs"), list) else None,
+                provider=str(metadata.get("provider") or "github"),
+                clone_url=metadata.get("clone_url"),
+                resync=bool(metadata.get("resync_before_run", True)),
+            )
+        else:
+            result_batch = [
+                execute_scan(
+                    storage,
+                    target_path=Path(scheduled.target_value),
+                    scanner_name=scheduled.scanner_name,
+                    settings=settings,
+                    organization_id=int(organization_id) if organization_id is not None else None,
+                    repository_id=int(repository_id) if repository_id is not None else None,
+                    target_type=scheduled.target_type,
+                    target_id=scheduled.target_value,
+                    target_ref=str(metadata.get("target_ref") or "workspace"),
+                    scope_json={"mode": scheduled.target_type, **(metadata.get("scope_json") or {})},
+                )
+            ]
         storage.mark_scheduled_scan_run(
             scheduled,
             next_run_from_cadence(scheduled.cadence),
             enabled=False if scheduled.cadence == "manual" else None,
         )
-        results.append(result)
+        results.extend(result_batch)
     return results
 
 
