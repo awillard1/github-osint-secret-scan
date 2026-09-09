@@ -490,7 +490,18 @@ class EnrichedAggregateDomainProvider(DomainIntelligenceProvider):
         identity_correlations: list[str] = []
         warnings: list[str] = []
 
-        for provider_name in ("local-metadata", "crtsh", "projectdiscovery", "whois", "dns", "hibp", "dehashed", "intelligencex"):
+        for provider_name in (
+            "local-metadata",
+            "crtsh",
+            "projectdiscovery",
+            "whois",
+            "dns",
+            "securitytxt",
+            "github-search",
+            "hibp",
+            "dehashed",
+            "intelligencex",
+        ):
             provider = get_domain_provider(provider_name, self.settings)
             try:
                 result = provider.discover(storage, domain_name)
@@ -502,6 +513,268 @@ class EnrichedAggregateDomainProvider(DomainIntelligenceProvider):
             warnings.extend(result.warnings or [])
 
         return DomainProviderResult(exposures=exposures, identity_correlations=identity_correlations, warnings=warnings)
+
+
+class SecurityTxtDomainProvider(DomainIntelligenceProvider):
+    name = "securitytxt"
+
+    @staticmethod
+    def _hash(*parts: str) -> str:
+        return sha256("::".join(parts).encode("utf-8")).hexdigest()
+
+    def _fetch_securitytxt(self, domain_name: str) -> tuple[str | None, str | None]:
+        settings = self.settings
+        urls = [
+            f"https://{domain_name}/.well-known/security.txt",
+            f"https://{domain_name}/security.txt",
+        ]
+        for url in urls:
+            request = Request(
+                url,
+                headers={
+                    "User-Agent": "orgscan/0.1.0",
+                    "Accept": "text/plain",
+                },
+            )
+            try:
+                wait_for_rate_limit(settings, "securitytxt")
+                with urlopen(request, timeout=settings.http_timeout_seconds if settings else 15) as response:
+                    return response.read().decode("utf-8", errors="replace"), url
+            except HTTPError as exc:
+                if exc.code == 404:
+                    continue
+                raise DomainProviderError(f"security.txt request failed with status {exc.code}") from exc
+            except URLError as exc:
+                raise DomainProviderError(f"security.txt request failed: {exc.reason}") from exc
+        return None, None
+
+    @staticmethod
+    def _parse_fields(content: str) -> dict[str, list[str]]:
+        fields: dict[str, list[str]] = {}
+        for raw_line in content.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            normalized_key = key.strip().lower()
+            normalized_value = value.strip()
+            if normalized_value:
+                fields.setdefault(normalized_key, []).append(normalized_value)
+        return fields
+
+    def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        domain_record, _ = storage.get_or_create_domain(domain_name)
+        exposures: list[str] = []
+        identity_correlations: list[str] = []
+        warnings: list[str] = []
+
+        content, source_url = self._fetch_securitytxt(domain_name)
+        if content is None:
+            warnings.append(f"securitytxt: no security.txt found for {domain_name}")
+            return DomainProviderResult(exposures=exposures, identity_correlations=identity_correlations, warnings=warnings)
+
+        fields = self._parse_fields(content)
+        existing_sources = set(domain_record.discovery_sources)
+        existing_sources.add("securitytxt")
+        domain_record.discovery_sources = sorted(existing_sources)
+
+        for contact in fields.get("contact", []):
+            summary = f"security.txt contact for {domain_name}: {contact}"
+            storage.create_domain_exposure(
+                domain_record.id,
+                source="securitytxt",
+                source_name=self.name,
+                result_summary=summary,
+                normalized_hash=self._hash("securitytxt-contact", domain_name, contact),
+                source_class="free",
+                confidence="verified",
+                severity="low",
+                query_used=domain_name,
+                evidence_url=source_url,
+            )
+            exposures.append(summary)
+            email = contact.removeprefix("mailto:").strip().lower()
+            if "@" in email:
+                storage.create_identity_correlation(
+                    domain_record.id,
+                    source="securitytxt",
+                    relation_type="securitytxt-contact",
+                    email=email,
+                    confidence="likely",
+                    evidence_reference=source_url,
+                )
+                identity_correlations.append(email)
+
+        for key in ("canonical", "policy", "hiring", "encryption", "acknowledgments"):
+            for value in fields.get(key, []):
+                summary = f"security.txt {key} for {domain_name}: {value}"
+                storage.create_domain_exposure(
+                    domain_record.id,
+                    source="securitytxt",
+                    source_name=self.name,
+                    result_summary=summary,
+                    normalized_hash=self._hash("securitytxt", domain_name, key, value),
+                    source_class="free",
+                    confidence="verified",
+                    severity="low",
+                    query_used=domain_name,
+                    evidence_url=source_url,
+                )
+                exposures.append(summary)
+
+        return DomainProviderResult(exposures=exposures, identity_correlations=identity_correlations, warnings=warnings)
+
+
+class GitHubSearchDomainProvider(DomainIntelligenceProvider):
+    name = "github-search"
+
+    @staticmethod
+    def _hash(*parts: str) -> str:
+        return sha256("::".join(parts).encode("utf-8")).hexdigest()
+
+    def _require_settings(self) -> Settings:
+        if self.settings is None:
+            raise DomainProviderError("GitHub search provider requires application settings.")
+        return self.settings
+
+    def _github_request_json(self, path: str, *, expected: type[list[Any]] | type[dict[str, Any]] = dict) -> object:
+        settings = self._require_settings()
+        headers = {
+            "User-Agent": "orgscan/0.1.0",
+            "Accept": "application/vnd.github+json",
+        }
+        if settings.github_token:
+            headers["Authorization"] = f"******"
+        return _request_json(
+            f"{settings.github_api_base_url.rstrip('/')}{path}",
+            settings=settings,
+            scope="github-api",
+            headers=headers,
+            timeout=settings.http_timeout_seconds,
+            expected=expected,
+        )
+
+    def _search_repositories(self, domain_name: str) -> list[dict[str, Any]]:
+        query = urlencode({"q": f'"{domain_name}" in:name,description,readme', "per_page": 10})
+        payload = self._github_request_json(f"/search/repositories?{query}", expected=dict)
+        items = payload.get("items") if isinstance(payload, dict) else None
+        return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+    def _search_code(self, domain_name: str) -> list[dict[str, Any]]:
+        query = urlencode({"q": f'"{domain_name}" in:file', "per_page": 10})
+        payload = self._github_request_json(f"/search/code?{query}", expected=dict)
+        items = payload.get("items") if isinstance(payload, dict) else None
+        return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+    def _search_issues(self, domain_name: str) -> list[dict[str, Any]]:
+        query = urlencode({"q": f'"{domain_name}" type:issue', "per_page": 10})
+        payload = self._github_request_json(f"/search/issues?{query}", expected=dict)
+        items = payload.get("items") if isinstance(payload, dict) else None
+        return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+    def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        domain_record, _ = storage.get_or_create_domain(domain_name)
+        exposures: list[str] = []
+        identity_correlations: list[str] = []
+
+        existing_sources = set(domain_record.discovery_sources)
+        existing_sources.add("github-search")
+        domain_record.discovery_sources = sorted(existing_sources)
+
+        for item in self._search_repositories(domain_name):
+            full_name = str(item.get("full_name") or "unknown/repository").strip()
+            description = str(item.get("description") or "").strip()
+            owner = item.get("owner") if isinstance(item.get("owner"), dict) else {}
+            owner_login = str(owner.get("login") or "").strip()
+            summary = f"GitHub repository mentions {domain_name}: {full_name}"
+            if description:
+                summary = f"{summary} description={description}"
+            storage.create_domain_exposure(
+                domain_record.id,
+                source="github-search",
+                source_name=self.name,
+                result_summary=summary,
+                normalized_hash=self._hash("github-repo", domain_name, full_name),
+                source_class="free",
+                confidence="likely",
+                severity="low",
+                query_used=domain_name,
+                evidence_url=str(item.get("html_url") or "") or None,
+            )
+            exposures.append(summary)
+            if owner_login:
+                storage.create_identity_correlation(
+                    domain_record.id,
+                    source="github-search",
+                    relation_type="github-repository-domain-reference",
+                    username=owner_login,
+                    confidence="heuristic",
+                    evidence_reference=full_name,
+                )
+                identity_correlations.append(owner_login)
+
+        for item in self._search_code(domain_name):
+            repository = item.get("repository") if isinstance(item.get("repository"), dict) else {}
+            full_name = str(repository.get("full_name") or "unknown/repository").strip()
+            owner = repository.get("owner") if isinstance(repository.get("owner"), dict) else {}
+            owner_login = str(owner.get("login") or "").strip()
+            path = str(item.get("path") or "unknown").strip()
+            summary = f"GitHub code search match for {domain_name}: {full_name}:{path}"
+            storage.create_domain_exposure(
+                domain_record.id,
+                source="github-search",
+                source_name=self.name,
+                result_summary=summary,
+                normalized_hash=self._hash("github-code", domain_name, full_name, path),
+                source_class="free",
+                confidence="likely",
+                severity="medium",
+                query_used=f'"{domain_name}" in:file',
+                evidence_url=str(item.get("html_url") or "") or None,
+            )
+            exposures.append(summary)
+            if owner_login:
+                storage.create_identity_correlation(
+                    domain_record.id,
+                    source="github-search",
+                    relation_type="github-code-domain-reference",
+                    username=owner_login,
+                    confidence="heuristic",
+                    evidence_reference=f"{full_name}:{path}",
+                )
+                identity_correlations.append(owner_login)
+
+        for item in self._search_issues(domain_name):
+            title = str(item.get("title") or "untitled issue").strip()
+            state = str(item.get("state") or "open").strip()
+            user = item.get("user") if isinstance(item.get("user"), dict) else {}
+            user_login = str(user.get("login") or "").strip()
+            summary = f"GitHub issue mentions {domain_name}: {title} state={state}"
+            storage.create_domain_exposure(
+                domain_record.id,
+                source="github-search",
+                source_name=self.name,
+                result_summary=summary,
+                normalized_hash=self._hash("github-issue", domain_name, title, state),
+                source_class="free",
+                confidence="heuristic",
+                severity="low",
+                query_used=f'"{domain_name}" type:issue',
+                evidence_url=str(item.get("html_url") or "") or None,
+            )
+            exposures.append(summary)
+            if user_login:
+                storage.create_identity_correlation(
+                    domain_record.id,
+                    source="github-search",
+                    relation_type="github-issue-domain-reference",
+                    username=user_login,
+                    confidence="heuristic",
+                    evidence_reference=title,
+                )
+                identity_correlations.append(user_login)
+
+        return DomainProviderResult(exposures=exposures, identity_correlations=identity_correlations, warnings=[])
 
 
 class HaveIBeenPwnedDomainProvider(DomainIntelligenceProvider):
@@ -803,10 +1076,12 @@ DOMAIN_PROVIDERS = {
     CrtShDomainProvider.name: CrtShDomainProvider,
     DeHashedDomainProvider.name: DeHashedDomainProvider,
     DnsDomainProvider.name: DnsDomainProvider,
+    GitHubSearchDomainProvider.name: GitHubSearchDomainProvider,
     HaveIBeenPwnedDomainProvider.name: HaveIBeenPwnedDomainProvider,
     IntelligenceXDomainProvider.name: IntelligenceXDomainProvider,
     LocalMetadataDomainProvider.name: LocalMetadataDomainProvider,
     ProjectDiscoveryDomainProvider.name: ProjectDiscoveryDomainProvider,
+    SecurityTxtDomainProvider.name: SecurityTxtDomainProvider,
     WhoisDomainProvider.name: WhoisDomainProvider,
 }
 
