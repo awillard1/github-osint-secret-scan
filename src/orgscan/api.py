@@ -3,9 +3,11 @@ from __future__ import annotations
 from urllib.parse import parse_qs, urlparse
 
 import uvicorn
-from fastapi import FastAPI, Query
+from fastapi import Depends, FastAPI, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from orgscan.auth import AuthContext, auth_dependency, resolve_requested_tenants, serialize_auth_context
+from orgscan.config import Settings
 from orgscan.db import create_session_factory, init_db
 from orgscan.reporting import build_summary, finding_rows, finding_trends, relationship_graph, render_dashboard_html
 from orgscan.repositories import Storage
@@ -17,9 +19,9 @@ class OrgscanApiService:
         init_db(self.database_url)
         self.session_factory = create_session_factory(self.database_url)
 
-    def _summary_payload(self) -> dict[str, object]:
+    def _summary_payload(self, *, tenant_keys: list[str] | None = None) -> dict[str, object]:
         with self.session_factory() as session:
-            return build_summary(Storage(session))
+            return build_summary(Storage(session), tenant_keys=tenant_keys)
 
     def _findings_payload(
         self,
@@ -29,57 +31,25 @@ class OrgscanApiService:
         severity: str | None = None,
         category: str | None = None,
         confidence: str | None = None,
+        tenant_keys: list[str] | None = None,
     ) -> dict[str, object]:
         with self.session_factory() as session:
-            storage = Storage(session)
-            findings = storage.list_findings(
-                limit=limit,
-                status=status,
-                severity=severity,
-                category=category,
-                confidence=confidence,
-            )
             return {
-                "findings": [
-                    {
-                        "id": finding.id,
-                        "title": finding.title,
-                        "description": finding.description,
-                        "category": finding.category,
-                        "severity": finding.severity,
-                        "confidence": finding.confidence,
-                        "status": finding.status,
-                        "triage_state": finding.triage_state,
-                        "triage_owner": finding.triage_owner,
-                        "triage_notes": finding.triage_notes,
-                        "source_tool": finding.source_tool,
-                        "source_name": finding.source_name,
-                        "repository_id": finding.repository_id,
-                        "scan_job_id": finding.scan_job_id,
-                        "detected_at": finding.detected_at.isoformat(),
-                        "fingerprint": finding.fingerprint,
-                    }
-                    for finding in findings
-                ]
+                "findings": finding_rows(
+                    Storage(session),
+                    limit=limit,
+                    status=status,
+                    severity=severity,
+                    category=category,
+                    confidence=confidence,
+                    tenant_keys=tenant_keys,
+                )
             }
 
-    def _scheduled_scans_payload(self) -> dict[str, object]:
+    def _scheduled_scans_payload(self, *, tenant_keys: list[str] | None = None) -> dict[str, object]:
         with self.session_factory() as session:
-            storage = Storage(session)
-            return {
-                "scheduled_scans": [
-                    {
-                        "id": scan.id,
-                        "target_type": scan.target_type,
-                        "target_value": scan.target_value,
-                        "scanner_name": scan.scanner_name,
-                        "cadence": scan.cadence,
-                        "enabled": scan.enabled,
-                        "next_run_at": scan.next_run_at.isoformat(),
-                    }
-                    for scan in storage.list_scheduled_scans()
-                ]
-            }
+            scheduled = build_summary(Storage(session), tenant_keys=tenant_keys).get("scheduled_scans", [])
+            return {"scheduled_scans": scheduled}
 
     def _domain_exposures_payload(
         self,
@@ -89,9 +59,14 @@ class OrgscanApiService:
         source_class: str | None = None,
         confidence: str | None = None,
         limit: int = 100,
+        tenant_keys: list[str] | None = None,
     ) -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
+            allowed_domain_ids: set[int] | None = None
+            if tenant_keys is not None:
+                organization_ids = {org.id for org in storage.list_organizations() if org.tenant_key in tenant_keys}
+                allowed_domain_ids = {domain.id for domain in storage.list_domains() if domain.organization_id in organization_ids}
             exposures = storage.list_domain_exposures(
                 domain_id,
                 source_name=source_name,
@@ -99,6 +74,8 @@ class OrgscanApiService:
                 confidence=confidence,
                 limit=limit,
             )
+            if allowed_domain_ids is not None:
+                exposures = [exposure for exposure in exposures if exposure.domain_id in allowed_domain_ids]
             provider_summary: dict[str, int] = {}
             for exposure in exposures:
                 provider_summary[exposure.source_name] = provider_summary.get(exposure.source_name, 0) + 1
@@ -121,21 +98,21 @@ class OrgscanApiService:
                 "provider_summary": provider_summary,
             }
 
-    def _relationship_graph_payload(self, *, limit: int = 200) -> dict[str, object]:
+    def _relationship_graph_payload(self, *, limit: int = 200, tenant_keys: list[str] | None = None) -> dict[str, object]:
         with self.session_factory() as session:
-            return relationship_graph(Storage(session), limit=limit)
+            return relationship_graph(Storage(session), limit=limit, tenant_keys=tenant_keys)
 
-    def _finding_trends_payload(self, *, days: int = 30) -> dict[str, object]:
+    def _finding_trends_payload(self, *, days: int = 30, tenant_keys: list[str] | None = None) -> dict[str, object]:
         with self.session_factory() as session:
-            return {"days": days, "trends": finding_trends(Storage(session), days=days)}
+            return {"days": days, "trends": finding_trends(Storage(session), days=days, tenant_keys=tenant_keys)}
 
-    def _organization_comparison_payload(self) -> dict[str, object]:
+    def _organization_comparison_payload(self, *, tenant_keys: list[str] | None = None) -> dict[str, object]:
         with self.session_factory() as session:
-            return {"organizations": build_summary(Storage(session)).get("organization_comparison", [])}
+            return {"organizations": build_summary(Storage(session), tenant_keys=tenant_keys).get("organization_comparison", [])}
 
-    def _remediation_suggestions_payload(self) -> dict[str, object]:
+    def _remediation_suggestions_payload(self, *, tenant_keys: list[str] | None = None) -> dict[str, object]:
         with self.session_factory() as session:
-            return {"suggestions": build_summary(Storage(session)).get("remediation_suggestions", [])}
+            return {"suggestions": build_summary(Storage(session), tenant_keys=tenant_keys).get("remediation_suggestions", [])}
 
     def _dashboard_html(
         self,
@@ -146,43 +123,25 @@ class OrgscanApiService:
         severity: str | None = None,
         category: str | None = None,
         confidence: str | None = None,
+        tenant_keys: list[str] | None = None,
     ) -> str:
         with self.session_factory() as session:
             storage = Storage(session)
-            summary = build_summary(storage)
-            filtered_rows = [
-                {
-                    "id": finding.id,
-                    "title": finding.title,
-                    "description": finding.description,
-                    "category": finding.category,
-                    "severity": finding.severity,
-                    "confidence": finding.confidence,
-                    "status": finding.status,
-                    "triage_state": finding.triage_state,
-                    "triage_owner": finding.triage_owner,
-                    "triage_notes": finding.triage_notes,
-                    "remediation_due_date": finding.remediation_due_date.isoformat() if finding.remediation_due_date else None,
-                    "source_tool": finding.source_tool,
-                    "source_name": finding.source_name,
-                    "repository_id": finding.repository_id,
-                    "scan_job_id": finding.scan_job_id,
-                    "detected_at": finding.detected_at.isoformat(),
-                    "fingerprint": finding.fingerprint,
-                }
-                for finding in storage.list_findings(
-                    limit=limit,
-                    status=status,
-                    severity=severity,
-                    category=category,
-                    confidence=confidence,
-                )
-            ]
+            summary = build_summary(storage, tenant_keys=tenant_keys)
+            filtered_rows = finding_rows(
+                storage,
+                limit=limit,
+                tenant_keys=tenant_keys,
+                status=status,
+                severity=severity,
+                category=category,
+                confidence=confidence,
+            )
             return render_dashboard_html(
                 summary,
                 filtered_rows,
-                trends=finding_trends(storage, days=days),
-                graph=relationship_graph(storage, limit=200),
+                trends=finding_trends(storage, days=days, tenant_keys=tenant_keys),
+                graph=relationship_graph(storage, limit=200, tenant_keys=tenant_keys),
                 filters={
                     "limit": limit,
                     "days": days,
@@ -201,7 +160,8 @@ class OrgscanApiService:
         if route == "/health":
             return 200, {"status": "ok"}
         if route == "/summary":
-            return 200, self._summary_payload()
+            tenant = params.get("tenant_key", [None])[0]
+            return 200, self._summary_payload(tenant_keys=[tenant] if tenant else None)
         if route == "/findings":
             return 200, self._findings_payload(
                 limit=int(params.get("limit", ["50"])[0]),
@@ -209,9 +169,11 @@ class OrgscanApiService:
                 severity=params.get("severity", [None])[0],
                 category=params.get("category", [None])[0],
                 confidence=params.get("confidence", [None])[0],
+                tenant_keys=[params["tenant_key"][0]] if "tenant_key" in params and params["tenant_key"][0] else None,
             )
         if route == "/scheduled-scans":
-            return 200, self._scheduled_scans_payload()
+            tenant = params.get("tenant_key", [None])[0]
+            return 200, self._scheduled_scans_payload(tenant_keys=[tenant] if tenant else None)
         if route == "/domain-exposures":
             return 200, self._domain_exposures_payload(
                 domain_id=int(params["domain_id"][0]) if "domain_id" in params and params["domain_id"][0] else None,
@@ -219,21 +181,35 @@ class OrgscanApiService:
                 source_class=params.get("source_class", [None])[0],
                 confidence=params.get("confidence", [None])[0],
                 limit=int(params.get("limit", ["100"])[0]),
+                tenant_keys=[params["tenant_key"][0]] if "tenant_key" in params and params["tenant_key"][0] else None,
             )
         if route == "/relationships/graph":
-            return 200, self._relationship_graph_payload(limit=int(params.get("limit", ["200"])[0]))
+            return 200, self._relationship_graph_payload(
+                limit=int(params.get("limit", ["200"])[0]),
+                tenant_keys=[params["tenant_key"][0]] if "tenant_key" in params and params["tenant_key"][0] else None,
+            )
         if route == "/trends/findings":
-            return 200, self._finding_trends_payload(days=int(params.get("days", ["30"])[0]))
+            return 200, self._finding_trends_payload(
+                days=int(params.get("days", ["30"])[0]),
+                tenant_keys=[params["tenant_key"][0]] if "tenant_key" in params and params["tenant_key"][0] else None,
+            )
         if route == "/comparisons/organizations":
-            return 200, self._organization_comparison_payload()
+            tenant = params.get("tenant_key", [None])[0]
+            return 200, self._organization_comparison_payload(tenant_keys=[tenant] if tenant else None)
         if route == "/remediation/suggestions":
-            return 200, self._remediation_suggestions_payload()
+            tenant = params.get("tenant_key", [None])[0]
+            return 200, self._remediation_suggestions_payload(tenant_keys=[tenant] if tenant else None)
         return 404, {"error": f"Unknown route: {route}"}
 
 
 def create_app(database_url: str) -> FastAPI:
+    settings = Settings(database_url=database_url)
     service = OrgscanApiService(database_url)
     app = FastAPI(title="orgscan", version="0.1.0")
+    reader_auth = auth_dependency(settings, required_role="reader")
+
+    def _tenant_keys(auth: AuthContext, tenant_key: str | None) -> list[str] | None:
+        return resolve_requested_tenants(auth, tenant_key)
 
     @app.get("/", include_in_schema=False)
     def root() -> RedirectResponse:
@@ -243,9 +219,23 @@ def create_app(database_url: str) -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/auth/context")
+    def auth_context(
+        tenant_key: str | None = None,
+        auth: AuthContext = Depends(reader_auth),
+    ) -> dict[str, object]:
+        return {
+            "auth": serialize_auth_context(auth),
+            "requested_tenant": tenant_key,
+            "effective_tenants": _tenant_keys(auth, tenant_key),
+        }
+
     @app.get("/summary")
-    def summary() -> dict[str, object]:
-        return service._summary_payload()
+    def summary(
+        tenant_key: str | None = None,
+        auth: AuthContext = Depends(reader_auth),
+    ) -> dict[str, object]:
+        return service._summary_payload(tenant_keys=_tenant_keys(auth, tenant_key))
 
     @app.get("/findings")
     def findings(
@@ -254,6 +244,8 @@ def create_app(database_url: str) -> FastAPI:
         severity: str | None = None,
         category: str | None = None,
         confidence: str | None = None,
+        tenant_key: str | None = None,
+        auth: AuthContext = Depends(reader_auth),
     ) -> dict[str, object]:
         return service._findings_payload(
             limit=limit,
@@ -261,11 +253,15 @@ def create_app(database_url: str) -> FastAPI:
             severity=severity,
             category=category,
             confidence=confidence,
+            tenant_keys=_tenant_keys(auth, tenant_key),
         )
 
     @app.get("/scheduled-scans")
-    def scheduled_scans() -> dict[str, object]:
-        return service._scheduled_scans_payload()
+    def scheduled_scans(
+        tenant_key: str | None = None,
+        auth: AuthContext = Depends(reader_auth),
+    ) -> dict[str, object]:
+        return service._scheduled_scans_payload(tenant_keys=_tenant_keys(auth, tenant_key))
 
     @app.get("/domain-exposures")
     def domain_exposures(
@@ -274,6 +270,8 @@ def create_app(database_url: str) -> FastAPI:
         source_name: str | None = None,
         source_class: str | None = None,
         confidence: str | None = None,
+        tenant_key: str | None = None,
+        auth: AuthContext = Depends(reader_auth),
     ) -> dict[str, object]:
         return service._domain_exposures_payload(
             domain_id=domain_id,
@@ -281,23 +279,38 @@ def create_app(database_url: str) -> FastAPI:
             source_class=source_class,
             confidence=confidence,
             limit=limit,
+            tenant_keys=_tenant_keys(auth, tenant_key),
         )
 
     @app.get("/relationships/graph")
-    def relationships(limit: int = Query(200, ge=1, le=1000)) -> dict[str, object]:
-        return service._relationship_graph_payload(limit=limit)
+    def relationships(
+        limit: int = Query(200, ge=1, le=1000),
+        tenant_key: str | None = None,
+        auth: AuthContext = Depends(reader_auth),
+    ) -> dict[str, object]:
+        return service._relationship_graph_payload(limit=limit, tenant_keys=_tenant_keys(auth, tenant_key))
 
     @app.get("/trends/findings")
-    def trends(days: int = Query(30, ge=1, le=365)) -> dict[str, object]:
-        return service._finding_trends_payload(days=days)
+    def trends(
+        days: int = Query(30, ge=1, le=365),
+        tenant_key: str | None = None,
+        auth: AuthContext = Depends(reader_auth),
+    ) -> dict[str, object]:
+        return service._finding_trends_payload(days=days, tenant_keys=_tenant_keys(auth, tenant_key))
 
     @app.get("/comparisons/organizations")
-    def organization_comparisons() -> dict[str, object]:
-        return service._organization_comparison_payload()
+    def organization_comparisons(
+        tenant_key: str | None = None,
+        auth: AuthContext = Depends(reader_auth),
+    ) -> dict[str, object]:
+        return service._organization_comparison_payload(tenant_keys=_tenant_keys(auth, tenant_key))
 
     @app.get("/remediation/suggestions")
-    def remediation_suggestions_route() -> dict[str, object]:
-        return service._remediation_suggestions_payload()
+    def remediation_suggestions_route(
+        tenant_key: str | None = None,
+        auth: AuthContext = Depends(reader_auth),
+    ) -> dict[str, object]:
+        return service._remediation_suggestions_payload(tenant_keys=_tenant_keys(auth, tenant_key))
 
     @app.get("/dashboard", response_class=HTMLResponse)
     def dashboard(
@@ -307,6 +320,8 @@ def create_app(database_url: str) -> FastAPI:
         severity: str | None = None,
         category: str | None = None,
         confidence: str | None = None,
+        tenant_key: str | None = None,
+        auth: AuthContext = Depends(reader_auth),
     ) -> HTMLResponse:
         return HTMLResponse(
             service._dashboard_html(
@@ -316,6 +331,7 @@ def create_app(database_url: str) -> FastAPI:
                 severity=severity,
                 category=category,
                 confidence=confidence,
+                tenant_keys=_tenant_keys(auth, tenant_key),
             )
         )
 

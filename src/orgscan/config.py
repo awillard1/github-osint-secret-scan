@@ -25,8 +25,13 @@ class Settings(BaseSettings):
     crtsh_base_url: str = "https://crt.sh"
     github_token: str | None = None
     http_timeout_seconds: int = 15
+    outbound_requests_per_minute: int = 0
+    outbound_min_interval_seconds: float = 0.0
     redis_url: str = "redis://127.0.0.1:6379/0"
     scan_queue_name: str = "orgscan:scans"
+    scan_queue_retry_max: int = 2
+    scan_queue_retry_intervals: str = "30,120"
+    api_tokens_json: str = ""
     hibp_base_url: str = "https://haveibeenpwned.com/api/v3"
     hibp_api_key: str | None = None
     dehashed_base_url: str = "https://api.dehashed.com/search"
@@ -52,11 +57,21 @@ class Settings(BaseSettings):
         self.data_dir.mkdir(parents=True, exist_ok=True)
         return self.data_dir
 
+    def mirror_base_dir(self) -> Path:
+        return self.ensure_data_dir() / "mirrors"
+
     def as_dict(self, *, include_secrets: bool = False) -> dict[str, object]:
         payload = self.model_dump()
         payload["data_dir"] = str(self.data_dir)
         if not include_secrets:
-            for secret_field in ("github_token", "hibp_api_key", "dehashed_api_key", "intelligencex_api_key", "dehashed_email"):
+            for secret_field in (
+                "github_token",
+                "hibp_api_key",
+                "dehashed_api_key",
+                "intelligencex_api_key",
+                "dehashed_email",
+                "api_tokens_json",
+            ):
                 if payload.get(secret_field):
                     payload[secret_field] = "<redacted>"
         return payload
@@ -66,6 +81,9 @@ class Settings(BaseSettings):
 
     def internal_hostname_suffix_list(self) -> list[str]:
         return [value.strip().lstrip(".") for value in self.internal_hostname_suffixes.split(",") if value.strip()]
+
+    def scan_queue_retry_interval_list(self) -> list[int]:
+        return [int(value.strip()) for value in self.scan_queue_retry_intervals.split(",") if value.strip()]
 
 
 def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
@@ -78,8 +96,13 @@ def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
         "ORGSCAN_CRTSH_BASE_URL": "https://crt.sh",
         "ORGSCAN_GITHUB_TOKEN": "",
         "ORGSCAN_HTTP_TIMEOUT_SECONDS": 15,
+        "ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE": 0,
+        "ORGSCAN_OUTBOUND_MIN_INTERVAL_SECONDS": 0,
         "ORGSCAN_REDIS_URL": "redis://127.0.0.1:6379/0",
         "ORGSCAN_SCAN_QUEUE_NAME": "orgscan:scans",
+        "ORGSCAN_SCAN_QUEUE_RETRY_MAX": 2,
+        "ORGSCAN_SCAN_QUEUE_RETRY_INTERVALS": "30,120",
+        'ORGSCAN_API_TOKENS_JSON': '[{"name":"viewer","token":"change-me","role":"reader","tenants":["*"]}]',
         "ORGSCAN_HIBP_BASE_URL": "https://haveibeenpwned.com/api/v3",
         "ORGSCAN_HIBP_API_KEY": "",
         "ORGSCAN_DEHASHED_BASE_URL": "https://api.dehashed.com/search",

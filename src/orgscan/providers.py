@@ -17,6 +17,7 @@ import dns.exception
 import dns.resolver
 
 from orgscan.config import Settings
+from orgscan.rate_limit import wait_for_rate_limit
 from orgscan.repositories import Storage
 
 
@@ -57,6 +58,8 @@ def _require_setting(value: str | None, message: str) -> str:
 def _request_json(
     url: str,
     *,
+    settings: Settings | None = None,
+    scope: str = "domain-provider",
     headers: dict[str, str] | None = None,
     method: str = "GET",
     data: bytes | None = None,
@@ -65,6 +68,7 @@ def _request_json(
 ) -> object:
     request = Request(url, headers=headers or {}, method=method, data=data)
     try:
+        wait_for_rate_limit(settings, scope)
         with urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8") or "null")
     except HTTPError as exc:
@@ -517,6 +521,8 @@ class HaveIBeenPwnedDomainProvider(DomainIntelligenceProvider):
         api_key = _require_setting(settings.hibp_api_key, "HIBP provider requires ORGSCAN_HIBP_API_KEY.")
         payload = _request_json(
             f"{settings.hibp_base_url.rstrip('/')}/breaches",
+            settings=settings,
+            scope="hibp",
             headers={
                 "User-Agent": "orgscan/0.1.0",
                 "hibp-api-key": api_key,
@@ -578,6 +584,8 @@ class DeHashedDomainProvider(DomainIntelligenceProvider):
         auth = b64encode(f"{email}:{api_key}".encode("utf-8")).decode("ascii")
         payload = _request_json(
             f"{settings.dehashed_base_url.rstrip('/')}?{urlencode({'query': f'domain:{domain_name}'})}",
+            settings=settings,
+            scope="dehashed",
             headers={
                 "User-Agent": "orgscan/0.1.0",
                 "Authorization": f"Basic {auth}",
@@ -651,6 +659,8 @@ class IntelligenceXDomainProvider(DomainIntelligenceProvider):
         )
         payload = _request_json(
             f"{settings.intelligencex_base_url.rstrip('/')}/intelligent/search",
+            settings=settings,
+            scope="intelligencex",
             method="POST",
             data=json.dumps({"term": domain_name, "maxresults": 20, "media": 0}).encode("utf-8"),
             headers={

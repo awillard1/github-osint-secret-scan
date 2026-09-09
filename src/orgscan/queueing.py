@@ -6,7 +6,7 @@ from typing import Any
 
 from redis import Redis
 from redis.exceptions import RedisError
-from rq import Queue, SimpleWorker
+from rq import Queue, Retry, SimpleWorker
 from rq.job import Job
 from rq.registry import FailedJobRegistry, StartedJobRegistry
 
@@ -36,6 +36,14 @@ def get_scan_queue(settings: Settings, *, connection: Redis | None = None, is_as
     return Queue(name=settings.scan_queue_name, connection=connection or get_queue_connection(settings), is_async=is_async)
 
 
+def _queue_retry(settings: Settings) -> Retry | None:
+    max_attempts = max(settings.scan_queue_retry_max, 0)
+    if max_attempts <= 0:
+        return None
+    intervals = settings.scan_queue_retry_interval_list()
+    return Retry(max=max_attempts, interval=intervals or [30])
+
+
 def queue_status(settings: Settings, *, connection: Redis | None = None) -> dict[str, Any]:
     queue = get_scan_queue(settings, connection=connection)
     failed = FailedJobRegistry(queue=queue)
@@ -44,6 +52,8 @@ def queue_status(settings: Settings, *, connection: Redis | None = None) -> dict
         "backend": "rq",
         "redis_url": settings.redis_url,
         "queue_name": settings.scan_queue_name,
+        "retry_max": settings.scan_queue_retry_max,
+        "retry_intervals": settings.scan_queue_retry_interval_list(),
         "pending_jobs": queue.count,
         "started_jobs": len(started.get_job_ids()),
         "failed_jobs": len(failed.get_job_ids()),
@@ -74,12 +84,15 @@ def enqueue_due_scheduled_scans(
                 settings.database_url,
                 scheduled.id,
                 job_timeout=600,
+                retry=_queue_retry(settings),
             )
             metadata.update(
                 {
                     "queue_status": "queued",
                     "queue_name": settings.scan_queue_name,
                     "queue_job_id": job.id,
+                    "retry_max": settings.scan_queue_retry_max,
+                    "retry_intervals": settings.scan_queue_retry_interval_list(),
                     "queued_at": datetime.now(UTC).isoformat(),
                     "last_error": None,
                 }

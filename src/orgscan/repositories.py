@@ -334,13 +334,13 @@ class Storage:
 
     def list_findings(
         self,
-        limit: int = 50,
+        limit: int | None = 50,
         status: str | None = None,
         category: str | None = None,
         severity: str | None = None,
         confidence: str | None = None,
     ) -> Sequence[Finding]:
-        query = select(Finding).order_by(Finding.detected_at.desc(), Finding.id.desc()).limit(limit)
+        query = select(Finding).order_by(Finding.detected_at.desc(), Finding.id.desc())
         if status:
             query = query.where(Finding.status == status)
         if category:
@@ -349,6 +349,8 @@ class Storage:
             query = query.where(Finding.severity == severity)
         if confidence:
             query = query.where(Finding.confidence == confidence)
+        if limit is not None:
+            query = query.limit(limit)
         return list(self.session.scalars(query))
 
     def get_finding(self, finding_id: int) -> Finding | None:
@@ -448,12 +450,16 @@ class Storage:
             query = query.where(IdentityCorrelation.domain_id == domain_id)
         return list(self.session.scalars(query))
 
-    def list_scan_jobs(self, limit: int = 25) -> Sequence[ScanJob]:
-        query = select(ScanJob).order_by(ScanJob.created_at.desc(), ScanJob.id.desc()).limit(limit)
+    def list_scan_jobs(self, limit: int | None = 25) -> Sequence[ScanJob]:
+        query = select(ScanJob).order_by(ScanJob.created_at.desc(), ScanJob.id.desc())
+        if limit is not None:
+            query = query.limit(limit)
         return list(self.session.scalars(query))
 
-    def list_tool_runs(self, limit: int = 25) -> Sequence[ToolRun]:
-        query = select(ToolRun).order_by(ToolRun.created_at.desc(), ToolRun.id.desc()).limit(limit)
+    def list_tool_runs(self, limit: int | None = 25) -> Sequence[ToolRun]:
+        query = select(ToolRun).order_by(ToolRun.created_at.desc(), ToolRun.id.desc())
+        if limit is not None:
+            query = query.limit(limit)
         return list(self.session.scalars(query))
 
     def list_scheduled_scans(self, enabled_only: bool = False) -> Sequence[ScheduledScan]:
@@ -462,8 +468,10 @@ class Storage:
             query = query.where(ScheduledScan.enabled.is_(True))
         return list(self.session.scalars(query))
 
-    def list_relationships(self, limit: int = 250) -> Sequence[Relationship]:
-        query = select(Relationship).order_by(Relationship.created_at.desc(), Relationship.id.desc()).limit(limit)
+    def list_relationships(self, limit: int | None = 250) -> Sequence[Relationship]:
+        query = select(Relationship).order_by(Relationship.created_at.desc(), Relationship.id.desc())
+        if limit is not None:
+            query = query.limit(limit)
         return list(self.session.scalars(query))
 
     def list_due_scheduled_scans(self, now: datetime | None = None) -> Sequence[ScheduledScan]:

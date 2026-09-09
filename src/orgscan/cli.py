@@ -16,6 +16,7 @@ from orgscan.db import create_session_factory, current_db_revision, init_db
 from orgscan.discovery import DiscoveryError, GitHubDiscoveryClient
 from orgscan.expansion import GitHubExpansionEngine
 from orgscan.logging_config import setup_logging
+from orgscan.mirroring import MirrorError, scan_repository_mirror, sync_repository_mirror
 from orgscan.models import Finding
 from orgscan.providers import DomainProviderError, available_domain_provider_names, get_domain_provider
 from orgscan.queueing import QueueBackendError, enqueue_due_scheduled_scans, queue_status, run_worker
@@ -130,11 +131,12 @@ def _resolve_asset_context(
     organization: str | None,
     repository: str | None,
     provider: str,
+    tenant_key: str | None = None,
 ) -> tuple[int | None, int | None]:
     organization_id = None
     repository_id = None
     if organization:
-        organization_record, _ = storage.get_or_create_organization(organization)
+        organization_record, _ = storage.get_or_create_organization(organization, tenant_key=tenant_key)
         organization_id = organization_record.id
     if repository:
         repository_record, _ = storage.get_or_create_repository(
@@ -268,6 +270,7 @@ def add_target(
         help="Optional organization name to associate with domains, repositories, or accounts.",
     ),
     provider: str = typer.Option("github", "--provider", help="Provider name for repository/account targets."),
+    tenant_key: str | None = typer.Option(None, "--tenant-key", help="Optional tenant scope for organization-linked records."),
 ) -> None:
     settings = _settings()
     init_db(settings.database_url)
@@ -277,11 +280,11 @@ def add_target(
         storage = Storage(session)
         organization_id = None
         if organization:
-            org_record, _ = storage.get_or_create_organization(organization)
+            org_record, _ = storage.get_or_create_organization(organization, tenant_key=tenant_key)
             organization_id = org_record.id
 
         if target_type == TargetType.ORGANIZATION:
-            record, created = storage.get_or_create_organization(value)
+            record, created = storage.get_or_create_organization(value, tenant_key=tenant_key)
         elif target_type == TargetType.DOMAIN:
             record, created = storage.get_or_create_domain(value, organization_id=organization_id)
         elif target_type == TargetType.REPOSITORY:
@@ -325,6 +328,7 @@ def discover(
     value: str,
     limit: int = typer.Option(10, "--limit", min=1, max=100, help="Maximum repositories to ingest for organization discovery."),
     provider: str = typer.Option("local-metadata", "--provider", help="Domain provider to use for domain discovery."),
+    tenant_key: str | None = typer.Option(None, "--tenant-key", help="Optional tenant scope for discovered organization records."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
@@ -393,6 +397,7 @@ def discover(
             if record.owner_type.lower() == "organization":
                 organization_record, _ = storage.get_or_create_organization(
                     record.owner_login,
+                    tenant_key=tenant_key,
                     github_handle=record.owner_login,
                 )
                 organization_id = organization_record.id
@@ -686,6 +691,7 @@ def scan(
     organization: str | None = typer.Option(None, "--organization", help="Optional organization association."),
     repository: str | None = typer.Option(None, "--repository", help="Optional repository association."),
     provider: str = typer.Option("github", "--provider", help="Provider name for repository records."),
+    tenant_key: str | None = typer.Option(None, "--tenant-key", help="Optional tenant scope for associated organization."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     if target_type != ScanTargetType.PATH:
@@ -705,6 +711,7 @@ def scan(
             organization=organization,
             repository=repository,
             provider=provider,
+            tenant_key=tenant_key,
         )
 
         try:
@@ -799,6 +806,7 @@ def schedule_scan(
     cadence: ScanCadence = typer.Option(ScanCadence.DAILY, "--cadence", help="How often to rerun the scan."),
     organization: str | None = typer.Option(None, "--organization", help="Optional organization association."),
     repository: str | None = typer.Option(None, "--repository", help="Optional repository association."),
+    tenant_key: str | None = typer.Option(None, "--tenant-key", help="Optional tenant scope for associated organization."),
 ) -> None:
     settings = _settings()
     init_db(settings.database_url)
@@ -810,6 +818,7 @@ def schedule_scan(
             organization=organization,
             repository=repository,
             provider="github",
+            tenant_key=tenant_key,
         )
         scheduled = storage.create_scheduled_scan(
             "path",
@@ -883,6 +892,115 @@ def enqueue_scheduled(
         typer.echo(f"Enqueued {len(results)} scheduled scan(s) onto {status['queue_name']}.")
 
 
+@app.command("sync-mirror")
+def sync_mirror(
+    repository: str = typer.Argument(..., help="Repository full name, such as owner/name."),
+    provider: str = typer.Option("github", "--provider", help="Repository provider name."),
+    clone_url: str | None = typer.Option(None, "--clone-url", help="Optional explicit clone URL."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        try:
+            record, created = sync_repository_mirror(
+                storage,
+                settings=settings,
+                repository_full_name=repository,
+                provider=provider,
+                clone_url=clone_url,
+            )
+        except MirrorError as exc:
+            typer.echo(f"Mirror sync failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        session.commit()
+    payload = {
+        "repository": record.full_name,
+        "mirror_path": record.mirror_path,
+        "last_mirrored_at": record.last_mirrored_at.isoformat() if record.last_mirrored_at else None,
+        "created": created,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2))
+    else:
+        typer.echo(f"Synchronized mirror for {record.full_name} at {record.mirror_path}")
+
+
+@app.command("sync-mirrors")
+def sync_mirrors(
+    organization: str | None = typer.Option(None, "--organization", help="Only sync repositories for this organization."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        repositories = [
+            repository
+            for repository in storage.list_repositories()
+            if organization is None or (repository.organization and repository.organization.name == organization)
+        ]
+        payload = []
+        for repository_record in repositories:
+            try:
+                synced, _ = sync_repository_mirror(
+                    storage,
+                    settings=settings,
+                    repository_full_name=repository_record.full_name,
+                    provider=repository_record.provider,
+                    clone_url=repository_record.url,
+                )
+            except MirrorError as exc:
+                payload.append({"repository": repository_record.full_name, "status": "failed", "error": str(exc)})
+                continue
+            payload.append({"repository": synced.full_name, "status": "ok", "mirror_path": synced.mirror_path})
+        session.commit()
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2))
+    else:
+        typer.echo(f"Synchronized {sum(1 for row in payload if row['status'] == 'ok')} mirror(s).")
+
+
+@app.command("scan-mirror")
+def scan_mirror(
+    repository: str = typer.Argument(..., help="Repository full name, such as owner/name."),
+    scanner: str = typer.Option("git-history-patterns", "--scanner", help="Scanner implementation to run against the mirror."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        try:
+            result = scan_repository_mirror(
+                storage,
+                settings=settings,
+                repository_full_name=repository,
+                scanner_name=scanner,
+            )
+        except MirrorError as exc:
+            typer.echo(f"Mirror scan failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        session.commit()
+    payload = {
+        "repository": repository,
+        "scanner": result.scanner,
+        "target": result.target,
+        "scan_job_id": result.scan_job_id,
+        "tool_run_id": result.tool_run_id,
+        "findings": result.findings,
+        "finding_ids": result.finding_ids,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        typer.echo(f"Completed mirror scan for {repository} with {result.findings} finding(s).")
+
+
 @app.command("queue-status")
 def queue_status_command(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
@@ -899,7 +1017,8 @@ def queue_status_command(
     else:
         typer.echo(
             f"backend={payload['backend']} queue={payload['queue_name']} pending={payload['pending_jobs']} "
-            f"started={payload['started_jobs']} failed={payload['failed_jobs']}"
+            f"started={payload['started_jobs']} failed={payload['failed_jobs']} "
+            f"retry_max={payload['retry_max']} retry_intervals={payload['retry_intervals']}"
         )
 
 

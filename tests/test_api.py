@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -139,3 +140,66 @@ def test_fastapi_dashboard_and_json_routes(tmp_path: Path) -> None:
     assert "organizations" in comparisons.json()
     assert remediation.status_code == 200
     assert "suggestions" in remediation.json()
+
+
+def test_fastapi_token_auth_and_tenant_scoping(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'tenant.db'}"
+    monkeypatch.setenv(
+        "ORGSCAN_API_TOKENS_JSON",
+        json.dumps(
+            [
+                {"name": "tenant-a-reader", "token": "tenant-a-token", "role": "reader", "tenants": ["tenant-a"]},
+                {"name": "global-admin", "token": "admin-token", "role": "admin", "tenants": ["*"]},
+            ]
+        ),
+    )
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        org_a, _ = storage.get_or_create_organization("tenant-a-org", tenant_key="tenant-a")
+        repo_a, _ = storage.get_or_create_repository("tenant-a/app", organization_id=org_a.id)
+        storage.create_finding(
+            CanonicalFinding(
+                source_tool="custom-patterns",
+                source_name="custom-patterns",
+                category="secret",
+                title="Tenant A finding",
+                description="Visible only to tenant A",
+                severity="high",
+                organization_id=org_a.id,
+                repository_id=repo_a.id,
+            )
+        )
+        org_b, _ = storage.get_or_create_organization("tenant-b-org", tenant_key="tenant-b")
+        repo_b, _ = storage.get_or_create_repository("tenant-b/app", organization_id=org_b.id)
+        storage.create_finding(
+            CanonicalFinding(
+                source_tool="custom-patterns",
+                source_name="custom-patterns",
+                category="secret",
+                title="Tenant B finding",
+                description="Visible only to tenant B",
+                severity="critical",
+                organization_id=org_b.id,
+                repository_id=repo_b.id,
+            )
+        )
+        session.commit()
+
+    client = TestClient(create_app(database_url))
+    unauthorized = client.get("/summary")
+    context = client.get("/auth/context", headers={"X-Orgscan-Token": "tenant-a-token"})
+    tenant_a = client.get("/summary", headers={"X-Orgscan-Token": "tenant-a-token"})
+    forbidden = client.get("/summary?tenant_key=tenant-b", headers={"X-Orgscan-Token": "tenant-a-token"})
+    tenant_b = client.get("/summary?tenant_key=tenant-b", headers={"X-Orgscan-Token": "admin-token"})
+
+    assert unauthorized.status_code == 401
+    assert context.status_code == 200
+    assert context.json()["effective_tenants"] == ["tenant-a"]
+    assert tenant_a.status_code == 200
+    assert tenant_a.json()["counts"]["findings"] == 1
+    assert tenant_a.json()["organizations"] == ["tenant-a-org"]
+    assert forbidden.status_code == 403
+    assert tenant_b.status_code == 200
+    assert tenant_b.json()["organizations"] == ["tenant-b-org"]

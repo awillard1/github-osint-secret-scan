@@ -6,6 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from orgscan.config import Settings
+from orgscan.rate_limit import wait_for_rate_limit
 
 
 class DiscoveryError(RuntimeError):
@@ -55,6 +56,7 @@ class GitHubAccountRecord:
 
 class GitHubDiscoveryClient:
     def __init__(self, settings: Settings) -> None:
+        self.settings = settings
         self.base_url = settings.github_api_base_url.rstrip("/")
         self.token = settings.github_token
         self.timeout = settings.http_timeout_seconds
@@ -93,6 +95,7 @@ class GitHubDiscoveryClient:
 
         request = Request(f"{self.base_url}{path}", headers=headers)
         try:
+            wait_for_rate_limit(self.settings, "github-api")
             with urlopen(request, timeout=self.timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:

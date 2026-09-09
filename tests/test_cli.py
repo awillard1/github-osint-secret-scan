@@ -48,9 +48,12 @@ def test_cli_add_target_and_findings(monkeypatch, tmp_path: Path) -> None:
     assert add_org_result.exit_code == 0
     assert "Created organization" in add_org_result.stdout
 
+    add_tenant_org_result = runner.invoke(app, ["add-target", "organization", "tenant-org", "--tenant-key", "tenant-a"])
+    assert add_tenant_org_result.exit_code == 0
+
     add_domain_result = runner.invoke(
         app,
-        ["add-target", "domain", "example.com", "--organization", "example-org"],
+        ["add-target", "domain", "example.com", "--organization", "example-org", "--tenant-key", "tenant-a"],
     )
     assert add_domain_result.exit_code == 0
     assert "Created domain" in add_domain_result.stdout
@@ -59,6 +62,7 @@ def test_cli_add_target_and_findings(monkeypatch, tmp_path: Path) -> None:
     with session_factory() as session:
         storage = Storage(session)
         org = storage.get_organization_by_name("example-org")
+        tenant_org = storage.get_organization_by_name("tenant-org")
         domain = storage.get_domain_by_name("example.com")
         storage.create_finding(
             CanonicalFinding(
@@ -73,6 +77,8 @@ def test_cli_add_target_and_findings(monkeypatch, tmp_path: Path) -> None:
             )
         )
         session.commit()
+    assert tenant_org is not None
+    assert tenant_org.tenant_key == "tenant-a"
 
     findings_result = runner.invoke(app, ["findings"])
     assert findings_result.exit_code == 0
@@ -121,11 +127,13 @@ def test_cli_config_and_init_config(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
     monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ORGSCAN_GITHUB_TOKEN", "example-token")
+    monkeypatch.setenv("ORGSCAN_API_TOKENS_JSON", '[{"name":"viewer","token":"secret-token","role":"reader","tenants":["tenant-a"]}]')
     get_settings.cache_clear()
 
     config_result = runner.invoke(app, ["config", "--json"])
     assert config_result.exit_code == 0
     assert '"github_token": "<redacted>"' in config_result.stdout
+    assert '"api_tokens_json": "<redacted>"' in config_result.stdout
     assert '"hibp_api_key": "<redacted>"' not in config_result.stdout
     assert '"projectdiscovery"' in config_result.stdout
     assert '"hibp"' in config_result.stdout
@@ -145,6 +153,9 @@ def test_cli_config_and_init_config(monkeypatch, tmp_path: Path) -> None:
     assert "ORGSCAN_HIBP_API_KEY=" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_DEHASHED_API_KEY=" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_INTELLIGENCEX_API_KEY=" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE=0" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_SCAN_QUEUE_RETRY_INTERVALS=30,120" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_API_TOKENS_JSON=" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_YARA_BINARY=yara" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_RG_BINARY=rg" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_SUBFINDER_BINARY=subfinder" in env_path.read_text(encoding="utf-8")

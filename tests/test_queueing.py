@@ -37,7 +37,10 @@ def test_rq_queue_enqueues_and_processes_scheduled_scan(tmp_path: Path) -> None:
 
     queued = enqueue_due_scheduled_scans(settings, limit=10, connection=connection)
     assert len(queued) == 1
-    assert queue_status(settings, connection=connection)["pending_jobs"] == 1
+    status = queue_status(settings, connection=connection)
+    assert status["pending_jobs"] == 1
+    assert status["retry_max"] == 2
+    assert status["retry_intervals"] == [30, 120]
 
     worked = run_worker(settings, burst=True, connection=connection, max_jobs=1)
     assert worked is True
