@@ -166,6 +166,8 @@ def test_cli_config_and_init_config(monkeypatch, tmp_path: Path) -> None:
     assert '"api_tokens_json": "<redacted>"' in config_result.stdout
     assert '"hibp_api_key": "<redacted>"' not in config_result.stdout
     assert '"projectdiscovery"' in config_result.stdout
+    assert '"securitytxt"' in config_result.stdout
+    assert '"github-search"' in config_result.stdout
     assert '"hibp"' in config_result.stdout
     assert '"dehashed"' in config_result.stdout
     assert '"intelligencex"' in config_result.stdout
@@ -517,6 +519,45 @@ def test_cli_paid_domain_discovery_and_enriched_aggregate(monkeypatch, tmp_path:
     get_settings.cache_clear()
 
     monkeypatch.setattr(
+        "orgscan.providers.SecurityTxtDomainProvider._fetch_securitytxt",
+        lambda self, domain_name: (
+            "Contact: mailto:security@example.org\nPolicy: https://example.org/policy",
+            f"https://{domain_name}/.well-known/security.txt",
+        ),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.GitHubSearchDomainProvider._search_repositories",
+        lambda self, domain_name: [
+            {
+                "full_name": "example/repo",
+                "description": f"tracking {domain_name}",
+                "html_url": "https://github.com/example/repo",
+                "owner": {"login": "example"},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.GitHubSearchDomainProvider._search_code",
+        lambda self, domain_name: [
+            {
+                "path": "docs/ops.md",
+                "html_url": "https://github.com/example/repo/blob/main/docs/ops.md",
+                "repository": {"full_name": "example/repo", "owner": {"login": "example"}},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.GitHubSearchDomainProvider._search_issues",
+        lambda self, domain_name: [
+            {
+                "title": f"Rotate secrets for {domain_name}",
+                "state": "open",
+                "html_url": "https://github.com/example/repo/issues/1",
+                "user": {"login": "analyst"},
+            }
+        ],
+    )
+    monkeypatch.setattr(
         "orgscan.providers.HaveIBeenPwnedDomainProvider._fetch_breaches",
         lambda self: [{"Name": "ExampleBreach", "Title": "Example Breach", "Domain": "example.org", "BreachDate": "2024-01-01"}],
     )
@@ -528,6 +569,16 @@ def test_cli_paid_domain_discovery_and_enriched_aggregate(monkeypatch, tmp_path:
         "orgscan.providers.IntelligenceXDomainProvider._search_results",
         lambda self, domain_name: [{"type": "paste", "name": "public-paste", "selectorvalue": f"ops@{domain_name}"}],
     )
+
+    securitytxt_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "securitytxt", "--json"])
+    assert securitytxt_result.exit_code == 0
+    assert "security.txt contact for example.org: mailto:security@example.org" in securitytxt_result.stdout
+
+    github_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "github-search", "--json"])
+    assert github_result.exit_code == 0
+    assert "GitHub repository mentions example.org: example/repo" in github_result.stdout
+    assert "GitHub code search match for example.org: example/repo:docs/ops.md" in github_result.stdout
+    assert "GitHub issue mentions example.org: Rotate secrets for example.org state=open" in github_result.stdout
 
     hibp_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "hibp", "--json"])
     assert hibp_result.exit_code == 0
@@ -561,11 +612,21 @@ def test_cli_paid_domain_discovery_and_enriched_aggregate(monkeypatch, tmp_path:
         "orgscan.providers.DnsDomainProvider.discover",
         lambda self, storage, domain_name: DomainProviderResult(exposures=[f"dns {domain_name}"], identity_correlations=[], warnings=[]),
     )
+    monkeypatch.setattr(
+        "orgscan.providers.SecurityTxtDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(exposures=[f"securitytxt {domain_name}"], identity_correlations=[], warnings=[]),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.GitHubSearchDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(exposures=[f"github-search {domain_name}"], identity_correlations=[], warnings=[]),
+    )
 
     aggregate_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "all-enriched", "--json"])
     assert aggregate_result.exit_code == 0
     aggregate_payload = json.loads(aggregate_result.stdout)
     assert "local example.org" in aggregate_payload["domain_exposures"]
+    assert "securitytxt example.org" in aggregate_payload["domain_exposures"]
+    assert "github-search example.org" in aggregate_payload["domain_exposures"]
     assert any("HIBP breach linked to example.org" in item for item in aggregate_payload["domain_exposures"])
     assert any("DeHashed exposure for example.org" in item for item in aggregate_payload["domain_exposures"])
     assert any("Intelligence X exposure for example.org" in item for item in aggregate_payload["domain_exposures"])

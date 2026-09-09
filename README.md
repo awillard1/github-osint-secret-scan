@@ -168,13 +168,15 @@ orgscan discover domain example.com --provider crtsh
 orgscan discover domain example.com --provider projectdiscovery
 orgscan discover domain example.com --provider whois
 orgscan discover domain example.com --provider dns
+orgscan discover domain example.com --provider securitytxt
+orgscan discover domain example.com --provider github-search
 orgscan discover domain example.com --provider hibp
 orgscan discover domain example.com --provider dehashed
 orgscan discover domain example.com --provider intelligencex
 orgscan discover domain example.com --provider all-enriched
 ```
 
-The `all` domain provider aggregates local metadata, crt.sh, ProjectDiscovery, WHOIS, and DNS enrichment in one pass and returns warnings for providers that are unavailable. The `all-enriched` provider extends that flow with configured paid providers. The `crtsh` domain provider uses the public crt.sh certificate-transparency feed to discover additional domain-linked hosts. The `projectdiscovery` domain provider uses `subfinder` and `httpx` when installed to enrich domain exposure data with discovered subdomains and reachable HTTP services. The `whois` domain provider extracts registrar and nameserver context from WHOIS output. The `dns` provider uses `dnspython` to collect NS, MX, TXT, A, AAAA, and CNAME records for the tracked domain and discovered hosts. Paid integrations for **Have I Been Pwned**, **DeHashed**, and **Intelligence X** can add breach and exposure records when their credentials are configured.
+The `all` domain provider aggregates local metadata, crt.sh, ProjectDiscovery, WHOIS, and DNS enrichment in one pass and returns warnings for providers that are unavailable. The `all-enriched` provider extends that flow with `securitytxt`, `github-search`, and configured paid providers. The `crtsh` domain provider uses the public crt.sh certificate-transparency feed to discover additional domain-linked hosts. The `projectdiscovery` domain provider uses `subfinder` and `httpx` when installed to enrich domain exposure data with discovered subdomains and reachable HTTP services. The `whois` domain provider extracts registrar and nameserver context from WHOIS output. The `dns` provider uses `dnspython` to collect NS, MX, TXT, A, AAAA, and CNAME records for the tracked domain and discovered hosts. The `securitytxt` provider reads published `security.txt` contacts and policy metadata, while `github-search` uses the public GitHub search APIs to correlate repositories, code hits, and issue discussions that mention tracked domains. Paid integrations for **Have I Been Pwned**, **DeHashed**, and **Intelligence X** can add breach and exposure records when their credentials are configured.
 
 Expand related repositories and contributors:
 
