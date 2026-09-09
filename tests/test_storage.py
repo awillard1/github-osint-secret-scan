@@ -91,6 +91,9 @@ def test_storage_crud_round_trip(tmp_path: Path) -> None:
         "scheduled_reports": 0,
         "suppressions": 0,
         "tool_runs": 0,
+        "users": 0,
+        "user_tenant_memberships": 0,
+        "user_sessions": 0,
     }
 
 

@@ -3,7 +3,8 @@ from __future__ import annotations
 from urllib.parse import parse_qs, urlparse
 
 import uvicorn
-from fastapi import Depends, FastAPI, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
+from pydantic import BaseModel
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from orgscan.auth import AuthContext, auth_dependency, resolve_requested_tenants, serialize_auth_context
@@ -11,6 +12,30 @@ from orgscan.config import Settings
 from orgscan.db import create_session_factory, init_db
 from orgscan.reporting import build_summary, finding_rows, finding_trends, relationship_graph, render_dashboard_html
 from orgscan.repositories import Storage
+from orgscan.scheduler import next_run_from_cadence, run_due_reports, run_due_scans
+
+
+class ScheduledScanCreateRequest(BaseModel):
+    target_value: str
+    scanner_name: str = "custom-patterns"
+    cadence: str = "daily"
+    organization: str | None = None
+    repository: str | None = None
+    provider: str = "github"
+    tenant_key: str | None = None
+
+
+class ScheduledReportCreateRequest(BaseModel):
+    output_format: str = "json"
+    cadence: str = "daily"
+    tenant_key: str | None = None
+    output_path: str | None = None
+    webhook_url: str | None = None
+    enabled: bool = True
+
+
+class RunSchedulesRequest(BaseModel):
+    limit: int = 10
 
 
 class OrgscanApiService:
@@ -48,8 +73,43 @@ class OrgscanApiService:
 
     def _scheduled_scans_payload(self, *, tenant_keys: list[str] | None = None) -> dict[str, object]:
         with self.session_factory() as session:
-            scheduled = build_summary(Storage(session), tenant_keys=tenant_keys).get("scheduled_scans", [])
+            storage = Storage(session)
+            scheduled = [
+                {
+                    "id": scan.id,
+                    "target_type": scan.target_type,
+                    "target_value": scan.target_value,
+                    "scanner_name": scan.scanner_name,
+                    "cadence": scan.cadence,
+                    "enabled": scan.enabled,
+                    "next_run_at": scan.next_run_at.isoformat(),
+                    "tenant_key": (scan.metadata_json or {}).get("tenant_key"),
+                }
+                for scan in storage.list_scheduled_scans()
+                if tenant_keys is None or (scan.metadata_json or {}).get("tenant_key") in tenant_keys
+            ]
             return {"scheduled_scans": scheduled}
+
+    def _scheduled_reports_payload(self, *, tenant_keys: list[str] | None = None) -> dict[str, object]:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            reports = [
+                {
+                    "id": report.id,
+                    "target_type": report.target_type,
+                    "target_value": report.target_value,
+                    "output_format": report.output_format,
+                    "cadence": report.cadence,
+                    "enabled": report.enabled,
+                    "output_path": report.output_path,
+                    "webhook_url": report.webhook_url,
+                    "next_run_at": report.next_run_at.isoformat(),
+                    "last_run_at": report.last_run_at.isoformat() if report.last_run_at else None,
+                }
+                for report in storage.list_scheduled_reports()
+                if tenant_keys is None or report.target_type == "global" or report.target_value in tenant_keys
+            ]
+            return {"scheduled_reports": reports}
 
     def _domain_exposures_payload(
         self,
@@ -174,6 +234,9 @@ class OrgscanApiService:
         if route == "/scheduled-scans":
             tenant = params.get("tenant_key", [None])[0]
             return 200, self._scheduled_scans_payload(tenant_keys=[tenant] if tenant else None)
+        if route == "/scheduled-reports":
+            tenant = params.get("tenant_key", [None])[0]
+            return 200, self._scheduled_reports_payload(tenant_keys=[tenant] if tenant else None)
         if route == "/domain-exposures":
             return 200, self._domain_exposures_payload(
                 domain_id=int(params["domain_id"][0]) if "domain_id" in params and params["domain_id"][0] else None,
@@ -207,6 +270,8 @@ def create_app(database_url: str) -> FastAPI:
     service = OrgscanApiService(database_url)
     app = FastAPI(title="orgscan", version="0.1.0")
     reader_auth = auth_dependency(settings, required_role="reader")
+    analyst_auth = auth_dependency(settings, required_role="analyst")
+    admin_auth = auth_dependency(settings, required_role="admin")
 
     def _tenant_keys(auth: AuthContext, tenant_key: str | None) -> list[str] | None:
         return resolve_requested_tenants(auth, tenant_key)
@@ -262,6 +327,114 @@ def create_app(database_url: str) -> FastAPI:
         auth: AuthContext = Depends(reader_auth),
     ) -> dict[str, object]:
         return service._scheduled_scans_payload(tenant_keys=_tenant_keys(auth, tenant_key))
+
+    @app.post("/scheduled-scans")
+    def create_scheduled_scan(
+        payload: ScheduledScanCreateRequest,
+        auth: AuthContext = Depends(analyst_auth),
+    ) -> dict[str, object]:
+        effective_tenants = _tenant_keys(auth, payload.tenant_key)
+        if payload.tenant_key and effective_tenants is not None and payload.tenant_key not in effective_tenants:
+            raise HTTPException(status_code=403, detail="Requested tenant is not permitted.")
+        with service.session_factory() as session:
+            storage = Storage(session)
+            organization_id = None
+            repository_id = None
+            if payload.organization:
+                org_record, _ = storage.get_or_create_organization(payload.organization, tenant_key=payload.tenant_key)
+                organization_id = org_record.id
+            if payload.repository:
+                repo_record, _ = storage.get_or_create_repository(
+                    payload.repository,
+                    organization_id=organization_id,
+                    provider=payload.provider,
+                )
+                repository_id = repo_record.id
+            scheduled = storage.create_scheduled_scan(
+                "path",
+                payload.target_value,
+                payload.scanner_name,
+                next_run_from_cadence(payload.cadence),
+                cadence=payload.cadence,
+                metadata_json={
+                    "organization_id": organization_id,
+                    "repository_id": repository_id,
+                    "tenant_key": payload.tenant_key,
+                    "created_by": auth.name,
+                },
+            )
+            session.commit()
+            return {"scheduled_scan": {"id": scheduled.id, "scanner_name": scheduled.scanner_name, "tenant_key": payload.tenant_key}}
+
+    @app.post("/scheduled-scans/run")
+    def run_scheduled_scans_route(
+        payload: RunSchedulesRequest,
+        auth: AuthContext = Depends(admin_auth),
+    ) -> dict[str, object]:
+        with service.session_factory() as session:
+            storage = Storage(session)
+            results = run_due_scans(storage, limit=payload.limit, settings=settings)
+            session.commit()
+        return {
+            "actor": auth.name,
+            "results": [
+                {"scan_job_id": result.scan_job_id, "tool_run_id": result.tool_run_id, "scanner": result.scanner, "findings": result.findings}
+                for result in results
+            ],
+        }
+
+    @app.get("/scheduled-reports")
+    def scheduled_reports(
+        tenant_key: str | None = None,
+        auth: AuthContext = Depends(reader_auth),
+    ) -> dict[str, object]:
+        return service._scheduled_reports_payload(tenant_keys=_tenant_keys(auth, tenant_key))
+
+    @app.post("/scheduled-reports")
+    def create_scheduled_report(
+        payload: ScheduledReportCreateRequest,
+        auth: AuthContext = Depends(analyst_auth),
+    ) -> dict[str, object]:
+        effective_tenants = _tenant_keys(auth, payload.tenant_key)
+        if payload.tenant_key and effective_tenants is not None and payload.tenant_key not in effective_tenants:
+            raise HTTPException(status_code=403, detail="Requested tenant is not permitted.")
+        with service.session_factory() as session:
+            storage = Storage(session)
+            scheduled = storage.create_scheduled_report(
+                "tenant" if payload.tenant_key else "global",
+                next_run_from_cadence(payload.cadence),
+                target_value=payload.tenant_key,
+                output_format=payload.output_format,
+                cadence=payload.cadence,
+                enabled=payload.enabled,
+                output_path=payload.output_path,
+                webhook_url=payload.webhook_url,
+                metadata_json={"created_by": auth.name, "tenant_key": payload.tenant_key},
+            )
+            session.commit()
+            return {"scheduled_report": {"id": scheduled.id, "output_format": scheduled.output_format, "tenant_key": payload.tenant_key}}
+
+    @app.post("/scheduled-reports/run")
+    def run_scheduled_reports_route(
+        payload: RunSchedulesRequest,
+        auth: AuthContext = Depends(admin_auth),
+    ) -> dict[str, object]:
+        with service.session_factory() as session:
+            storage = Storage(session)
+            results = run_due_reports(storage, limit=payload.limit, settings=settings)
+            session.commit()
+        return {
+            "actor": auth.name,
+            "results": [
+                {
+                    "scheduled_report_id": result.scheduled_report_id,
+                    "tool_run_id": result.tool_run_id,
+                    "output_format": result.output_format,
+                    "delivered": result.delivered,
+                }
+                for result in results
+            ],
+        }
 
     @app.get("/domain-exposures")
     def domain_exposures(

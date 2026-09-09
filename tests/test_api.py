@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from orgscan.api import OrgscanApiService, create_app
+from orgscan.auth import create_db_session_token
 from orgscan.db import create_session_factory, init_db
 from orgscan.repositories import Storage
 from orgscan.schemas import CanonicalFinding
@@ -203,3 +204,59 @@ def test_fastapi_token_auth_and_tenant_scoping(monkeypatch, tmp_path: Path) -> N
     assert forbidden.status_code == 403
     assert tenant_b.status_code == 200
     assert tenant_b.json()["organizations"] == ["tenant-b-org"]
+
+
+def test_fastapi_db_session_auth_and_schedule_management(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'session-auth.db'}"
+    monkeypatch.delenv("ORGSCAN_API_TOKENS_JSON", raising=False)
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        storage.create_organization("tenant-a-org", tenant_key="tenant-a")
+        storage.create_user("alice", email="alice@example.com")
+        storage.grant_tenant_membership("alice", "tenant-a", role="analyst")
+        _, analyst_token = create_db_session_token(storage, username="alice", tenants=["tenant-a"])
+        storage.create_user("admin", email="admin@example.com")
+        storage.grant_tenant_membership("admin", "tenant-a", role="admin")
+        _, admin_token = create_db_session_token(storage, username="admin", tenants=["tenant-a"])
+        session.commit()
+
+    client = TestClient(create_app(database_url))
+
+    context = client.get("/auth/context", headers={"X-Orgscan-Token": analyst_token})
+    create_scan = client.post(
+        "/scheduled-scans",
+        headers={"X-Orgscan-Token": analyst_token},
+        json={
+            "scanner_name": "custom-patterns",
+            "target_value": "/tmp/example",
+            "cadence": "daily",
+            "tenant_key": "tenant-a",
+            "organization": "tenant-a-org",
+            "repository": "tenant-a/app",
+        },
+    )
+    create_report = client.post(
+        "/scheduled-reports",
+        headers={"X-Orgscan-Token": analyst_token},
+        json={"cadence": "daily", "output_format": "json", "tenant_key": "tenant-a", "enabled": True},
+    )
+    list_scans = client.get("/scheduled-scans", headers={"X-Orgscan-Token": analyst_token})
+    list_reports = client.get("/scheduled-reports", headers={"X-Orgscan-Token": analyst_token})
+    forbidden_run = client.post("/scheduled-scans/run", headers={"X-Orgscan-Token": analyst_token}, json={})
+    admin_run = client.post("/scheduled-scans/run", headers={"X-Orgscan-Token": admin_token}, json={"limit": 5})
+
+    assert context.status_code == 200
+    assert context.json()["source"] == "db-session"
+    assert context.json()["effective_tenants"] == ["tenant-a"]
+    assert create_scan.status_code == 200
+    assert create_scan.json()["scheduled_scan"]["tenant_key"] == "tenant-a"
+    assert create_report.status_code == 200
+    assert create_report.json()["scheduled_report"]["tenant_key"] == "tenant-a"
+    assert list_scans.status_code == 200
+    assert len(list_scans.json()["scheduled_scans"]) == 1
+    assert list_reports.status_code == 200
+    assert len(list_reports.json()["scheduled_reports"]) == 1
+    assert forbidden_run.status_code == 403
+    assert admin_run.status_code == 200

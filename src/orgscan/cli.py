@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from enum import StrEnum
 
 import typer
 from sqlalchemy import text
 
+from orgscan.auth import create_db_session_token
 from orgscan.bootstrap import bootstrap
 from orgscan.api import serve_api
 from orgscan.config import Settings, get_settings, render_env_template
@@ -115,6 +116,12 @@ def _parse_due_date(value: str | None) -> date | None:
         return date.fromisoformat(value)
     except ValueError as exc:
         raise typer.BadParameter("Due dates must use YYYY-MM-DD format.") from exc
+
+
+def _parse_expiration(hours: int | None) -> datetime | None:
+    if hours is None:
+        return None
+    return datetime.now(UTC) + timedelta(hours=hours)
 
 
 def _resolve_asset_context(
@@ -295,6 +302,93 @@ def add_target(
 
     action = "Created" if created else "Existing"
     typer.echo(f"{action} {target_type.value}: {value} (id={record.id})")
+
+
+@app.command("create-user")
+def create_user(
+    username: str,
+    email: str | None = typer.Option(None, "--email", help="Optional user email."),
+    display_name: str | None = typer.Option(None, "--display-name", help="Optional display name."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        user, created = storage.get_or_create_user(username, email=email, display_name=display_name)
+        session.commit()
+    typer.echo(f"{'Created' if created else 'Updated'} user {user.username} (id={user.id})")
+
+
+@app.command("grant-tenant-role")
+def grant_tenant_role(
+    username: str,
+    tenant_key: str,
+    role: str = typer.Option("reader", "--role", help="Tenant role: reader, analyst, or admin."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        user = storage.get_user_by_username(username)
+        if user is None:
+            raise typer.BadParameter(f"Unknown user: {username}")
+        membership = storage.grant_tenant_membership(user.id, tenant_key, role)
+        session.commit()
+    typer.echo(f"Granted {membership.role} on {tenant_key} to {username}")
+
+
+@app.command("create-session")
+def create_session_token(
+    username: str,
+    session_name: str | None = typer.Option(None, "--session-name", help="Optional human-readable session label."),
+    role: str | None = typer.Option(None, "--role", help="Optional explicit session role override."),
+    tenant: list[str] = typer.Option([], "--tenant", help="Optional tenant scope; repeat for multiple tenants."),
+    expires_in_hours: int | None = typer.Option(None, "--expires-in-hours", min=1, help="Optional expiration in hours."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        session_row, raw_token = create_db_session_token(
+            storage,
+            username=username,
+            session_name=session_name,
+            role=role,
+            tenants=list(tenant),
+            expires_at=_parse_expiration(expires_in_hours),
+        )
+        session.commit()
+    payload = {
+        "session_id": session_row.id,
+        "username": username,
+        "role": session_row.role,
+        "tenants": session_row.tenant_scopes_json,
+        "expires_at": session_row.expires_at.isoformat() if session_row.expires_at else None,
+        "token": raw_token,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2))
+    else:
+        typer.echo(f"Created session {session_row.id} for {username}")
+        typer.echo(f"token={raw_token}")
+
+
+@app.command("revoke-session")
+def revoke_session(
+    session_id: int,
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        session_row = storage.revoke_user_session(session_id)
+        session.commit()
+    typer.echo(f"Revoked session {session_row.id}")
 
 
 @app.command("status")
@@ -946,6 +1040,7 @@ def sync_mirror(
     repository: str = typer.Argument(..., help="Repository full name, such as owner/name."),
     provider: str = typer.Option("github", "--provider", help="Repository provider name."),
     clone_url: str | None = typer.Option(None, "--clone-url", help="Optional explicit clone URL."),
+    ref: list[str] = typer.Option([], "--ref", help="Tracked branch or tag ref; repeat for multiple refs."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
@@ -960,6 +1055,7 @@ def sync_mirror(
                 repository_full_name=repository,
                 provider=provider,
                 clone_url=clone_url,
+                refs=list(ref),
             )
         except MirrorError as exc:
             typer.echo(f"Mirror sync failed: {exc}", err=True)
@@ -970,6 +1066,8 @@ def sync_mirror(
         "mirror_path": record.mirror_path,
         "last_mirrored_at": record.last_mirrored_at.isoformat() if record.last_mirrored_at else None,
         "created": created,
+        "tracked_refs": (record.metadata_json or {}).get("tracked_refs", []),
+        "available_refs": (record.metadata_json or {}).get("available_refs", []),
     }
     if json_output:
         typer.echo(json.dumps(payload, indent=2))
@@ -980,6 +1078,7 @@ def sync_mirror(
 @app.command("sync-mirrors")
 def sync_mirrors(
     organization: str | None = typer.Option(None, "--organization", help="Only sync repositories for this organization."),
+    ref: list[str] = typer.Option([], "--ref", help="Tracked branch or tag ref; repeat for multiple refs."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
@@ -1001,11 +1100,19 @@ def sync_mirrors(
                     repository_full_name=repository_record.full_name,
                     provider=repository_record.provider,
                     clone_url=repository_record.url,
+                    refs=list(ref),
                 )
             except MirrorError as exc:
                 payload.append({"repository": repository_record.full_name, "status": "failed", "error": str(exc)})
                 continue
-            payload.append({"repository": synced.full_name, "status": "ok", "mirror_path": synced.mirror_path})
+            payload.append(
+                {
+                    "repository": synced.full_name,
+                    "status": "ok",
+                    "mirror_path": synced.mirror_path,
+                    "tracked_refs": (synced.metadata_json or {}).get("tracked_refs", []),
+                }
+            )
         session.commit()
     if json_output:
         typer.echo(json.dumps(payload, indent=2))
@@ -1017,6 +1124,7 @@ def sync_mirrors(
 def scan_mirror(
     repository: str = typer.Argument(..., help="Repository full name, such as owner/name."),
     scanner: str = typer.Option("git-history-patterns", "--scanner", help="Scanner implementation to run against the mirror."),
+    ref: str | None = typer.Option(None, "--ref", help="Specific branch or tag ref to scan from the mirror."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
@@ -1030,6 +1138,7 @@ def scan_mirror(
                 settings=settings,
                 repository_full_name=repository,
                 scanner_name=scanner,
+                ref_name=ref,
             )
         except MirrorError as exc:
             typer.echo(f"Mirror scan failed: {exc}", err=True)
@@ -1043,6 +1152,7 @@ def scan_mirror(
         "tool_run_id": result.tool_run_id,
         "findings": result.findings,
         "finding_ids": result.finding_ids,
+        "ref": ref,
     }
     if json_output:
         typer.echo(json.dumps(payload, indent=2, default=str))

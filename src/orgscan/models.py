@@ -306,6 +306,50 @@ class ScheduledReport(TimestampMixin, Base):
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
+class User(TimestampMixin, Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    email: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    tenant_memberships: Mapped[list[UserTenantMembership]] = relationship(back_populates="user")
+    sessions: Mapped[list[UserSession]] = relationship(back_populates="user")
+
+
+class UserTenantMembership(TimestampMixin, Base):
+    __tablename__ = "user_tenant_memberships"
+    __table_args__ = (UniqueConstraint("user_id", "tenant_key", name="uq_user_tenant_membership"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    tenant_key: Mapped[str] = mapped_column(String(255), index=True)
+    role: Mapped[str] = mapped_column(String(32), default="reader")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    user: Mapped[User] = relationship(back_populates="tenant_memberships")
+
+
+class UserSession(TimestampMixin, Base):
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    session_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    role: Mapped[str] = mapped_column(String(32), default="reader")
+    tenant_scopes_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    user: Mapped[User] = relationship(back_populates="sessions")
+
+
 class DomainExposure(TimestampMixin, Base):
     __tablename__ = "domain_exposures"
 

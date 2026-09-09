@@ -23,6 +23,9 @@ from orgscan.models import (
     ScanJob,
     Suppression,
     ToolRun,
+    User,
+    UserSession,
+    UserTenantMembership,
 )
 from orgscan.schemas import CanonicalFinding
 
@@ -77,6 +80,78 @@ class Storage:
 
     def get_repository_by_full_name(self, full_name: str) -> Repository | None:
         return self.session.scalar(select(Repository).where(Repository.full_name == full_name))
+
+    def create_user(self, username: str, **kwargs: Any) -> User:
+        user = User(username=username, **kwargs)
+        self.session.add(user)
+        self.session.flush()
+        return user
+
+    def get_user_by_username(self, username: str) -> User | None:
+        return self.session.scalar(select(User).where(User.username == username))
+
+    def get_or_create_user(self, username: str, **kwargs: Any) -> tuple[User, bool]:
+        existing = self.get_user_by_username(username)
+        if existing:
+            for key, value in kwargs.items():
+                if value is not None:
+                    setattr(existing, key, value)
+            self.session.flush()
+            return existing, False
+        return self.create_user(username, **kwargs), True
+
+    def grant_tenant_membership(self, user_id: int, tenant_key: str, role: str, **kwargs: Any) -> UserTenantMembership:
+        existing = self.session.scalar(
+            select(UserTenantMembership).where(
+                UserTenantMembership.user_id == user_id,
+                UserTenantMembership.tenant_key == tenant_key,
+            )
+        )
+        if existing is not None:
+            existing.role = role
+            for key, value in kwargs.items():
+                if value is not None:
+                    setattr(existing, key, value)
+            self.session.flush()
+            return existing
+        membership = UserTenantMembership(user_id=user_id, tenant_key=tenant_key, role=role, **kwargs)
+        self.session.add(membership)
+        self.session.flush()
+        return membership
+
+    def list_user_tenant_memberships(self, user_id: int | None = None) -> Sequence[UserTenantMembership]:
+        query = select(UserTenantMembership).order_by(UserTenantMembership.tenant_key.asc(), UserTenantMembership.id.asc())
+        if user_id is not None:
+            query = query.where(UserTenantMembership.user_id == user_id)
+        return list(self.session.scalars(query))
+
+    def create_user_session(self, user_id: int, token_hash: str, **kwargs: Any) -> UserSession:
+        session_row = UserSession(user_id=user_id, token_hash=token_hash, **kwargs)
+        self.session.add(session_row)
+        self.session.flush()
+        return session_row
+
+    def get_user_session_by_hash(self, token_hash: str) -> UserSession | None:
+        return self.session.scalar(select(UserSession).where(UserSession.token_hash == token_hash))
+
+    def list_user_sessions(self, user_id: int | None = None) -> Sequence[UserSession]:
+        query = select(UserSession).order_by(UserSession.created_at.desc(), UserSession.id.desc())
+        if user_id is not None:
+            query = query.where(UserSession.user_id == user_id)
+        return list(self.session.scalars(query))
+
+    def revoke_user_session(self, session_id: int) -> UserSession:
+        session_row = self.session.get(UserSession, session_id)
+        if session_row is None:
+            raise ValueError(f"User session {session_id} does not exist")
+        session_row.revoked_at = datetime.now(UTC)
+        self.session.flush()
+        return session_row
+
+    def touch_user_session(self, session_row: UserSession) -> UserSession:
+        session_row.last_used_at = datetime.now(UTC)
+        self.session.flush()
+        return session_row
 
     def get_or_create_repository(self, full_name: str, **kwargs: Any) -> tuple[Repository, bool]:
         existing = self.get_repository_by_full_name(full_name)
@@ -618,6 +693,9 @@ class Storage:
             "scheduled_reports": ScheduledReport,
             "suppressions": Suppression,
             "tool_runs": ToolRun,
+            "users": User,
+            "user_tenant_memberships": UserTenantMembership,
+            "user_sessions": UserSession,
         }
         return {
             name: self.session.scalar(select(func.count()).select_from(model)) or 0

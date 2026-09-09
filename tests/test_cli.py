@@ -23,12 +23,12 @@ def test_cli_init_db_and_status(monkeypatch, tmp_path: Path) -> None:
     init_result = runner.invoke(app, ["init-db"])
     assert init_result.exit_code == 0
     assert "Initialized database" in init_result.stdout
-    assert "schema_revision: 20260909_0002" in init_result.stdout
+    assert "schema_revision: 20260909_0003" in init_result.stdout
 
     status_result = runner.invoke(app, ["status"])
     assert status_result.exit_code == 0
     assert f"database_url: {database_url}" in status_result.stdout
-    assert "schema_revision: 20260909_0002" in status_result.stdout
+    assert "schema_revision: 20260909_0003" in status_result.stdout
     assert "organizations: 0" in status_result.stdout
 
     setup_result = runner.invoke(app, ["setup", "--verify-only"])
@@ -118,6 +118,29 @@ def test_cli_verify_deps_json(monkeypatch, tmp_path: Path) -> None:
     result = runner.invoke(app, ["verify-deps", "--json"])
     assert result.exit_code == 0
     assert '"ok": true' in result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_cli_user_and_session_management(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'users.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+
+    create_user_result = runner.invoke(app, ["create-user", "alice", "--email", "alice@example.com"])
+    assert create_user_result.exit_code == 0
+
+    grant_role_result = runner.invoke(app, ["grant-tenant-role", "alice", "tenant-a", "--role", "analyst"])
+    assert grant_role_result.exit_code == 0
+
+    create_session_result = runner.invoke(app, ["create-session", "alice", "--tenant", "tenant-a", "--json"])
+    assert create_session_result.exit_code == 0
+    assert '"token":' in create_session_result.stdout
+
+    session_payload = json.loads(create_session_result.stdout)
+    revoke_result = runner.invoke(app, ["revoke-session", str(session_payload["session_id"])])
+    assert revoke_result.exit_code == 0
 
     get_settings.cache_clear()
 
