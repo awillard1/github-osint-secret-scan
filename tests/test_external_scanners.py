@@ -1,3 +1,7 @@
+import subprocess
+from pathlib import Path
+
+from orgscan.config import Settings
 from orgscan.scanners.external import DetectSecretsScanner, GitleaksScanner, SemgrepScanner, TruffleHogScanner
 
 
@@ -98,3 +102,21 @@ def test_semgrep_load_report_reads_json_file(tmp_path) -> None:
 
     assert len(matches) == 1
     assert matches[0].severity == "critical"
+
+
+def test_gitleaks_scanner_uses_configured_binary(monkeypatch, tmp_path: Path) -> None:
+    sample = tmp_path / "config.py"
+    sample.write_text("print('hello')\n", encoding="utf-8")
+    scanner = GitleaksScanner(settings=Settings(gitleaks_binary="/opt/tools/gitleaks-custom"))
+
+    monkeypatch.setattr("orgscan.scanners.external.shutil.which", lambda command: command)
+
+    def _run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        report_path = Path(command[command.index("--report-path") + 1])
+        report_path.write_text("[]", encoding="utf-8")
+        assert command[0] == "/opt/tools/gitleaks-custom"
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("orgscan.scanners.external.subprocess.run", _run)
+
+    assert scanner.scan_path(sample) == []

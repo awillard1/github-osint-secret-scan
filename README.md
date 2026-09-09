@@ -119,6 +119,8 @@ orgscan scan path ./path/to/scan --scanner trufflehog
 
 The built-in `repo-governance` scanner checks for missing `CODEOWNERS`, missing `SECURITY.md`, and unpinned GitHub Actions references in workflow files.
 
+External scanner wrappers honor the configured `ORGSCAN_*_BINARY` settings, and additional scanners can be registered through Python entry points in the `orgscan.scanners` group.
+
 You can also ingest previously saved scanner output and normalize it into the same canonical data model:
 
 ```bash

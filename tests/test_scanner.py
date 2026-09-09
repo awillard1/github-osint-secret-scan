@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from orgscan.scanners import CustomPatternScanner, RepositoryGovernanceScanner
+from orgscan.config import Settings
+from orgscan.scanners import CustomPatternScanner, RepositoryGovernanceScanner, available_scanner_names, get_scanner, load_report
+from orgscan.scanners.base import ScanMatch
 
 
 def test_custom_pattern_scanner_redacts_detected_values(tmp_path: Path) -> None:
@@ -29,3 +31,29 @@ def test_repository_governance_scanner_detects_missing_controls_and_unpinned_act
     assert "Missing CODEOWNERS file" in titles
     assert "Missing SECURITY.md policy" in titles
     assert "Unpinned GitHub Action reference" in titles
+
+
+class PluginScanner:
+    name = "plugin-test"
+    source_class = "paid"
+
+    def __init__(self, *, settings: Settings | None = None) -> None:
+        self.binary = None if settings is None else settings.gitleaks_binary
+
+    def scan_path(self, target: Path) -> list[ScanMatch]:
+        return []
+
+    @classmethod
+    def load_report(cls, report_path: Path) -> list[ScanMatch]:
+        return []
+
+
+def test_scanner_registry_supports_plugin_discovery_and_report_loading(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("orgscan.scanners._plugin_scanner_classes", lambda: {"plugin-test": PluginScanner})
+
+    scanner = get_scanner("plugin-test", settings=Settings(gitleaks_binary="custom-binary"))
+
+    assert "plugin-test" in available_scanner_names()
+    assert isinstance(scanner, PluginScanner)
+    assert scanner.binary == "custom-binary"
+    assert load_report("plugin-test", tmp_path / "plugin-report.json") == ("paid", [])
