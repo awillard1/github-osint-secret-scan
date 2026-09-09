@@ -1226,6 +1226,7 @@ def queue_status_command(
             f"backend={payload['backend']} queue={payload['queue_name']} pending={payload['pending_jobs']} "
             f"started={payload['started_jobs']} failed={payload['failed_jobs']} "
             f"retry_max={payload['retry_max']} retry_intervals={payload['retry_intervals']}"
+            + (f" completed={payload['completed_jobs']}" if 'completed_jobs' in payload else "")
         )
 
 
@@ -1258,6 +1259,7 @@ def jobs(
         tool_runs = storage.list_tool_runs()
         scheduled_scans = storage.list_scheduled_scans()
         scheduled_reports = storage.list_scheduled_reports()
+        queue_tasks = storage.list_queue_tasks(limit=50)
     payload = {
         "scan_jobs": [
             {
@@ -1288,8 +1290,10 @@ def jobs(
                 "refs": (scan.metadata_json or {}).get("refs", []),
                 "cadence": scan.cadence,
                 "enabled": scan.enabled,
+                "queue_backend": (scan.metadata_json or {}).get("queue_backend"),
                 "queue_status": (scan.metadata_json or {}).get("queue_status"),
                 "queue_job_id": (scan.metadata_json or {}).get("queue_job_id"),
+                "queue_task_id": (scan.metadata_json or {}).get("queue_task_id"),
             }
             for scan in scheduled_scans
         ],
@@ -1306,6 +1310,22 @@ def jobs(
             }
             for report in scheduled_reports
         ],
+        "queue_tasks": [
+            {
+                "id": task.id,
+                "scheduled_scan_id": task.scheduled_scan_id,
+                "backend": task.backend,
+                "queue_name": task.queue_name,
+                "status": task.status,
+                "attempt_count": task.attempt_count,
+                "max_attempts": task.max_attempts,
+                "available_at": task.available_at.isoformat(),
+                "lease_owner": task.lease_owner,
+                "result_scan_job_id": task.result_scan_job_id,
+                "result_tool_run_id": task.result_tool_run_id,
+            }
+            for task in queue_tasks
+        ],
     }
     if json_output:
         typer.echo(json.dumps(payload, indent=2, default=str))
@@ -1313,7 +1333,8 @@ def jobs(
         typer.echo(
             f"scan_jobs={len(payload['scan_jobs'])} tool_runs={len(payload['tool_runs'])} "
             f"scheduled_scans={len(payload['scheduled_scans'])} "
-            f"scheduled_reports={len(payload['scheduled_reports'])}"
+            f"scheduled_reports={len(payload['scheduled_reports'])} "
+            f"queue_tasks={len(payload['queue_tasks'])}"
         )
 
 

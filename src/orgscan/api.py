@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from orgscan.auth import AuthContext, auth_dependency, resolve_requested_tenants, serialize_auth_context
 from orgscan.config import Settings
 from orgscan.db import create_session_factory, init_db
+from orgscan.queueing import QueueBackendError, queue_status
 from orgscan.reporting import build_summary, finding_rows, finding_trends, relationship_graph, render_dashboard_html
 from orgscan.repositories import Storage
 from orgscan.scheduler import next_run_from_cadence, run_due_reports, run_due_scans
@@ -90,6 +91,8 @@ class OrgscanApiService:
                     "tenant_key": (scan.metadata_json or {}).get("tenant_key"),
                     "refs": (scan.metadata_json or {}).get("refs", []),
                     "resync_before_run": (scan.metadata_json or {}).get("resync_before_run"),
+                    "queue_backend": (scan.metadata_json or {}).get("queue_backend"),
+                    "queue_status": (scan.metadata_json or {}).get("queue_status"),
                 }
                 for scan in storage.list_scheduled_scans()
                 if tenant_keys is None or (scan.metadata_json or {}).get("tenant_key") in tenant_keys
@@ -453,6 +456,13 @@ def create_app(database_url: str) -> FastAPI:
                 for result in results
             ],
         }
+
+    @app.get("/queue-status")
+    def queue_status_route(auth: AuthContext = Depends(admin_auth)) -> dict[str, object]:
+        try:
+            return queue_status(settings)
+        except QueueBackendError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/domain-exposures")
     def domain_exposures(

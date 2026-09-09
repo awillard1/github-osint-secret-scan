@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orgscan.models import (
+    QueueTask,
     Account,
     Domain,
     DomainExposure,
@@ -423,6 +424,126 @@ class Storage:
         self.session.flush()
         return scheduled_report
 
+    def create_queue_task(
+        self,
+        scheduled_scan_id: int,
+        *,
+        backend: str,
+        queue_name: str,
+        status: str,
+        max_attempts: int,
+        available_at: datetime,
+        metadata_json: dict[str, Any] | None = None,
+    ) -> QueueTask:
+        task = QueueTask(
+            scheduled_scan_id=scheduled_scan_id,
+            backend=backend,
+            queue_name=queue_name,
+            status=status,
+            max_attempts=max_attempts,
+            available_at=available_at,
+            metadata_json=metadata_json or {},
+        )
+        self.session.add(task)
+        self.session.flush()
+        return task
+
+    def get_queue_task(self, queue_task_id: int) -> QueueTask | None:
+        return self.session.get(QueueTask, queue_task_id)
+
+    def list_queue_tasks(
+        self,
+        backend: str | None = None,
+        status: str | None = None,
+        queue_name: str | None = None,
+        limit: int | None = 100,
+    ) -> Sequence[QueueTask]:
+        query = select(QueueTask).order_by(QueueTask.created_at.desc(), QueueTask.id.desc())
+        if backend is not None:
+            query = query.where(QueueTask.backend == backend)
+        if status is not None:
+            query = query.where(QueueTask.status == status)
+        if queue_name is not None:
+            query = query.where(QueueTask.queue_name == queue_name)
+        if limit is not None:
+            query = query.limit(limit)
+        return list(self.session.scalars(query))
+
+    def find_active_queue_task(self, scheduled_scan_id: int, *, backend: str) -> QueueTask | None:
+        return self.session.scalar(
+            select(QueueTask)
+            .where(
+                QueueTask.scheduled_scan_id == scheduled_scan_id,
+                QueueTask.backend == backend,
+                QueueTask.status.in_(("queued", "running")),
+            )
+            .order_by(QueueTask.id.desc())
+            .limit(1)
+        )
+
+    def claim_queue_task(
+        self,
+        *,
+        backend: str,
+        queue_name: str,
+        worker_id: str,
+        lease_until: datetime,
+        now: datetime | None = None,
+    ) -> QueueTask | None:
+        current = now or datetime.now(UTC)
+        candidates = list(
+            self.session.scalars(
+                select(QueueTask)
+                .where(
+                    QueueTask.backend == backend,
+                    QueueTask.queue_name == queue_name,
+                    QueueTask.status == "queued",
+                    QueueTask.available_at <= current,
+                )
+                .order_by(QueueTask.available_at.asc(), QueueTask.id.asc())
+            )
+        )
+        for task in candidates:
+            if task.lease_expires_at is not None and task.lease_expires_at > current:
+                continue
+            task.status = "running"
+            task.lease_owner = worker_id
+            task.lease_expires_at = lease_until
+            task.started_at = current
+            task.attempt_count += 1
+            self.session.flush()
+            return task
+        return None
+
+    def mark_queue_task_completed(self, task: QueueTask, *, scan_job_id: int | None = None, tool_run_id: int | None = None) -> QueueTask:
+        task.status = "completed"
+        task.completed_at = datetime.now(UTC)
+        task.lease_owner = None
+        task.lease_expires_at = None
+        task.result_scan_job_id = scan_job_id
+        task.result_tool_run_id = tool_run_id
+        task.last_error = None
+        self.session.flush()
+        return task
+
+    def mark_queue_task_retry(self, task: QueueTask, *, available_at: datetime, error_message: str) -> QueueTask:
+        task.status = "queued"
+        task.available_at = available_at
+        task.lease_owner = None
+        task.lease_expires_at = None
+        task.last_error = error_message
+        self.session.flush()
+        return task
+
+    def mark_queue_task_failed(self, task: QueueTask, *, error_message: str) -> QueueTask:
+        task.status = "failed"
+        task.completed_at = datetime.now(UTC)
+        task.lease_owner = None
+        task.lease_expires_at = None
+        task.last_error = error_message
+        self.session.flush()
+        return task
+
     def list_findings(
         self,
         limit: int | None = 50,
@@ -691,6 +812,7 @@ class Storage:
             "risk_scores": RiskScore,
             "scheduled_scans": ScheduledScan,
             "scheduled_reports": ScheduledReport,
+            "queue_tasks": QueueTask,
             "suppressions": Suppression,
             "tool_runs": ToolRun,
             "users": User,

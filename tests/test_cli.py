@@ -1,5 +1,6 @@
 import json
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -29,12 +30,12 @@ def test_cli_init_db_and_status(monkeypatch, tmp_path: Path) -> None:
     init_result = runner.invoke(app, ["init-db"])
     assert init_result.exit_code == 0
     assert "Initialized database" in init_result.stdout
-    assert "schema_revision: 20260909_0003" in init_result.stdout
+    assert "schema_revision: 20260909_0004" in init_result.stdout
 
     status_result = runner.invoke(app, ["status"])
     assert status_result.exit_code == 0
     assert f"database_url: {database_url}" in status_result.stdout
-    assert "schema_revision: 20260909_0003" in status_result.stdout
+    assert "schema_revision: 20260909_0004" in status_result.stdout
     assert "organizations: 0" in status_result.stdout
 
     setup_result = runner.invoke(app, ["setup", "--verify-only"])
@@ -183,7 +184,10 @@ def test_cli_config_and_init_config(monkeypatch, tmp_path: Path) -> None:
     assert "ORGSCAN_DEHASHED_API_KEY=" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_INTELLIGENCEX_API_KEY=" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE=0" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_SCAN_QUEUE_BACKEND=rq" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_SCAN_QUEUE_RETRY_INTERVALS=30,120" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_SCAN_QUEUE_LEASE_SECONDS=300" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_SCAN_QUEUE_POLL_INTERVAL_SECONDS=5" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_API_TOKENS_JSON=" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_YARA_BINARY=yara" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_RG_BINARY=rg" in env_path.read_text(encoding="utf-8")
@@ -780,7 +784,7 @@ def test_cli_queue_commands(monkeypatch, tmp_path: Path) -> None:
     )
     monkeypatch.setattr(
         "orgscan.cli.queue_status",
-        lambda settings: {"backend": "rq", "queue_name": "orgscan:scans", "pending_jobs": 1, "started_jobs": 0, "failed_jobs": 0},
+        lambda settings: {"backend": "rq", "queue_name": "orgscan:scans", "pending_jobs": 1, "started_jobs": 0, "failed_jobs": 0, "retry_max": 2, "retry_intervals": [30, 120]},
     )
     monkeypatch.setattr("orgscan.cli.run_worker", lambda settings, burst=False, max_jobs=None: True)
 
@@ -796,6 +800,42 @@ def test_cli_queue_commands(monkeypatch, tmp_path: Path) -> None:
     worker_result = runner.invoke(app, ["run-worker", "--burst", "--max-jobs", "1"])
     assert worker_result.exit_code == 0
     assert "processed at least one job" in worker_result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_cli_db_queue_backend_commands(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'db-queue-cli.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ORGSCAN_SCAN_QUEUE_BACKEND", "db")
+    get_settings.cache_clear()
+    init_db(database_url)
+
+    sample = tmp_path / "sample.py"
+    sample.write_text('api_key = "example-not-real-123456789"\n', encoding="utf-8")
+    session_factory = create_session_factory(database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        storage.create_scheduled_scan("path", str(sample), "custom-patterns", datetime(2026, 1, 1, tzinfo=UTC), cadence="manual")
+        session.commit()
+
+    enqueue_result = runner.invoke(app, ["enqueue-scheduled", "--json"])
+    assert enqueue_result.exit_code == 0
+    assert '"queue_task_id":' in enqueue_result.stdout
+    assert '"backend": "db"' in enqueue_result.stdout
+
+    status_result = runner.invoke(app, ["queue-status", "--json"])
+    assert status_result.exit_code == 0
+    assert '"backend": "db"' in status_result.stdout
+
+    worker_result = runner.invoke(app, ["run-worker", "--burst", "--max-jobs", "1"])
+    assert worker_result.exit_code == 0
+    assert "processed at least one job" in worker_result.stdout
+
+    jobs_result = runner.invoke(app, ["jobs", "--json"])
+    assert jobs_result.exit_code == 0
+    assert '"queue_tasks"' in jobs_result.stdout
 
     get_settings.cache_clear()
 

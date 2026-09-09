@@ -260,6 +260,7 @@ def test_fastapi_db_session_auth_and_schedule_management(monkeypatch, tmp_path: 
     list_reports = client.get("/scheduled-reports", headers={"X-Orgscan-Token": analyst_token})
     forbidden_run = client.post("/scheduled-scans/run", headers={"X-Orgscan-Token": analyst_token}, json={})
     admin_run = client.post("/scheduled-scans/run", headers={"X-Orgscan-Token": admin_token}, json={"limit": 5})
+    queue_status = client.get("/queue-status", headers={"X-Orgscan-Token": admin_token})
 
     assert context.status_code == 200
     assert context.json()["auth"]["source"] == "db-session"
@@ -279,3 +280,4 @@ def test_fastapi_db_session_auth_and_schedule_management(monkeypatch, tmp_path: 
     assert len(list_reports.json()["scheduled_reports"]) == 1
     assert forbidden_run.status_code == 403
     assert admin_run.status_code == 200
+    assert queue_status.status_code == 503

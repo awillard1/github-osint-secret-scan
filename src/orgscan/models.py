@@ -42,6 +42,13 @@ class ScanJobStatus(StrEnum):
     FAILED = "failed"
 
 
+class QueueTaskStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class VerificationStatus(StrEnum):
     VERIFIED = "verified"
     LIKELY = "likely"
@@ -348,6 +355,29 @@ class UserSession(TimestampMixin, Base):
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     user: Mapped[User] = relationship(back_populates="sessions")
+
+
+class QueueTask(TimestampMixin, Base):
+    __tablename__ = "queue_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scheduled_scan_id: Mapped[int] = mapped_column(ForeignKey("scheduled_scans.id"), index=True)
+    backend: Mapped[str] = mapped_column(String(32), default="db", index=True)
+    queue_name: Mapped[str] = mapped_column(String(255), default="orgscan:db")
+    status: Mapped[str] = mapped_column(String(32), default=QueueTaskStatus.QUEUED.value, index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=2)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
+    lease_owner: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    result_scan_job_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    result_tool_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    scheduled_scan: Mapped[ScheduledScan] = relationship()
 
 
 class DomainExposure(TimestampMixin, Base):

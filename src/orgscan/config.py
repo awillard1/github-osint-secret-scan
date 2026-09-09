@@ -28,9 +28,13 @@ class Settings(BaseSettings):
     outbound_requests_per_minute: int = 0
     outbound_min_interval_seconds: float = 0.0
     redis_url: str = "redis://127.0.0.1:6379/0"
+    scan_queue_backend: str = "rq"
     scan_queue_name: str = "orgscan:scans"
     scan_queue_retry_max: int = 2
     scan_queue_retry_intervals: str = "30,120"
+    scan_queue_lease_seconds: int = 300
+    scan_queue_poll_interval_seconds: float = 5.0
+    scan_queue_worker_id: str | None = None
     api_tokens_json: str = ""
     hibp_base_url: str = "https://haveibeenpwned.com/api/v3"
     hibp_api_key: str | None = None
@@ -99,9 +103,13 @@ def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
         "ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE": 0,
         "ORGSCAN_OUTBOUND_MIN_INTERVAL_SECONDS": 0,
         "ORGSCAN_REDIS_URL": "redis://127.0.0.1:6379/0",
+        "ORGSCAN_SCAN_QUEUE_BACKEND": "rq",
         "ORGSCAN_SCAN_QUEUE_NAME": "orgscan:scans",
         "ORGSCAN_SCAN_QUEUE_RETRY_MAX": 2,
         "ORGSCAN_SCAN_QUEUE_RETRY_INTERVALS": "30,120",
+        "ORGSCAN_SCAN_QUEUE_LEASE_SECONDS": 300,
+        "ORGSCAN_SCAN_QUEUE_POLL_INTERVAL_SECONDS": 5,
+        "ORGSCAN_SCAN_QUEUE_WORKER_ID": "",
         'ORGSCAN_API_TOKENS_JSON': '[{"name":"viewer","token":"change-me","role":"reader","tenants":["*"]}]',
         "ORGSCAN_HIBP_BASE_URL": "https://haveibeenpwned.com/api/v3",
         "ORGSCAN_HIBP_API_KEY": "",

@@ -45,9 +45,12 @@ ORGSCAN_DATABASE_URL=sqlite:///./data/orgscan.db
 ORGSCAN_LOG_LEVEL=INFO
 ORGSCAN_CRTSH_BASE_URL=https://crt.sh
 ORGSCAN_REDIS_URL=redis://127.0.0.1:6379/0
+ORGSCAN_SCAN_QUEUE_BACKEND=rq
 ORGSCAN_SCAN_QUEUE_NAME=orgscan:scans
 ORGSCAN_SCAN_QUEUE_RETRY_MAX=2
 ORGSCAN_SCAN_QUEUE_RETRY_INTERVALS=30,120
+ORGSCAN_SCAN_QUEUE_LEASE_SECONDS=300
+ORGSCAN_SCAN_QUEUE_POLL_INTERVAL_SECONDS=5
 ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE=0
 ORGSCAN_OUTBOUND_MIN_INTERVAL_SECONDS=0
 ORGSCAN_API_TOKENS_JSON=[{"name":"viewer","token":"change-me","role":"reader","tenants":["*"]}]
@@ -211,7 +214,7 @@ orgscan run-worker --burst --max-jobs 5
 orgscan jobs --json
 ```
 
-Use `run-scheduled` for local in-process execution, or `enqueue-scheduled` plus `run-worker` to process scheduled scans through Redis/RQ workers. Queue retries and backoff are controlled with `ORGSCAN_SCAN_QUEUE_RETRY_MAX` and `ORGSCAN_SCAN_QUEUE_RETRY_INTERVALS`, and outbound provider/GitHub requests can be throttled with `ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE` and `ORGSCAN_OUTBOUND_MIN_INTERVAL_SECONDS`.
+Use `run-scheduled` for local in-process execution, or `enqueue-scheduled` plus `run-worker` to process scheduled scans through either Redis/RQ (`ORGSCAN_SCAN_QUEUE_BACKEND=rq`) or the built-in database-backed queue backend (`ORGSCAN_SCAN_QUEUE_BACKEND=db`). Queue retries and backoff are controlled with `ORGSCAN_SCAN_QUEUE_RETRY_MAX` and `ORGSCAN_SCAN_QUEUE_RETRY_INTERVALS`; DB workers also use `ORGSCAN_SCAN_QUEUE_LEASE_SECONDS`, `ORGSCAN_SCAN_QUEUE_POLL_INTERVAL_SECONDS`, and optional `ORGSCAN_SCAN_QUEUE_WORKER_ID` for distributed worker coordination. Outbound provider/GitHub requests can still be throttled with `ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE` and `ORGSCAN_OUTBOUND_MIN_INTERVAL_SECONDS`.
 
 Mirror repositories for larger-history or repeat scanning workflows:
 
@@ -248,6 +251,7 @@ Key routes:
 - `/scheduled-scans/run` trigger due scheduled scans (admin)
 - `/scheduled-reports` list/create scheduled reports
 - `/scheduled-reports/run` trigger due scheduled reports (admin)
+- `/queue-status` queue backend status JSON (admin)
 - `/domain-exposures` filtered domain exposure JSON
 - `/relationships/graph` relationship graph JSON
 - `/trends/findings` findings trend JSON
@@ -285,7 +289,7 @@ pytest
 - External scanner output from `gitleaks`, `detect-secrets`, `semgrep`, and `trufflehog` can be normalized through `orgscan ingest-results` without rerunning the original tool.
 - The local web surface now runs on FastAPI and serves both live HTML dashboard views and JSON endpoints from the same application, including token-based tenant scoping, multi-org comparison, remediation, and filtered domain exposure views.
 - Reporting exports now include PDF alongside JSON, CSV, and HTML outputs.
-- Scheduled scans can also be enqueued onto Redis/RQ workers for queue-based execution in addition to the local synchronous scheduler flow, with configurable retry/backoff metadata.
+- Scheduled scans can also be enqueued onto either Redis/RQ or the built-in database-backed worker backend for queue-based execution, with configurable retry/backoff and worker lease metadata.
 - Scheduled reports can generate JSON/CSV/HTML/PDF artifacts on a cadence and optionally POST summary payloads to webhook-based alert integrations.
 - Repository mirrors can be synchronized into the local data directory and re-scanned for repeatable branch/history analysis workflows.
 - The current roadmap status and remaining gaps relative to the full project spec are documented in `docs/roadmap.md`.
