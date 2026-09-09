@@ -30,7 +30,7 @@ def execute_scan(
     organization_id: int | None = None,
     repository_id: int | None = None,
 ) -> ScanExecutionResult:
-    scanner_impl = get_scanner(scanner_name, settings=settings)
+    scanner_impl = get_scanner(scanner_name, settings=settings) if settings is not None else get_scanner(scanner_name)
     resolved_target = target_path.resolve()
 
     scan_job = storage.create_scan_job(
