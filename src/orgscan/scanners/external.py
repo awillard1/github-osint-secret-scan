@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from orgscan.config import Settings
 from orgscan.models import ConfidenceLevel, SeverityLevel
 from orgscan.scanners.base import ScanMatch
 
@@ -44,9 +45,12 @@ class GitleaksScanner:
     name = "gitleaks"
     source_class = "free"
 
+    def __init__(self, *, settings: Settings | None = None) -> None:
+        self.binary = settings.gitleaks_binary if settings is not None else self.name
+
     def scan_path(self, target: Path) -> list[ScanMatch]:
-        if not shutil.which(self.name):
-            raise _not_installed_error(self.name)
+        if not shutil.which(self.binary):
+            raise _not_installed_error(self.binary)
 
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
             report_path = Path(handle.name)
@@ -54,7 +58,7 @@ class GitleaksScanner:
         try:
             completed = subprocess.run(
                 [
-                    self.name,
+                    self.binary,
                     "detect",
                     "--no-git",
                     "--source",
@@ -122,12 +126,15 @@ class DetectSecretsScanner:
     name = "detect-secrets"
     source_class = "free"
 
+    def __init__(self, *, settings: Settings | None = None) -> None:
+        self.binary = settings.detect_secrets_binary if settings is not None else self.name
+
     def scan_path(self, target: Path) -> list[ScanMatch]:
-        if not shutil.which(self.name):
-            raise _not_installed_error(self.name)
+        if not shutil.which(self.binary):
+            raise _not_installed_error(self.binary)
 
         completed = subprocess.run(
-            [self.name, "scan", "--all-files", "--force-use-all-plugins", "--json", str(target)],
+            [self.binary, "scan", "--all-files", "--force-use-all-plugins", "--json", str(target)],
             check=False,
             capture_output=True,
             text=True,
@@ -198,12 +205,15 @@ class SemgrepScanner:
     name = "semgrep"
     source_class = "free"
 
+    def __init__(self, *, settings: Settings | None = None) -> None:
+        self.binary = settings.semgrep_binary if settings is not None else self.name
+
     def scan_path(self, target: Path) -> list[ScanMatch]:
-        if not shutil.which(self.name):
-            raise _not_installed_error(self.name)
+        if not shutil.which(self.binary):
+            raise _not_installed_error(self.binary)
 
         completed = subprocess.run(
-            [self.name, "scan", "--config", "auto", "--json", "--metrics=off", str(target)],
+            [self.binary, "scan", "--config", "auto", "--json", "--metrics=off", str(target)],
             check=False,
             capture_output=True,
             text=True,
@@ -275,12 +285,15 @@ class TruffleHogScanner:
     name = "trufflehog"
     source_class = "free"
 
+    def __init__(self, *, settings: Settings | None = None) -> None:
+        self.binary = settings.trufflehog_binary if settings is not None else self.name
+
     def scan_path(self, target: Path) -> list[ScanMatch]:
-        if not shutil.which(self.name):
-            raise _not_installed_error(self.name)
+        if not shutil.which(self.binary):
+            raise _not_installed_error(self.binary)
 
         completed = subprocess.run(
-            [self.name, "filesystem", "--json", str(target)],
+            [self.binary, "filesystem", "--json", str(target)],
             check=False,
             capture_output=True,
             text=True,

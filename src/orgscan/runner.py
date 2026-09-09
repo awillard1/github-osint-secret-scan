@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from orgscan.config import Settings
 from orgscan.repositories import Storage
 from orgscan.scoring import calculate_risk_score
 from orgscan.schemas import CanonicalFinding
@@ -25,10 +26,11 @@ def execute_scan(
     *,
     target_path: Path,
     scanner_name: str,
+    settings: Settings | None = None,
     organization_id: int | None = None,
     repository_id: int | None = None,
 ) -> ScanExecutionResult:
-    scanner_impl = get_scanner(scanner_name)
+    scanner_impl = get_scanner(scanner_name, settings=settings)
     resolved_target = target_path.resolve()
 
     scan_job = storage.create_scan_job(

@@ -22,9 +22,8 @@ from orgscan.queueing import QueueBackendError, enqueue_due_scheduled_scans, que
 from orgscan.repositories import Storage
 from orgscan.reporting import build_summary, finding_rows, write_csv, write_html, write_json
 from orgscan.runner import execute_scan, record_scan_results
-from orgscan.scanners import ScannerExecutionError
+from orgscan.scanners import ScannerExecutionError, available_scanner_names, load_report
 from orgscan.scanners.base import ScanMatch
-from orgscan.scanners.external import DetectSecretsScanner, GitleaksScanner, SemgrepScanner, TruffleHogScanner
 from orgscan.scheduler import next_run_from_cadence, run_due_scans
 
 app = typer.Typer(help="OSINT Security Platform CLI foundation")
@@ -143,15 +142,10 @@ def _resolve_asset_context(
 
 
 def _load_scanner_report(scanner: str, report_path: Path) -> tuple[str, list[ScanMatch]]:
-    if scanner == "gitleaks":
-        return GitleaksScanner.source_class, GitleaksScanner.load_report(report_path)
-    if scanner == "detect-secrets":
-        return DetectSecretsScanner.source_class, DetectSecretsScanner.load_report(report_path)
-    if scanner == "semgrep":
-        return SemgrepScanner.source_class, SemgrepScanner.load_report(report_path)
-    if scanner == "trufflehog":
-        return TruffleHogScanner.source_class, TruffleHogScanner.load_report(report_path)
-    raise typer.BadParameter(f"Unsupported report import scanner: {scanner}")
+    try:
+        return load_report(scanner, report_path)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 @app.command("setup")
@@ -209,7 +203,7 @@ def config(
     details = bootstrap(settings, verify_only=True)
     payload = {
         "settings": settings.as_dict(include_secrets=show_secrets),
-        "available_scanners": ["custom-patterns", "repo-governance", "gitleaks", "detect-secrets", "semgrep", "trufflehog"],
+        "available_scanners": available_scanner_names(),
         "available_domain_providers": ["local-metadata", "crtsh", "projectdiscovery", "whois", "dns", "all"],
         "available_execution_backends": ["local", "rq"],
         "dependency_status": {
@@ -702,6 +696,7 @@ def scan(
                 storage,
                 target_path=resolved_target,
                 scanner_name=scanner,
+                settings=settings,
                 organization_id=organization_id,
                 repository_id=repository_id,
             )
@@ -826,7 +821,7 @@ def run_scheduled(
     with session_factory() as session:
         storage = Storage(session)
         try:
-            results = run_due_scans(storage, limit=limit)
+            results = run_due_scans(storage, limit=limit, settings=settings)
         except ScannerExecutionError as exc:
             typer.echo(f"Scheduled scan failed: {exc}", err=True)
             raise typer.Exit(code=1) from exc

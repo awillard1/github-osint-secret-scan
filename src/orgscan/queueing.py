@@ -115,12 +115,14 @@ def execute_scheduled_scan_job(database_url: str, scheduled_scan_id: int) -> dic
         session.commit()
 
         try:
+            settings = Settings(database_url=database_url)
             organization_id = metadata.get("organization_id")
             repository_id = metadata.get("repository_id")
             result = execute_scan(
                 storage,
                 target_path=Path(scheduled.target_value),
                 scanner_name=scheduled.scanner_name,
+                settings=settings,
                 organization_id=int(organization_id) if organization_id is not None else None,
                 repository_id=int(repository_id) if repository_id is not None else None,
             )

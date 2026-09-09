@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from orgscan.config import Settings
 from orgscan.repositories import Storage
 from orgscan.runner import ScanExecutionResult, execute_scan
 
@@ -18,7 +19,7 @@ def next_run_from_cadence(cadence: str, reference: datetime | None = None) -> da
     return now + timedelta(days=1)
 
 
-def run_due_scans(storage: Storage, limit: int = 10) -> list[ScanExecutionResult]:
+def run_due_scans(storage: Storage, limit: int = 10, *, settings: Settings | None = None) -> list[ScanExecutionResult]:
     results: list[ScanExecutionResult] = []
     due_scans = storage.list_due_scheduled_scans()[:limit]
     for scheduled in due_scans:
@@ -29,6 +30,7 @@ def run_due_scans(storage: Storage, limit: int = 10) -> list[ScanExecutionResult
             storage,
             target_path=Path(scheduled.target_value),
             scanner_name=scheduled.scanner_name,
+            settings=settings,
             organization_id=int(organization_id) if organization_id is not None else None,
             repository_id=int(repository_id) if repository_id is not None else None,
         )
