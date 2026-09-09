@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
-
-from orgscan.models import Base
 
 
 def create_engine_from_url(database_url: str) -> Engine:
@@ -21,23 +22,29 @@ def create_session_factory(database_url: str) -> sessionmaker[Session]:
 
 
 def init_db(database_url: str) -> None:
+    run_migrations(database_url)
+
+
+def _alembic_config(database_url: str) -> Config:
+    repo_root = Path(__file__).resolve().parents[2]
+    config = Config(str(repo_root / "alembic.ini"))
+    config.set_main_option("script_location", str(repo_root / "migrations"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    return config
+
+
+def run_migrations(database_url: str) -> None:
+    command.upgrade(_alembic_config(database_url), "head")
+
+
+def current_db_revision(database_url: str) -> str | None:
     engine = create_engine_from_url(database_url)
-    Base.metadata.create_all(engine)
-    _apply_lightweight_migrations(engine)
-
-
-def _apply_lightweight_migrations(engine: Engine) -> None:
     inspector = inspect(engine)
-    with engine.begin() as connection:
-        tables = set(inspector.get_table_names())
-        if "findings" in tables:
-            finding_columns = {column["name"] for column in inspector.get_columns("findings")}
-            if "triage_owner" not in finding_columns:
-                connection.exec_driver_sql("ALTER TABLE findings ADD COLUMN triage_owner VARCHAR(255)")
-            if "triage_notes" not in finding_columns:
-                connection.exec_driver_sql("ALTER TABLE findings ADD COLUMN triage_notes TEXT")
-            if "remediation_due_date" not in finding_columns:
-                connection.exec_driver_sql("ALTER TABLE findings ADD COLUMN remediation_due_date DATE")
+    if "alembic_version" not in inspector.get_table_names():
+        return None
+    with engine.connect() as connection:
+        row = connection.exec_driver_sql("SELECT version_num FROM alembic_version").first()
+    return str(row[0]) if row else None
 
 
 @contextmanager

@@ -11,7 +11,10 @@ from typing import TYPE_CHECKING, Any
 from orgscan.scanners.base import ScanMatch
 from orgscan.scanners.custom_patterns import CustomPatternScanner
 from orgscan.scanners.external import DetectSecretsScanner, GitleaksScanner, ScannerExecutionError, SemgrepScanner, TruffleHogScanner
+from orgscan.scanners.git_history import GitHistoryPatternScanner
+from orgscan.scanners.ripgrep_heuristics import RipgrepHeuristicScanner
 from orgscan.scanners.repo_governance import RepositoryGovernanceScanner
+from orgscan.scanners.yara_scanner import YaraScanner
 
 if TYPE_CHECKING:
     from orgscan.config import Settings
@@ -23,10 +26,13 @@ ScannerClass = type[Any]
 BUILTIN_SCANNERS: dict[str, ScannerClass] = {
     CustomPatternScanner.name: CustomPatternScanner,
     RepositoryGovernanceScanner.name: RepositoryGovernanceScanner,
+    GitHistoryPatternScanner.name: GitHistoryPatternScanner,
     DetectSecretsScanner.name: DetectSecretsScanner,
     GitleaksScanner.name: GitleaksScanner,
+    RipgrepHeuristicScanner.name: RipgrepHeuristicScanner,
     SemgrepScanner.name: SemgrepScanner,
     TruffleHogScanner.name: TruffleHogScanner,
+    YaraScanner.name: YaraScanner,
 }
 
 
@@ -88,10 +94,13 @@ def load_report(scanner_name: str, report_path: Path) -> tuple[str, list[ScanMat
 __all__ = [
     "CustomPatternScanner",
     "RepositoryGovernanceScanner",
+    "GitHistoryPatternScanner",
     "DetectSecretsScanner",
     "GitleaksScanner",
+    "RipgrepHeuristicScanner",
     "SemgrepScanner",
     "TruffleHogScanner",
+    "YaraScanner",
     "ScannerExecutionError",
     "available_scanner_names",
     "get_scanner",

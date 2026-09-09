@@ -24,3 +24,5 @@ def test_open_source_gap_doc_exists() -> None:
     assert "Redis" in content
     assert "FastAPI" in content
     assert "RQ" in content
+    assert "YARA" in content
+    assert "ripgrep" in content

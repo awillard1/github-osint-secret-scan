@@ -36,9 +36,11 @@ def execute_scan(
     scan_job = storage.create_scan_job(
         target_type="path",
         target_id=str(resolved_target),
+        target_ref="workspace",
         scanner_name=scanner_impl.name,
         status="pending",
         parameters_json={"path": str(resolved_target)},
+        scope_json={"mode": "path"},
     )
     tool_run = storage.create_tool_run(
         tool_name=scanner_impl.name,
@@ -180,6 +182,8 @@ def _persist_matches(
             finding_id=finding.id,
             source=scanner_name,
             repository_path=str(match.path),
+            commit_sha=match.metadata.get("commit_sha"),
+            ref_name=match.metadata.get("ref_name"),
             line_start=match.line_start,
             line_end=match.line_end,
             snippet=match.snippet,

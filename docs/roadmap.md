@@ -17,7 +17,7 @@ This roadmap maps the current repository implementation to the phased goals from
 - normalized SQLAlchemy models for Organization, Domain, Repository, Account, ScanJob, Finding, Evidence, Relationship, RiskScore, DomainExposure, IdentityCorrelation, Suppression, ToolRun, and ScheduledScan
 - canonical finding normalization via `orgscan.schemas.CanonicalFinding`
 - SQLite-first persistence and repository helpers designed around SQLAlchemy abstractions for future PostgreSQL support
-- lightweight schema evolution for new finding columns on existing SQLite databases
+- Alembic-backed schema migrations for database initialization and upgrades
 - CLI database initialization and status commands
 
 ### Phase 2 — Operator workflows
@@ -28,7 +28,10 @@ This roadmap maps the current repository implementation to the phased goals from
 
 ### Phase 3 — Initial scanning pipeline
 - built-in custom pattern scanner
-- built-in repository governance scanner for CODEOWNERS, SECURITY.md, and unpinned workflow checks
+- built-in repository governance scanner for CODEOWNERS, SECURITY.md, Dependabot, risky workflow triggers/permissions, and unpinned workflow checks
+- built-in YARA scanner for rule-based artifact matching
+- built-in ripgrep heuristic scanner for internal hostnames, internal URLs, and org-specific indicator strings
+- built-in git-history pattern scanner for secret detection across repository history and refs
 - persisted scan jobs, tool runs, findings, risk scores, and evidence
 - redacted evidence handling for scanner output
 - external scanner wrappers for `gitleaks`, `detect-secrets`, `semgrep`, and `trufflehog` with graceful failure when binaries are unavailable
@@ -75,7 +78,6 @@ This roadmap maps the current repository implementation to the phased goals from
 - saved output from supported external scanners can be ingested and normalized through the common finding model
 
 ## Remaining gaps versus the full project spec
-- no YARA or deeper repo-history/governance coverage beyond current detect-secrets, repo-governance, DNS, WHOIS, crt.sh, ProjectDiscovery, and local metadata support yet
 - no advanced distributed orchestration beyond the initial Redis/RQ worker backend, and no graph visualization UI, multi-tenant auth, or PDF reporting
 - no paid provider implementations; only the abstraction and free/local correlation path exist
 - no large-scale branch/history orchestration or incremental repo mirror management

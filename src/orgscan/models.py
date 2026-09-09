@@ -68,6 +68,7 @@ class Organization(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    tenant_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     github_handle: Mapped[str | None] = mapped_column(String(255), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -107,6 +108,8 @@ class Repository(TimestampMixin, Base):
     url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     default_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_private: Mapped[bool] = mapped_column(Boolean, default=False)
+    mirror_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    last_mirrored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     organization: Mapped[Organization | None] = relationship(back_populates="repositories")
@@ -136,9 +139,11 @@ class ScanJob(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     target_type: Mapped[str] = mapped_column(String(64), index=True)
     target_id: Mapped[str] = mapped_column(String(1024), index=True)
+    target_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
     scanner_name: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(32), default=ScanJobStatus.PENDING.value)
     parameters_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    scope_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -195,6 +200,7 @@ class Evidence(TimestampMixin, Base):
     source_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     repository_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     commit_sha: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    ref_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     line_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
     line_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
     snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -231,6 +237,7 @@ class Relationship(TimestampMixin, Base):
     confidence: Mapped[str] = mapped_column(String(32), default=ConfidenceLevel.UNVERIFIED.value)
     source: Mapped[str | None] = mapped_column(String(255), nullable=True)
     evidence_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class RiskScore(TimestampMixin, Base):
@@ -258,6 +265,8 @@ class ToolRun(TimestampMixin, Base):
     tool_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     target: Mapped[str] = mapped_column(String(1024))
     command_line: Mapped[str | None] = mapped_column(Text, nullable=True)
+    artifact_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    artifact_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default=ScanJobStatus.PENDING.value)
     stdout_log: Mapped[str | None] = mapped_column(Text, nullable=True)
     stderr_log: Mapped[str | None] = mapped_column(Text, nullable=True)

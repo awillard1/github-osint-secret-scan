@@ -10,7 +10,19 @@ from pathlib import Path
 from orgscan.config import Settings
 
 REQUIRED_COMMANDS = ("git", "curl", "openssl")
-OPTIONAL_COMMANDS = ("jq", "redis-server", "gitleaks", "detect-secrets", "semgrep", "trufflehog", "subfinder", "httpx", "whois")
+OPTIONAL_COMMANDS = (
+    "jq",
+    "redis-server",
+    "gitleaks",
+    "detect-secrets",
+    "semgrep",
+    "trufflehog",
+    "yara",
+    "rg",
+    "subfinder",
+    "httpx",
+    "whois",
+)
 OPTIONAL_INSTALL_NOTES = {
     "jq": "Package manager install is usually sufficient.",
     "redis-server": "Install Redis locally or point ORGSCAN_REDIS_URL at a reachable Redis service to enable queue workers.",
@@ -18,6 +30,8 @@ OPTIONAL_INSTALL_NOTES = {
     "detect-secrets": "Install the Yelp detect-secrets CLI to add an additional baseline-oriented secret scanner.",
     "semgrep": "Prefer pipx or the official installation method if you plan to use Semgrep locally.",
     "trufflehog": "Prefer the official upstream installation method rather than OS packages for current versions.",
+    "yara": "Install the YARA CLI to enable rule-based artifact and secret matching.",
+    "rg": "Install ripgrep to enable fast heuristic scanning for internal hostnames and org-specific indicators.",
     "subfinder": "Use ProjectDiscovery's official release or package instructions for passive subdomain discovery.",
     "httpx": "Use ProjectDiscovery's official release or package instructions for HTTP probing and metadata collection.",
     "whois": "Install the standard whois client package to enable registrar and nameserver enrichment.",

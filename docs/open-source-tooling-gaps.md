@@ -4,7 +4,10 @@ This document summarizes what the current repository can accomplish directly and
 
 ## Already integrated or supported
 - Built-in custom pattern scanning for local files and directories
-- Built-in repository governance scanning for missing CODEOWNERS, missing SECURITY.md, and unpinned GitHub Actions references
+- Built-in repository governance scanning for missing CODEOWNERS, missing SECURITY.md, missing Dependabot configuration, risky workflow triggers/permissions, and unpinned GitHub Actions references
+- Built-in YARA scanning for rule-based secret and artifact matching
+- Built-in ripgrep heuristic scanning for internal hostnames, internal URLs, and org-specific strings
+- Built-in git history scanning for regex-based secret detection across repository refs
 - Optional `gitleaks` integration for generic secret scanning
 - Optional `detect-secrets` integration for complementary baseline-style secret detection
 - Optional `semgrep` integration for policy and code/config scanning
@@ -22,8 +25,8 @@ This document summarizes what the current repository can accomplish directly and
 ## High-value OSS tools to add next
 
 ### Code and config analysis
-- **YARA**: matching for known document or artifact patterns
-- **ripgrep**-based heuristics: lightweight scanning for internal hostnames, org-specific strings, and governance files
+- **YARA**: now integrated for rule-based secret and artifact matching; expand with richer rulesets over time
+- **ripgrep**-based heuristics: now integrated for internal hostnames, internal URLs, and org-specific strings; expand heuristics and governance coverage over time
 
 ### Domain and infrastructure enrichment
 - other CT log APIs can complement the existing `crt.sh` integration with broader or redundant certificate-transparency coverage
@@ -32,7 +35,7 @@ This document summarizes what the current repository can accomplish directly and
 
 ### Execution and scale
 - **Dramatiq** or **Celery** with **Redis**: richer worker orchestration, retries, and scaling beyond the current initial RQ queue backend
-- **Alembic**: formal schema migrations instead of lightweight SQLite evolution
+- **Alembic**: now integrated for formal schema migrations; future revisions should carry new entities and shared-deployment data model changes
 - richer client-side visualization stack for graph exploration and advanced dashboard UX beyond the current server-rendered FastAPI dashboard
 
 ## Gaps that cannot be fully solved by simple library swaps alone

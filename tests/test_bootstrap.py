@@ -13,3 +13,5 @@ def test_bootstrap_verify_only_reports_mode(tmp_path: Path) -> None:
     assert result["venv_exists"] is False
     assert result["install_returncode"] is None
     assert result["next_steps"]
+    assert "yara" in result["optional"]
+    assert "rg" in result["optional"]

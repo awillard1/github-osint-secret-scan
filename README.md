@@ -47,6 +47,12 @@ ORGSCAN_CRTSH_BASE_URL=https://crt.sh
 ORGSCAN_REDIS_URL=redis://127.0.0.1:6379/0
 ORGSCAN_SCAN_QUEUE_NAME=orgscan:scans
 ORGSCAN_DETECT_SECRETS_BINARY=detect-secrets
+ORGSCAN_YARA_BINARY=yara
+ORGSCAN_YARA_RULES_PATH=
+ORGSCAN_RG_BINARY=rg
+ORGSCAN_HEURISTIC_TERMS=corpname,internal-project
+ORGSCAN_INTERNAL_HOSTNAME_SUFFIXES=corp,internal,local,lan
+ORGSCAN_GIT_HISTORY_MAX_COMMITS=250
 ORGSCAN_SUBFINDER_BINARY=subfinder
 ORGSCAN_HTTPX_BINARY=httpx
 ORGSCAN_WHOIS_BINARY=whois
@@ -71,6 +77,7 @@ Initialize the database explicitly:
 
 ```bash
 orgscan init-db
+orgscan migrate-db
 ```
 
 Print application status and entity counts:
@@ -107,7 +114,7 @@ Run the built-in custom pattern scanner against a file or directory:
 orgscan scan path ./path/to/scan --organization example-org --repository example-org/app
 ```
 
-If `repo-governance`, `gitleaks`, `detect-secrets`, `semgrep`, or `trufflehog` are available, you can run them through the same workflow:
+If `repo-governance`, `gitleaks`, `detect-secrets`, `semgrep`, `trufflehog`, `yara`, `ripgrep-heuristics`, or `git-history-patterns` are available, you can run them through the same workflow:
 
 ```bash
 orgscan scan path ./path/to/repository --scanner repo-governance
@@ -115,9 +122,14 @@ orgscan scan path ./path/to/scan --scanner gitleaks
 orgscan scan path ./path/to/scan --scanner detect-secrets
 orgscan scan path ./path/to/scan --scanner semgrep
 orgscan scan path ./path/to/scan --scanner trufflehog
+orgscan scan path ./path/to/scan --scanner yara
+orgscan scan path ./path/to/scan --scanner ripgrep-heuristics
+orgscan scan path ./path/to/repository --scanner git-history-patterns
 ```
 
-The built-in `repo-governance` scanner checks for missing `CODEOWNERS`, missing `SECURITY.md`, and unpinned GitHub Actions references in workflow files.
+The built-in `repo-governance` scanner checks for missing `CODEOWNERS`, missing `SECURITY.md`, missing Dependabot coverage, unpinned GitHub Actions references, `pull_request_target` workflow triggers, and broad workflow write permissions.
+
+The built-in `yara` scanner uses bundled default rules for GitHub tokens, AWS access keys, and private key material unless `ORGSCAN_YARA_RULES_PATH` points at a custom ruleset. The built-in `ripgrep-heuristics` scanner uses ripgrep to look for internal hostnames, internal URLs, and configured `ORGSCAN_HEURISTIC_TERMS` strings. The built-in `git-history-patterns` scanner scans repository history across all refs with the core secret regex patterns and persists commit-linked evidence.
 
 External scanner wrappers honor the configured `ORGSCAN_*_BINARY` settings, and additional scanners can be registered through Python entry points in the `orgscan.scanners` group.
 
@@ -205,15 +217,17 @@ pytest
 ## Development notes
 
 - SQLite is the default backend for local development.
-- Storage code uses SQLAlchemy abstractions so PostgreSQL support can be added in later phases with minimal API churn.
+- Storage code uses SQLAlchemy abstractions and Alembic-backed schema migrations so PostgreSQL support can be added in later phases with minimal API churn.
 - Canonical scanner output should be normalized through `orgscan.schemas.CanonicalFinding` before persistence.
+- Database initialization and upgrades run through formal Alembic migrations instead of ad hoc SQLite-only column evolution.
 - The bootstrap helper recommends package-manager installation only for base OS dependencies; use official upstream install methods for tools such as Gitleaks and TruffleHog.
 - The optional ProjectDiscovery integration uses `subfinder` for passive subdomain discovery and `httpx` for HTTP service enrichment.
 - The optional crt.sh integration adds certificate-transparency-based host discovery for tracked domains.
 - The optional WHOIS integration adds registrar and nameserver enrichment for tracked domains.
 - The optional DNS integration adds record-level enrichment for tracked domains and previously discovered subdomains.
-- The built-in repo-governance scanner checks for missing ownership/security policy files and unpinned GitHub Actions references.
+- The built-in repo-governance scanner checks for missing ownership/security policy files, missing Dependabot configuration, risky workflow triggers, broad workflow permissions, and unpinned GitHub Actions references.
 - The initial `scan` command uses the built-in `custom-patterns` scanner and stores scan jobs, findings, and evidence in SQLite for later reporting.
+- Additional built-in scanners cover YARA rule matching, ripgrep-based heuristics, and git history scanning for regex-based secret exposures.
 - The `discover` command uses the public GitHub REST API and can use `ORGSCAN_GITHUB_TOKEN` when configured for higher rate limits.
 - External scanner output from `gitleaks`, `detect-secrets`, `semgrep`, and `trufflehog` can be normalized through `orgscan ingest-results` without rerunning the original tool.
 - The local web surface now runs on FastAPI and serves both live HTML dashboard views and JSON endpoints from the same application.

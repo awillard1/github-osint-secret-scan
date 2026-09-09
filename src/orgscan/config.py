@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     detect_secrets_binary: str = "detect-secrets"
     semgrep_binary: str = "semgrep"
     trufflehog_binary: str = "trufflehog"
+    yara_binary: str = "yara"
+    yara_rules_path: str | None = None
+    rg_binary: str = "rg"
+    heuristic_terms: str = ""
+    internal_hostname_suffixes: str = "corp,internal,local,lan"
+    git_history_max_commits: int = 250
     subfinder_binary: str = "subfinder"
     httpx_binary: str = "httpx"
     whois_binary: str = "whois"
@@ -45,6 +51,12 @@ class Settings(BaseSettings):
         if not include_secrets and payload.get("github_token"):
             payload["github_token"] = "<redacted>"
         return payload
+
+    def heuristic_term_list(self) -> list[str]:
+        return [value.strip() for value in self.heuristic_terms.split(",") if value.strip()]
+
+    def internal_hostname_suffix_list(self) -> list[str]:
+        return [value.strip().lstrip(".") for value in self.internal_hostname_suffixes.split(",") if value.strip()]
 
 
 def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
@@ -63,6 +75,12 @@ def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
         "ORGSCAN_DETECT_SECRETS_BINARY": "detect-secrets",
         "ORGSCAN_SEMGREP_BINARY": "semgrep",
         "ORGSCAN_TRUFFLEHOG_BINARY": "trufflehog",
+        "ORGSCAN_YARA_BINARY": "yara",
+        "ORGSCAN_YARA_RULES_PATH": "",
+        "ORGSCAN_RG_BINARY": "rg",
+        "ORGSCAN_HEURISTIC_TERMS": "",
+        "ORGSCAN_INTERNAL_HOSTNAME_SUFFIXES": "corp,internal,local,lan",
+        "ORGSCAN_GIT_HISTORY_MAX_COMMITS": 250,
         "ORGSCAN_SUBFINDER_BINARY": "subfinder",
         "ORGSCAN_HTTPX_BINARY": "httpx",
         "ORGSCAN_WHOIS_BINARY": "whois",

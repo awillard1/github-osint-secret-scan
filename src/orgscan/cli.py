@@ -12,7 +12,7 @@ from sqlalchemy import text
 from orgscan.bootstrap import bootstrap
 from orgscan.api import serve_api
 from orgscan.config import Settings, get_settings, render_env_template
-from orgscan.db import create_session_factory, init_db
+from orgscan.db import create_session_factory, current_db_revision, init_db
 from orgscan.discovery import DiscoveryError, GitHubDiscoveryClient
 from orgscan.expansion import GitHubExpansionEngine
 from orgscan.logging_config import setup_logging
@@ -192,6 +192,15 @@ def init_database() -> None:
     settings = _settings()
     init_db(settings.database_url)
     typer.echo(f"Initialized database at {settings.database_url}")
+    typer.echo(f"schema_revision: {current_db_revision(settings.database_url) or 'unknown'}")
+
+
+@app.command("migrate-db")
+def migrate_database() -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    typer.echo(f"Migrated database at {settings.database_url}")
+    typer.echo(f"schema_revision: {current_db_revision(settings.database_url) or 'unknown'}")
 
 
 @app.command("config")
@@ -292,6 +301,7 @@ def add_target(
 def status() -> None:
     settings = _settings()
     init_db(settings.database_url)
+    revision = current_db_revision(settings.database_url)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         session.execute(text("SELECT 1"))
@@ -300,6 +310,7 @@ def status() -> None:
     typer.echo(f"app: {settings.app_name}")
     typer.echo(f"environment: {settings.app_env}")
     typer.echo(f"database_url: {settings.database_url}")
+    typer.echo(f"schema_revision: {revision or 'unknown'}")
     typer.echo(_format_counts(counts))
 
 

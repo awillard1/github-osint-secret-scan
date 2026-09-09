@@ -32,6 +32,9 @@ def test_render_env_template_lists_tool_binaries() -> None:
     assert "ORGSCAN_REDIS_URL=redis://127.0.0.1:6379/0" in template
     assert "ORGSCAN_SCAN_QUEUE_NAME=orgscan:scans" in template
     assert "ORGSCAN_SEMGREP_BINARY=semgrep" in template
+    assert "ORGSCAN_YARA_BINARY=yara" in template
+    assert "ORGSCAN_RG_BINARY=rg" in template
+    assert "ORGSCAN_GIT_HISTORY_MAX_COMMITS=250" in template
     assert "ORGSCAN_SUBFINDER_BINARY=subfinder" in template
     assert "ORGSCAN_HTTPX_BINARY=httpx" in template
     assert "ORGSCAN_WHOIS_BINARY=whois" in template

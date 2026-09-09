@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "awillard1" }]
 dependencies = [
+  "alembic>=1.19.2,<2",
   "dnspython>=2.7,<3",
   "fastapi>=0.116,<1",
   "pydantic>=2.8,<3",

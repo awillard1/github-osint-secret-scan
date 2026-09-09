@@ -23,10 +23,12 @@ def test_cli_init_db_and_status(monkeypatch, tmp_path: Path) -> None:
     init_result = runner.invoke(app, ["init-db"])
     assert init_result.exit_code == 0
     assert "Initialized database" in init_result.stdout
+    assert "schema_revision: 20260909_0001" in init_result.stdout
 
     status_result = runner.invoke(app, ["status"])
     assert status_result.exit_code == 0
     assert f"database_url: {database_url}" in status_result.stdout
+    assert "schema_revision: 20260909_0001" in status_result.stdout
     assert "organizations: 0" in status_result.stdout
 
     setup_result = runner.invoke(app, ["setup", "--verify-only"])
@@ -127,12 +129,16 @@ def test_cli_config_and_init_config(monkeypatch, tmp_path: Path) -> None:
     assert '"projectdiscovery"' in config_result.stdout
     assert '"whois"' in config_result.stdout
     assert '"detect-secrets"' in config_result.stdout
+    assert '"yara"' in config_result.stdout
+    assert '"ripgrep-heuristics"' in config_result.stdout
 
     env_path = tmp_path / ".env.generated"
     init_result = runner.invoke(app, ["init-config", str(env_path)])
     assert init_result.exit_code == 0
     assert env_path.exists()
     assert "ORGSCAN_DETECT_SECRETS_BINARY=detect-secrets" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_YARA_BINARY=yara" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_RG_BINARY=rg" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_SUBFINDER_BINARY=subfinder" in env_path.read_text(encoding="utf-8")
 
     get_settings.cache_clear()
@@ -557,12 +563,13 @@ def test_cli_repo_governance_scanner_finds_governance_issues(monkeypatch, tmp_pa
 
     result = runner.invoke(app, ["scan", "path", str(tmp_path), "--scanner", "repo-governance", "--json"])
     assert result.exit_code == 0
-    assert '"findings": 3' in result.stdout
+    assert '"findings": 4' in result.stdout
 
     findings_result = runner.invoke(app, ["findings", "--json"])
     assert findings_result.exit_code == 0
     assert "Missing CODEOWNERS file" in findings_result.stdout
     assert "Missing SECURITY.md policy" in findings_result.stdout
+    assert "Missing Dependabot configuration" in findings_result.stdout
     assert "Unpinned GitHub Action reference" in findings_result.stdout
 
     get_settings.cache_clear()
