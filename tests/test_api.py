@@ -214,11 +214,11 @@ def test_fastapi_db_session_auth_and_schedule_management(monkeypatch, tmp_path: 
     with session_factory() as session:
         storage = Storage(session)
         storage.create_organization("tenant-a-org", tenant_key="tenant-a")
-        storage.create_user("alice", email="alice@example.com")
-        storage.grant_tenant_membership("alice", "tenant-a", role="analyst")
+        alice = storage.create_user("alice", email="alice@example.com")
+        storage.grant_tenant_membership(alice.id, "tenant-a", role="analyst")
         _, analyst_token = create_db_session_token(storage, username="alice", tenants=["tenant-a"])
-        storage.create_user("admin", email="admin@example.com")
-        storage.grant_tenant_membership("admin", "tenant-a", role="admin")
+        admin = storage.create_user("admin", email="admin@example.com")
+        storage.grant_tenant_membership(admin.id, "tenant-a", role="admin")
         _, admin_token = create_db_session_token(storage, username="admin", tenants=["tenant-a"])
         session.commit()
 
@@ -248,7 +248,7 @@ def test_fastapi_db_session_auth_and_schedule_management(monkeypatch, tmp_path: 
     admin_run = client.post("/scheduled-scans/run", headers={"X-Orgscan-Token": admin_token}, json={"limit": 5})
 
     assert context.status_code == 200
-    assert context.json()["source"] == "db-session"
+    assert context.json()["auth"]["source"] == "db-session"
     assert context.json()["effective_tenants"] == ["tenant-a"]
     assert create_scan.status_code == 200
     assert create_scan.json()["scheduled_scan"]["tenant_key"] == "tenant-a"
