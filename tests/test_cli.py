@@ -110,6 +110,7 @@ def test_cli_verify_deps_json(monkeypatch, tmp_path: Path) -> None:
     result = runner.invoke(app, ["verify-deps", "--json"])
     assert result.exit_code == 0
     assert '"ok": true' in result.stdout
+    assert '"optional_tools"' in result.stdout
 
     get_settings.cache_clear()
 
@@ -127,6 +128,7 @@ def test_cli_config_and_init_config(monkeypatch, tmp_path: Path) -> None:
     assert '"projectdiscovery"' in config_result.stdout
     assert '"whois"' in config_result.stdout
     assert '"detect-secrets"' in config_result.stdout
+    assert '"optional_tools"' in config_result.stdout
 
     env_path = tmp_path / ".env.generated"
     init_result = runner.invoke(app, ["init-config", str(env_path)])

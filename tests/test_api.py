@@ -54,6 +54,7 @@ def test_api_service_returns_summary_and_findings(tmp_path: Path) -> None:
     service = OrgscanApiService(database_url)
     health_status, health_payload = service.handle("/health")
     summary_status, summary_payload = service.handle("/summary")
+    scanners_status, scanners_payload = service.handle("/scanners")
     findings_status, findings_payload = service.handle("/findings?limit=10&severity=high")
     graph_status, graph_payload = service.handle("/relationships/graph?limit=10")
     trends_status, trends_payload = service.handle("/trends/findings?days=7")
@@ -64,6 +65,9 @@ def test_api_service_returns_summary_and_findings(tmp_path: Path) -> None:
     assert summary_payload["counts"]["findings"] == 2
     assert summary_payload["source_tool_breakdown"]["custom-patterns"] == 1
     assert summary_payload["relationship_graph"]["edges"]
+    assert scanners_status == 200
+    assert any(item["name"] == "custom-patterns" for item in scanners_payload["scanners"])
+    assert "optional_tools" in scanners_payload
     assert findings_status == 200
     assert findings_payload["findings"][0]["title"] == "API finding"
     assert len(findings_payload["findings"]) == 1
@@ -359,6 +363,7 @@ def test_fastapi_dashboard_and_json_routes(tmp_path: Path) -> None:
     assert dashboard.status_code == 200
     assert "Live filters" in dashboard.text
     assert "Artifact upload analysis" in dashboard.text
+    assert "Open-source tooling readiness" in dashboard.text
     assert "High signal only" in dashboard.text
     assert "Live dashboard finding" in dashboard.text
     assert findings.status_code == 200

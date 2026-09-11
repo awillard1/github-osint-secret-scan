@@ -189,6 +189,7 @@ Key routes:
 
 - `/dashboard` live HTML dashboard with filter controls
 - `/summary` summary JSON
+- `/scanners` scanner and optional-tool readiness JSON
 - `/findings` filtered findings JSON
 - `/findings/{id}` detailed finding JSON with evidence and risk scores
 - `/findings/{id}/evidence` evidence-only JSON for a finding
@@ -206,6 +207,7 @@ Key routes:
 
 The live `/dashboard` view now also includes an artifact upload form so analysts can submit files and archives from the browser, choose an available scanner, and immediately review the resulting scan activity.
 The dashboard also supports inline finding workflow actions for triage, suppress, accept-risk, and reopen operations without leaving the web UI, plus drill-down links for findings, scan jobs, and relationships.
+The dashboard and CLI now surface open-source tool readiness, including configured binary paths, install status, and configuration environment variables, to make external integrations easier to enable.
 The current dashboard remains local-first and does not yet enforce tenant-aware authentication on the HTML routes; use the JSON API behind your own access controls until a dedicated authenticated dashboard session flow is added.
 
 Artifact upload example:

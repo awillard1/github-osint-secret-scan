@@ -218,6 +218,7 @@ def config(
         "available_scanners": available_scanner_names(),
         "available_domain_providers": ["local-metadata", "crtsh", "projectdiscovery", "whois", "dns", "all"],
         "available_execution_backends": ["local", "rq"],
+        "optional_tools": details["optional_tools"],
         "dependency_status": {
             "required": details["required"],
             "optional": details["optional"],
@@ -237,6 +238,10 @@ def config(
     typer.echo("Available domain providers:")
     for name in payload["available_domain_providers"]:
         typer.echo(f"  - {name}")
+    typer.echo("Optional tool integrations:")
+    for item in payload["optional_tools"]:
+        suffix = "" if item["installed"] else f" (set {item['env_var']} or install the tool)"
+        typer.echo(f"  - {item['name']}: {'ok' if item['installed'] else 'missing'} -> {item['configured_command']}{suffix}")
     typer.echo("Dependency status:")
     for scope, entries in payload["dependency_status"].items():
         typer.echo(f"  {scope}:")
@@ -1015,13 +1020,14 @@ def dashboard(
 ) -> None:
     settings = _settings()
     init_db(settings.database_url)
+    tooling = bootstrap(settings, verify_only=True)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
         summary = build_summary(storage)
         rows = finding_rows(storage, limit=limit)
 
-    output = write_html(output_path, summary, rows)
+    output = write_html(output_path, summary, rows, tooling={"optional_tools": tooling["optional_tools"]})
     typer.echo(f"Wrote dashboard HTML to {output}")
 
 
@@ -1054,6 +1060,10 @@ def verify_deps(
         typer.echo("Dependency verification")
         for command, present in details["required"].items():
             typer.echo(f"  - {command}: {'ok' if present else 'missing'}")
+        typer.echo("Optional integrations")
+        for item in details["optional_tools"]:
+            guidance = "" if item["installed"] else f" | configure via {item['env_var'] or 'PATH'} | {item['install_note']}"
+            typer.echo(f"  - {item['name']} ({item['category']}): {'ok' if item['installed'] else 'missing'} -> {item['configured_command']}{guidance}")
         if missing_required:
             typer.echo(f"Missing required dependencies: {', '.join(missing_required)}")
         else:

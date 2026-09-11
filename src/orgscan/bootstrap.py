@@ -22,6 +22,62 @@ OPTIONAL_INSTALL_NOTES = {
     "httpx": "Use ProjectDiscovery's official release or package instructions for HTTP probing and metadata collection.",
     "whois": "Install the standard whois client package to enable registrar and nameserver enrichment.",
 }
+OPTIONAL_TOOL_METADATA = {
+    "jq": {
+        "category": "operator",
+        "description": "Formats and filters JSON output from orgscan commands and APIs.",
+        "env_var": None,
+        "settings_attr": None,
+    },
+    "redis-server": {
+        "category": "queue",
+        "description": "Optional queue backend for scheduled scan workers.",
+        "env_var": "ORGSCAN_REDIS_URL",
+        "settings_attr": None,
+    },
+    "gitleaks": {
+        "category": "scanner",
+        "description": "Generic secret scanner for files and uploaded artifacts.",
+        "env_var": "ORGSCAN_GITLEAKS_BINARY",
+        "settings_attr": "gitleaks_binary",
+    },
+    "detect-secrets": {
+        "category": "scanner",
+        "description": "Baseline-oriented secret scanner with plugin coverage.",
+        "env_var": "ORGSCAN_DETECT_SECRETS_BINARY",
+        "settings_attr": "detect_secrets_binary",
+    },
+    "semgrep": {
+        "category": "scanner",
+        "description": "Code and configuration rule scanner for policy findings.",
+        "env_var": "ORGSCAN_SEMGREP_BINARY",
+        "settings_attr": "semgrep_binary",
+    },
+    "trufflehog": {
+        "category": "scanner",
+        "description": "Secret scanner with verified-detector support.",
+        "env_var": "ORGSCAN_TRUFFLEHOG_BINARY",
+        "settings_attr": "trufflehog_binary",
+    },
+    "subfinder": {
+        "category": "provider",
+        "description": "Passive subdomain discovery for ProjectDiscovery enrichment.",
+        "env_var": "ORGSCAN_SUBFINDER_BINARY",
+        "settings_attr": "subfinder_binary",
+    },
+    "httpx": {
+        "category": "provider",
+        "description": "HTTP probing and metadata enrichment for discovered hosts.",
+        "env_var": "ORGSCAN_HTTPX_BINARY",
+        "settings_attr": "httpx_binary",
+    },
+    "whois": {
+        "category": "provider",
+        "description": "Registrar and nameserver enrichment for tracked domains.",
+        "env_var": "ORGSCAN_WHOIS_BINARY",
+        "settings_attr": "whois_binary",
+    },
+}
 
 
 def detect_package_manager() -> str | None:
@@ -33,6 +89,26 @@ def detect_package_manager() -> str | None:
 
 def command_status(command: str) -> bool:
     return shutil.which(command) is not None
+
+
+def optional_tool_inventory(settings: Settings) -> list[dict[str, object]]:
+    tools: list[dict[str, object]] = []
+    for command in OPTIONAL_COMMANDS:
+        metadata = OPTIONAL_TOOL_METADATA.get(command, {})
+        configured_value = getattr(settings, str(metadata.get("settings_attr")), None) if metadata.get("settings_attr") else command
+        resolved_command = str(configured_value or command)
+        tools.append(
+            {
+                "name": command,
+                "category": metadata.get("category", "optional"),
+                "description": metadata.get("description", ""),
+                "configured_command": resolved_command,
+                "env_var": metadata.get("env_var"),
+                "installed": command_status(resolved_command),
+                "install_note": OPTIONAL_INSTALL_NOTES.get(command, ""),
+            }
+        )
+    return tools
 
 
 def recommended_install_command(package_manager: str | None, commands: tuple[str, ...]) -> str:
@@ -82,6 +158,7 @@ def bootstrap(
         "package_manager": package_manager,
         "required": {command: command_status(command) for command in REQUIRED_COMMANDS},
         "optional": {command: command_status(command) for command in OPTIONAL_COMMANDS},
+        "optional_tools": optional_tool_inventory(settings),
         "recommended_install": recommended_install_command(package_manager, REQUIRED_COMMANDS),
         "optional_install_notes": OPTIONAL_INSTALL_NOTES,
         "venv_path": str(venv_path),

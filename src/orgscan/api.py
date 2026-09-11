@@ -15,6 +15,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
+from orgscan.bootstrap import optional_tool_inventory
 from orgscan.config import Settings, get_settings
 from orgscan.db import create_session_factory, init_db
 from orgscan.models import ScanJob, ToolRun
@@ -278,6 +279,15 @@ class OrgscanApiService:
                 }
             )
         return options
+
+    def _tooling_payload(self) -> dict[str, object]:
+        tools = optional_tool_inventory(self.settings)
+        return {
+            "scanners": self._artifact_scanner_options(),
+            "optional_tools": tools,
+            "installed_optional_tools": [item["name"] for item in tools if item["installed"]],
+            "missing_optional_tools": [item["name"] for item in tools if not item["installed"]],
+        }
 
     def _summary_payload(self) -> dict[str, object]:
         with self.session_factory() as session:
@@ -981,6 +991,7 @@ class OrgscanApiService:
                     selected=str((artifact_scan_result or {}).get("scanner") or "custom-patterns")
                 ),
                 access_context_note=self._access_context_note(),
+                tooling=self._tooling_payload(),
             )
 
     def _dashboard_finding_workflow(
@@ -1031,6 +1042,8 @@ class OrgscanApiService:
             return 200, {"status": "ok"}
         if route == "/summary":
             return 200, self._summary_payload()
+        if route == "/scanners":
+            return 200, self._tooling_payload()
         if route == "/findings":
             return 200, self._findings_payload(
                 limit=int(params.get("limit", ["50"])[0]),
@@ -1141,6 +1154,10 @@ def create_app(database_url: str) -> FastAPI:
     @app.get("/summary")
     def summary() -> dict[str, object]:
         return service._summary_payload()
+
+    @app.get("/scanners")
+    def scanners() -> dict[str, object]:
+        return service._tooling_payload()
 
     @app.get("/findings")
     def findings(

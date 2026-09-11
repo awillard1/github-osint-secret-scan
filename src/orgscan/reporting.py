@@ -207,6 +207,7 @@ def render_dashboard_html(
     finding_action_error: str | None = None,
     scanner_options: list[dict[str, Any]] | None = None,
     access_context_note: str | None = None,
+    tooling: dict[str, Any] | None = None,
 ) -> str:
     def items(mapping: dict[str, Any]) -> str:
         return "".join(f"<li><strong>{html.escape(str(key))}</strong>: {html.escape(str(value))}</li>" for key, value in mapping.items())
@@ -238,6 +239,17 @@ def render_dashboard_html(
         )
         for item in (scanner_options or [{"name": "custom-patterns", "available": True, "selected": True}])
     )
+    tooling_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(item['name']))}</td>"
+        f"<td>{html.escape(str(item['category']))}</td>"
+        f"<td>{html.escape('installed' if item.get('installed') else 'missing')}</td>"
+        f"<td>{html.escape(str(item.get('configured_command') or ''))}</td>"
+        f"<td>{html.escape(str(item.get('env_var') or 'PATH'))}</td>"
+        f"<td>{html.escape(str(item.get('install_note') or ''))}</td>"
+        "</tr>"
+        for item in (tooling or {}).get("optional_tools", [])
+    ) or "<tr><td colspan='6'>No tooling data available</td></tr>"
 
     def render_finding_row(row: dict[str, Any]) -> str:
         base = (
@@ -400,7 +412,7 @@ def render_dashboard_html(
           <h2>Live filters</h2>
           <p class="subtle">Refresh the dashboard view or jump to raw API outputs for automation.</p>
         </div>
-        <div class="quick-links"><a href="/summary">summary json</a><a href="/findings?limit={limit}">findings json</a><a href="/relationships/graph">graph json</a><a href="/trends/findings?days={days}">trends json</a><a href="/dashboard/graph">graph view</a></div>
+        <div class="quick-links"><a href="/summary">summary json</a><a href="/scanners">scanners json</a><a href="/findings?limit={limit}">findings json</a><a href="/relationships/graph">graph json</a><a href="/trends/findings?days={days}">trends json</a><a href="/dashboard/graph">graph view</a></div>
       </div>
       <form method="get" action="/dashboard" class="filters">
         <label>Status <input type="text" name="status" value="{status}"></label>
@@ -587,6 +599,15 @@ def render_dashboard_html(
         <tbody>{rows}</tbody>
       </table>
     </section>
+    <section>
+      <h2>Open-source tooling readiness</h2>
+      <table>
+        <thead>
+          <tr><th>Tool</th><th>Category</th><th>Status</th><th>Configured command</th><th>Configuration</th><th>Install guidance</th></tr>
+        </thead>
+        <tbody>{tooling_rows}</tbody>
+      </table>
+    </section>
     <div class=\"grid\">
       <section>
         <h2>Domain exposures</h2>
@@ -603,7 +624,13 @@ def render_dashboard_html(
 """
 
 
-def write_html(output_path: Path, summary: dict[str, Any], findings: list[dict[str, Any]]) -> Path:
+def write_html(
+    output_path: Path,
+    summary: dict[str, Any],
+    findings: list[dict[str, Any]],
+    *,
+    tooling: dict[str, Any] | None = None,
+) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         render_dashboard_html(
@@ -611,6 +638,7 @@ def write_html(output_path: Path, summary: dict[str, Any], findings: list[dict[s
             findings,
             trends=summary.get("finding_trends"),
             graph=summary.get("relationship_graph"),
+            tooling=tooling,
         ),
         encoding="utf-8",
     )
