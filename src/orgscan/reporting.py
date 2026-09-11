@@ -104,6 +104,7 @@ def finding_rows(storage: Storage, limit: int = 500) -> list[dict[str, Any]]:
             "source_name": finding.source_name,
             "repository_id": finding.repository_id,
             "scan_job_id": finding.scan_job_id,
+            "risk_score": finding.risk_score or 0,
             "detected_at": finding.detected_at.isoformat(),
             "fingerprint": finding.fingerprint,
         }
@@ -222,57 +223,63 @@ def render_dashboard_html(
             "</div>"
         )
 
-    rows = "".join(
-        "<tr>"
-        f"<td>{html.escape(str(row['id']))}</td>"
-        f"<td>{html.escape(str(row['title']))}</td>"
-        f"<td>{html.escape(str(row['category']))}</td>"
-        f"<td>{html.escape(str(row['severity']))}</td>"
-        f"<td>{html.escape(str(row['confidence']))}</td>"
-        f"<td>{html.escape(str(row['risk_score']))}</td>"
-        f"<td>{html.escape(str(row['status']))}</td> / {html.escape(str(row['triage_state']))}"
-        f"<br><span class='subtle'>{html.escape(str(row['triage_owner'] or 'unassigned'))}</span>"
-        f"<td>{html.escape(str(row['source_tool']))}</td>"
-        f"<td>{html.escape(str(row['detected_at']))}</td>"
-        "<td>"
-        "<form method='post' action='/dashboard/findings/{id}/workflow' class='finding-action'>"
-        "<input type='hidden' name='limit' value='{limit}'>"
-        "<input type='hidden' name='days' value='{days}'>"
-        "<input type='hidden' name='status' value='{status}'>"
-        "<input type='hidden' name='severity' value='{severity}'>"
-        "<input type='hidden' name='category' value='{category}'>"
-        "<input type='hidden' name='confidence' value='{confidence}'>"
-        "<input type='hidden' name='high_signal_only' value='{high_signal_only}'>"
-        "<input type='hidden' name='min_confidence' value='{min_confidence}'>"
-        "<select name='action'>"
-        "<option value='triage'>triage</option>"
-        "<option value='suppress'>suppress</option>"
-        "<option value='accept-risk'>accept risk</option>"
-        "<option value='reopen'>reopen</option>"
-        "</select>"
-        "<input type='text' name='owner' placeholder='owner'>"
-        "<input type='text' name='note' placeholder='note or reason'>"
-        "<select name='triage_state'>"
-        "<option value='reviewing'>reviewing</option>"
-        "<option value='validated'>validated</option>"
-        "<option value='false_positive'>false_positive</option>"
-        "</select>"
-        "<button type='submit'>Apply</button>"
-        "</form>"
-        "</td>"
-        "</tr>"
-        for row in findings
-        for limit, days, status, severity, category, confidence, high_signal_only, min_confidence in [(
-            html.escape(str((filters or {}).get("limit", 100))),
-            html.escape(str((filters or {}).get("days", 30))),
-            html.escape(str((filters or {}).get("status", ""))),
-            html.escape(str((filters or {}).get("severity", ""))),
-            html.escape(str((filters or {}).get("category", ""))),
-            html.escape(str((filters or {}).get("confidence", ""))),
-            "true" if (filters or {}).get("high_signal_only") else "false",
-            html.escape(str((filters or {}).get("min_confidence", "likely"))),
-        )]
-    )
+    def render_finding_row(row: dict[str, Any]) -> str:
+        base = (
+            "<tr>"
+            f"<td>{html.escape(str(row['id']))}</td>"
+            f"<td>{html.escape(str(row['title']))}</td>"
+            f"<td>{html.escape(str(row['category']))}</td>"
+            f"<td>{html.escape(str(row['severity']))}</td>"
+            f"<td>{html.escape(str(row['confidence']))}</td>"
+            f"<td>{html.escape(str(row['risk_score']))}</td>"
+            f"<td>{html.escape(str(row['status']))}</td> / {html.escape(str(row['triage_state']))}"
+            f"<br><span class='subtle'>{html.escape(str(row['triage_owner'] or 'unassigned'))}</span></td>"
+            f"<td>{html.escape(str(row['source_tool']))}</td>"
+            f"<td>{html.escape(str(row['detected_at']))}</td>"
+        )
+        if not live:
+            return base + "</tr>"
+        action_form = (
+            "<td>"
+            "<form method='post' action='/dashboard/findings/{id}/workflow' class='finding-action'>"
+            "<input type='hidden' name='limit' value='{limit}'>"
+            "<input type='hidden' name='days' value='{days}'>"
+            "<input type='hidden' name='status' value='{status}'>"
+            "<input type='hidden' name='severity' value='{severity}'>"
+            "<input type='hidden' name='category' value='{category}'>"
+            "<input type='hidden' name='confidence' value='{confidence}'>"
+            "<input type='hidden' name='high_signal_only' value='{high_signal_only}'>"
+            "<input type='hidden' name='min_confidence' value='{min_confidence}'>"
+            "<select name='action'>"
+            "<option value='triage'>triage</option>"
+            "<option value='suppress'>suppress</option>"
+            "<option value='accept-risk'>accept risk</option>"
+            "<option value='reopen'>reopen</option>"
+            "</select>"
+            "<input type='text' name='owner' placeholder='owner'>"
+            "<input type='text' name='note' placeholder='note or reason'>"
+            "<select name='triage_state'>"
+            "<option value='reviewing'>reviewing</option>"
+            "<option value='validated'>validated</option>"
+            "<option value='false_positive'>false_positive</option>"
+            "</select>"
+            "<button type='submit'>Apply</button>"
+            "</form>"
+            "</td>"
+        ).format(
+            id=html.escape(str(row["id"])),
+            limit=html.escape(str((filters or {}).get("limit", 100))),
+            days=html.escape(str((filters or {}).get("days", 30))),
+            status=html.escape(str((filters or {}).get("status", ""))),
+            severity=html.escape(str((filters or {}).get("severity", ""))),
+            category=html.escape(str((filters or {}).get("category", ""))),
+            confidence=html.escape(str((filters or {}).get("confidence", ""))),
+            high_signal_only="true" if (filters or {}).get("high_signal_only") else "false",
+            min_confidence=html.escape(str((filters or {}).get("min_confidence", "likely"))),
+        )
+        return base + action_form + "</tr>"
+
+    rows = "".join(render_finding_row(row) for row in findings)
     top_findings = "".join(
         "<tr>"
         f"<td>{html.escape(str(row['id']))}</td>"
@@ -349,6 +356,11 @@ def render_dashboard_html(
         )
     graph_nodes = len((graph or {}).get("nodes", []))
     graph_edges = len((graph or {}).get("edges", []))
+    findings_header = (
+        "<tr><th>ID</th><th>Title</th><th>Category</th><th>Severity</th><th>Confidence</th><th>Risk / workflow</th><th>Tool</th><th>Detected</th>"
+        + ("<th>Actions</th>" if live else "")
+        + "</tr>"
+    )
     identity_labels = [
         f"{item['username'] or 'unknown'} / {item['email'] or 'unknown'} ({item['relation_type']})"
         for item in summary["identity_correlations"]
@@ -540,7 +552,7 @@ def render_dashboard_html(
       <h2>Recent findings</h2>
       <table>
         <thead>
-          <tr><th>ID</th><th>Title</th><th>Category</th><th>Severity</th><th>Confidence</th><th>Risk / workflow</th><th>Tool</th><th>Detected</th><th>Actions</th></tr>
+          {findings_header}
         </thead>
         <tbody>{rows}</tbody>
       </table>
