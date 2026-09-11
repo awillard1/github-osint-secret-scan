@@ -18,7 +18,7 @@ def test_api_service_returns_summary_and_findings(tmp_path: Path) -> None:
         org, _ = storage.get_or_create_organization("example-org")
         repo, _ = storage.get_or_create_repository("example-org/app", organization_id=org.id)
         account, _ = storage.get_or_create_account("alice", organization_id=org.id)
-        storage.create_finding(
+        matching = storage.create_finding(
             CanonicalFinding(
                 source_tool="custom-patterns",
                 source_name="custom-patterns",
@@ -30,7 +30,7 @@ def test_api_service_returns_summary_and_findings(tmp_path: Path) -> None:
                 detected_at=datetime.now(UTC) - timedelta(days=1),
             )
         )
-        storage.create_finding(
+        matching = storage.create_finding(
             CanonicalFinding(
                 source_tool="semgrep",
                 source_name="semgrep",
@@ -81,7 +81,11 @@ def test_api_findings_supports_extended_filters(tmp_path: Path) -> None:
         domain, _ = storage.get_or_create_domain("example.com", organization_id=org.id)
         repo, _ = storage.get_or_create_repository("example-org/app", organization_id=org.id)
         scan_job = storage.create_scan_job("repository", repo.full_name, "gitleaks", status="completed")
-        storage.create_finding(
+        organization_id = org.id
+        domain_id = domain.id
+        repository_id = repo.id
+        scan_job_id = scan_job.id
+        matching = storage.create_finding(
             CanonicalFinding(
                 source_tool="gitleaks",
                 source_name="gitleaks",
@@ -90,15 +94,15 @@ def test_api_findings_supports_extended_filters(tmp_path: Path) -> None:
                 description="Stored for extended filter output",
                 severity="high",
                 status="triaged",
-                triage_state="reviewing",
-                organization_id=org.id,
-                domain_id=domain.id,
-                repository_id=repo.id,
-                scan_job_id=scan_job.id,
+                organization_id=organization_id,
+                domain_id=domain_id,
+                repository_id=repository_id,
+                scan_job_id=scan_job_id,
                 risk_score=87,
                 detected_at=now - timedelta(hours=1),
             )
         )
+        storage.update_finding_triage(matching.id, triage_state="reviewing")
         storage.create_finding(
             CanonicalFinding(
                 source_tool="semgrep",
@@ -119,10 +123,10 @@ def test_api_findings_supports_extended_filters(tmp_path: Path) -> None:
         params={
             "source_tool": "gitleaks",
             "triage_state": "reviewing",
-            "organization_id": org.id,
-            "domain_id": domain.id,
-            "repository_id": repo.id,
-            "scan_job_id": scan_job.id,
+            "organization_id": organization_id,
+            "domain_id": domain_id,
+            "repository_id": repository_id,
+            "scan_job_id": scan_job_id,
             "risk_score_min": 80,
             "risk_score_max": 90,
             "detected_after": (now - timedelta(days=1)).isoformat(),
@@ -135,7 +139,7 @@ def test_api_findings_supports_extended_filters(tmp_path: Path) -> None:
     assert len(findings) == 1
     assert findings[0]["title"] == "Matching API finding"
     assert findings[0]["risk_score"] == 87
-    assert findings[0]["organization_id"] == org.id
+    assert findings[0]["organization_id"] == organization_id
 
 
 def test_fastapi_dashboard_and_json_routes(tmp_path: Path) -> None:

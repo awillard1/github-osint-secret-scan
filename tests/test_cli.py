@@ -225,7 +225,11 @@ def test_cli_findings_supports_extended_filters(monkeypatch, tmp_path: Path) -> 
         domain, _ = storage.get_or_create_domain("example.com", organization_id=org.id)
         repo, _ = storage.get_or_create_repository("example-org/app", organization_id=org.id)
         scan_job = storage.create_scan_job("repository", repo.full_name, "gitleaks", status="completed")
-        storage.create_finding(
+        organization_id = org.id
+        domain_id = domain.id
+        repository_id = repo.id
+        scan_job_id = scan_job.id
+        matching = storage.create_finding(
             CanonicalFinding(
                 source_tool="gitleaks",
                 source_name="gitleaks",
@@ -233,15 +237,15 @@ def test_cli_findings_supports_extended_filters(monkeypatch, tmp_path: Path) -> 
                 title="CLI matching finding",
                 description="Should match extended CLI filters",
                 status="triaged",
-                triage_state="reviewing",
-                organization_id=org.id,
-                domain_id=domain.id,
-                repository_id=repo.id,
-                scan_job_id=scan_job.id,
+                organization_id=organization_id,
+                domain_id=domain_id,
+                repository_id=repository_id,
+                scan_job_id=scan_job_id,
                 risk_score=82,
                 detected_at=now - timedelta(hours=2),
             )
         )
+        storage.update_finding_triage(matching.id, triage_state="reviewing")
         storage.create_finding(
             CanonicalFinding(
                 source_tool="semgrep",
@@ -265,13 +269,13 @@ def test_cli_findings_supports_extended_filters(monkeypatch, tmp_path: Path) -> 
             "--triage-state",
             "reviewing",
             "--organization-id",
-            str(org.id),
+            str(organization_id),
             "--domain-id",
-            str(domain.id),
+            str(domain_id),
             "--repository-id",
-            str(repo.id),
+            str(repository_id),
             "--scan-job-id",
-            str(scan_job.id),
+            str(scan_job_id),
             "--risk-score-min",
             "80",
             "--risk-score-max",

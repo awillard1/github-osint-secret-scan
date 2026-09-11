@@ -376,11 +376,17 @@ class Storage:
         if risk_score_max is not None:
             query = query.where(Finding.risk_score <= risk_score_max)
         if detected_after is not None:
-            query = query.where(Finding.detected_at >= detected_after)
+            query = query.where(Finding.detected_at >= self._normalize_datetime_filter(detected_after))
         if detected_before is not None:
-            query = query.where(Finding.detected_at <= detected_before)
+            query = query.where(Finding.detected_at <= self._normalize_datetime_filter(detected_before))
         query = query.order_by(Finding.detected_at.desc(), Finding.id.desc()).limit(limit)
         return list(self.session.scalars(query))
+
+    @staticmethod
+    def _normalize_datetime_filter(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(UTC).replace(tzinfo=None)
 
     def get_finding(self, finding_id: int) -> Finding | None:
         return self.session.get(Finding, finding_id)

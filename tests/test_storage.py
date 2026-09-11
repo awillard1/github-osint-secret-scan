@@ -177,6 +177,10 @@ def test_storage_list_findings_supports_extended_filters(tmp_path: Path) -> None
         domain = storage.create_domain("example.com", organization_id=org.id)
         repo = storage.create_repository("example-org/app", organization_id=org.id)
         scan_job = storage.create_scan_job("repository", repo.full_name, "gitleaks", status="completed")
+        organization_id = org.id
+        domain_id = domain.id
+        repository_id = repo.id
+        scan_job_id = scan_job.id
         matching = storage.create_finding(
             CanonicalFinding(
                 source_tool="gitleaks",
@@ -185,15 +189,15 @@ def test_storage_list_findings_supports_extended_filters(tmp_path: Path) -> None
                 title="Matching finding",
                 description="Matches extended filters",
                 status="triaged",
-                triage_state="reviewing",
-                organization_id=org.id,
-                domain_id=domain.id,
-                repository_id=repo.id,
-                scan_job_id=scan_job.id,
+                organization_id=organization_id,
+                domain_id=domain_id,
+                repository_id=repository_id,
+                scan_job_id=scan_job_id,
                 risk_score=91,
                 detected_at=now - timedelta(hours=2),
             )
         )
+        storage.update_finding_triage(matching.id, triage_state="reviewing")
         storage.create_finding(
             CanonicalFinding(
                 source_tool="semgrep",
@@ -202,28 +206,28 @@ def test_storage_list_findings_supports_extended_filters(tmp_path: Path) -> None
                 title="Other finding",
                 description="Should be filtered out",
                 status="open",
-                triage_state="new",
                 risk_score=20,
                 detected_at=now - timedelta(days=3),
             )
         )
+        matching_id = matching.id
         session.commit()
 
     with session_factory() as session:
         findings = Storage(session).list_findings(
             source_tool="gitleaks",
             triage_state="reviewing",
-            organization_id=org.id,
-            domain_id=domain.id,
-            repository_id=repo.id,
-            scan_job_id=scan_job.id,
+            organization_id=organization_id,
+            domain_id=domain_id,
+            repository_id=repository_id,
+            scan_job_id=scan_job_id,
             risk_score_min=90,
             risk_score_max=95,
             detected_after=now - timedelta(days=1),
             detected_before=now - timedelta(minutes=30),
         )
 
-    assert [finding.id for finding in findings] == [matching.id]
+    assert [finding.id for finding in findings] == [matching_id]
 
 
 def test_get_or_create_updates_existing_repository_metadata(tmp_path: Path) -> None:
