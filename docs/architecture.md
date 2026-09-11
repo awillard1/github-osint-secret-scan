@@ -169,7 +169,7 @@ ScanService
 
 ## Repository acquisition architecture
 
-A repository should not be re-cloned blindly for every scan.
+Phase 4 implements [RepositoryMirrorManager](repository-cache.md), using the existing checkout cache with isolated detached scan worktrees, POSIX locking, remote HEAD discovery and persisted sync/checkpoint state. No SQL schema change is needed because Storage extends existing JSON metadata.
 
 Target abstraction:
 

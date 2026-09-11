@@ -43,6 +43,31 @@ class Storage:
     def __init__(self, session: Session) -> None:
         self.session = session
 
+    def record_repository_sync(self, repository: Repository, *, refs: dict[str, str], default_branch: str) -> None:
+        from copy import deepcopy
+        metadata = deepcopy(repository.metadata_json or {})
+        state = metadata.setdefault("repository_state", {"version": 1, "checkpoints": {}})
+        state.update(previous_refs=state.get("current_refs", {}), current_refs=refs,
+                     observed_at=datetime.now(UTC).isoformat(), default_branch=default_branch)
+        repository.default_branch = default_branch
+        repository.metadata_json = metadata
+        self.session.flush()
+
+    def get_repository_checkpoint(self, repository: Repository, *, ref: str, scanner: str, configuration_key: str):
+        from orgscan.repository_state import RepositoryCheckpoint, checkpoint_key
+        value = (repository.metadata_json or {}).get("repository_state", {}).get("checkpoints", {}).get(checkpoint_key(ref, scanner, configuration_key))
+        return RepositoryCheckpoint(**value) if value else None
+
+    def record_repository_checkpoint(self, repository: Repository, checkpoint) -> None:
+        from copy import deepcopy
+        from dataclasses import asdict
+        from orgscan.repository_state import checkpoint_key
+        metadata = deepcopy(repository.metadata_json or {})
+        state = metadata.setdefault("repository_state", {"version": 1})
+        state.setdefault("checkpoints", {})[checkpoint_key(checkpoint.ref, checkpoint.scanner, checkpoint.configuration_key)] = asdict(checkpoint)
+        repository.metadata_json = metadata
+        self.session.flush()
+
     def create_organization(self, name: str, **kwargs: Any) -> Organization:
         organization = Organization(name=name, **kwargs)
         self.session.add(organization)

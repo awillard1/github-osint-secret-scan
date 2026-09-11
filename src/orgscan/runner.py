@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,7 @@ def execute_scan(
     command_line: str | None = None,
     tool_target: str | None = None,
     plan=None,
+    canonical_root: Path | None = None,
 ) -> ScanExecutionResult:
     scanner = get_scanner(scanner_name, settings=settings) if settings is not None else get_scanner(scanner_name)
     scanner_impl = ScannerAdapter(scanner, scanner_id=scanner_name, settings=settings)
@@ -91,6 +92,17 @@ def execute_scan(
             options=effective_scope,
         ))
         matches = result.findings
+        if canonical_root is not None:
+            def stable(value):
+                if isinstance(value, str) and (value == str(resolved_target) or value.startswith(str(resolved_target) + '/')):
+                    return str(canonical_root) + value[len(str(resolved_target)):]
+                if isinstance(value, dict):
+                    return {key: stable(item) for key, item in value.items()}
+                if isinstance(value, list):
+                    return [stable(item) for item in value]
+                return value
+            matches = [replace(match, path=Path(stable(str(match.path))), metadata=stable(match.metadata),
+                               raw_payload=stable(match.raw_payload)) for match in matches]
         source_class = scanner_impl.source_class
         finding_ids = _persist_matches(
             storage,

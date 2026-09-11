@@ -87,6 +87,8 @@ Exit:
 
 ## Phase 4 — Repository mirror/cache/checkpoint engine
 
+Status: implemented; see [repository cache](repository-cache.md) for state, locking and compatibility limits.
+
 Goal: stop treating every scan as a fresh repository operation.
 
 Deliverables:
