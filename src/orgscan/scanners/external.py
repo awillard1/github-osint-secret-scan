@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from orgscan.config import Settings
+from orgscan.scanners.execution import run_scanner_process
 from orgscan.models import ConfidenceLevel, SeverityLevel
-from orgscan.scanners.base import ScanMatch
+from orgscan.scanners.base import ScanMatch, ScannerMetadata, ScannerExecutionError, not_installed_error as _not_installed_error
 
 SEMGREP_SEVERITY_MAP = {
     "critical": SeverityLevel.CRITICAL,
@@ -17,16 +18,6 @@ SEMGREP_SEVERITY_MAP = {
     "warning": SeverityLevel.MEDIUM,
     "info": SeverityLevel.LOW,
 }
-
-
-class ScannerExecutionError(RuntimeError):
-    pass
-
-
-def _not_installed_error(name: str) -> ScannerExecutionError:
-    return ScannerExecutionError(
-        f"{name} is not installed; run orgscan verify-deps and review docs/open-source-tooling-gaps.md for installation guidance."
-    )
 
 
 def _redact(value: str) -> str:
@@ -44,6 +35,15 @@ def _redact_in_line(line: str, value: str, label: str) -> str:
 class GitleaksScanner:
     name = "gitleaks"
     source_class = "free"
+    metadata = ScannerMetadata(
+        scanner_id=name,
+        display_name="Gitleaks",
+        kind="external",
+        description="Generic secret scanner for files and uploaded artifacts.",
+        binary="gitleaks",
+        binary_setting="gitleaks_binary",
+        binary_env_var="ORGSCAN_GITLEAKS_BINARY",
+    )
 
     def __init__(self, *, settings: Settings | None = None) -> None:
         self.binary = settings.gitleaks_binary if settings is not None else self.name
@@ -56,7 +56,7 @@ class GitleaksScanner:
             report_path = Path(handle.name)
 
         try:
-            completed = subprocess.run(
+            completed = run_scanner_process(
                 [
                     self.binary,
                     "detect",
@@ -73,7 +73,7 @@ class GitleaksScanner:
                 text=True,
             )
             if completed.returncode not in (0, 1):
-                raise ScannerExecutionError(completed.stderr.strip() or "gitleaks execution failed")
+                raise ScannerExecutionError(f"gitleaks execution failed (exit status {completed.returncode})")
             content = report_path.read_text(encoding="utf-8").strip() or "[]"
             return self.parse_output(json.loads(content))
         finally:
@@ -125,6 +125,15 @@ class GitleaksScanner:
 class DetectSecretsScanner:
     name = "detect-secrets"
     source_class = "free"
+    metadata = ScannerMetadata(
+        scanner_id=name,
+        display_name="detect-secrets",
+        kind="external",
+        description="Baseline-oriented secret scanner with plugin coverage.",
+        binary="detect-secrets",
+        binary_setting="detect_secrets_binary",
+        binary_env_var="ORGSCAN_DETECT_SECRETS_BINARY",
+    )
 
     def __init__(self, *, settings: Settings | None = None) -> None:
         self.binary = settings.detect_secrets_binary if settings is not None else self.name
@@ -133,14 +142,14 @@ class DetectSecretsScanner:
         if not shutil.which(self.binary):
             raise _not_installed_error(self.binary)
 
-        completed = subprocess.run(
+        completed = run_scanner_process(
             [self.binary, "scan", "--all-files", "--force-use-all-plugins", "--json", str(target)],
             check=False,
             capture_output=True,
             text=True,
         )
         if completed.returncode != 0:
-            raise ScannerExecutionError(completed.stderr.strip() or "detect-secrets execution failed")
+            raise ScannerExecutionError(f"detect-secrets execution failed (exit status {completed.returncode})")
         try:
             payload = json.loads((completed.stdout or "").strip() or "{}")
         except json.JSONDecodeError as exc:
@@ -204,6 +213,15 @@ class DetectSecretsScanner:
 class SemgrepScanner:
     name = "semgrep"
     source_class = "free"
+    metadata = ScannerMetadata(
+        scanner_id=name,
+        display_name="Semgrep",
+        kind="external",
+        description="Code and configuration rule scanner for policy findings.",
+        binary="semgrep",
+        binary_setting="semgrep_binary",
+        binary_env_var="ORGSCAN_SEMGREP_BINARY",
+    )
 
     def __init__(self, *, settings: Settings | None = None) -> None:
         self.binary = settings.semgrep_binary if settings is not None else self.name
@@ -212,14 +230,14 @@ class SemgrepScanner:
         if not shutil.which(self.binary):
             raise _not_installed_error(self.binary)
 
-        completed = subprocess.run(
+        completed = run_scanner_process(
             [self.binary, "scan", "--config", "auto", "--json", "--metrics=off", str(target)],
             check=False,
             capture_output=True,
             text=True,
         )
         if completed.returncode not in (0, 1):
-            raise ScannerExecutionError(completed.stderr.strip() or "semgrep execution failed")
+            raise ScannerExecutionError(f"semgrep execution failed (exit status {completed.returncode})")
         try:
             payload = json.loads((completed.stdout or "").strip() or "{}")
         except json.JSONDecodeError as exc:
@@ -284,6 +302,15 @@ class SemgrepScanner:
 class TruffleHogScanner:
     name = "trufflehog"
     source_class = "free"
+    metadata = ScannerMetadata(
+        scanner_id=name,
+        display_name="TruffleHog",
+        kind="external",
+        description="Secret scanner with verified-detector support.",
+        binary="trufflehog",
+        binary_setting="trufflehog_binary",
+        binary_env_var="ORGSCAN_TRUFFLEHOG_BINARY",
+    )
 
     def __init__(self, *, settings: Settings | None = None) -> None:
         self.binary = settings.trufflehog_binary if settings is not None else self.name
@@ -292,14 +319,14 @@ class TruffleHogScanner:
         if not shutil.which(self.binary):
             raise _not_installed_error(self.binary)
 
-        completed = subprocess.run(
+        completed = run_scanner_process(
             [self.binary, "filesystem", "--json", str(target)],
             check=False,
             capture_output=True,
             text=True,
         )
         if completed.returncode not in (0, 1):
-            raise ScannerExecutionError(completed.stderr.strip() or "trufflehog execution failed")
+            raise ScannerExecutionError(f"trufflehog execution failed (exit status {completed.returncode})")
         try:
             lines = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
         except json.JSONDecodeError as exc:

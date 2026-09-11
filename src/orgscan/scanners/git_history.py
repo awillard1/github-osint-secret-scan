@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import re
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any
 
+from orgscan import __version__
 from orgscan.config import Settings
-from orgscan.scanners.base import ScanMatch
+from orgscan.scanners.execution import run_scanner_process
+from orgscan.scanners.base import ScanMatch, ScannerMetadata
 from orgscan.scanners.custom_patterns import DEFAULT_PATTERNS, CustomPatternScanner, PatternDefinition, should_skip_pattern_match
 from orgscan.scanners.external import ScannerExecutionError, _not_installed_error
 
@@ -17,6 +18,14 @@ HUNK_HEADER = re.compile(r"^@@ -(?P<old>\d+)(?:,\d+)? \+(?P<new>\d+)(?:,\d+)? @@
 class GitHistoryPatternScanner:
     name = "git-history-patterns"
     source_class = "internal"
+    metadata = ScannerMetadata(
+        scanner_id=name,
+        display_name="Git history patterns",
+        kind="builtin",
+        version=__version__,
+        binary="git",
+        supports_history=True,
+    )
 
     def __init__(
         self,
@@ -62,9 +71,9 @@ class GitHistoryPatternScanner:
             command.append(f"--max-count={self.max_commits}")
         command.extend(["--", relative_target])
 
-        completed = subprocess.run(command, check=False, capture_output=True, text=True)
+        completed = run_scanner_process(command, check=False, capture_output=True, text=True)
         if completed.returncode != 0:
-            raise ScannerExecutionError(completed.stderr.strip() or "git history scan failed")
+            raise ScannerExecutionError(f"git history scan failed (exit status {completed.returncode})")
         effective_ref = target_ref if target_ref and target_ref != "workspace" else "all"
         return self.parse_output(completed.stdout, repo_root=repository_root, ref_name=effective_ref)
 
@@ -189,7 +198,7 @@ class GitHistoryPatternScanner:
 
     def _repository_root(self, target: Path) -> Path:
         starting_path = target if target.is_dir() else target.parent
-        completed = subprocess.run(
+        completed = run_scanner_process(
             [self.git_binary, "-C", str(starting_path), "rev-parse", "--show-toplevel"],
             check=False,
             capture_output=True,

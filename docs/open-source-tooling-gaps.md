@@ -18,7 +18,7 @@ For implementation status and test evidence, see the [current architecture/capab
 
 ## Remaining integration and hardening gaps
 
-- Uniform scanner version/configuration readiness, timeout/error handling and safe diagnostics remain incomplete. YARA parses only known built-in rule IDs even with a custom rules file; ripgrep definitions are not a validated rule-file system. Existing parser tests are not live-binary compatibility certification.
+- Phase 2 supplies uniform scanner metadata/readiness and built-in subprocess timeout/error handling with safe diagnostics. External version/runtime configuration validation, output size limits, third-party execution safety and mirror subprocess timeouts remain incomplete. YARA parses only known built-in rule IDs even with a custom rules file; ripgrep definitions are not a validated rule-file system. Existing parser tests are not live-binary compatibility certification.
 - Cross-scanner correlation and evidence deduplication need shared domain logic, not another scanner binary.
 - Incremental checkpoints, isolated repository materialization and locking are missing despite existing mirror/ref support.
 - Other CT sources, dnsrecon and amass could broaden enrichment; subfinder and httpx are already integrated.

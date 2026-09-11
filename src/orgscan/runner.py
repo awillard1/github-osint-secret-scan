@@ -9,7 +9,8 @@ from orgscan.repositories import Storage
 from orgscan.scoring import calculate_risk_score
 from orgscan.schemas import CanonicalFinding
 from orgscan.scanners import get_scanner
-from orgscan.scanners.base import ScanMatch
+from orgscan.scanners.base import ScanContext, ScanMatch, ScanTarget
+from orgscan.scanners.registry import ScannerAdapter
 
 
 @dataclass(frozen=True)
@@ -39,18 +40,19 @@ def execute_scan(
     command_line: str | None = None,
     tool_target: str | None = None,
 ) -> ScanExecutionResult:
-    scanner_impl = get_scanner(scanner_name, settings=settings) if settings is not None else get_scanner(scanner_name)
+    scanner = get_scanner(scanner_name, settings=settings) if settings is not None else get_scanner(scanner_name)
+    scanner_impl = ScannerAdapter(scanner, scanner_id=scanner_name, settings=settings)
     resolved_target = target_path.resolve()
     effective_target_id = target_id or target_label or str(resolved_target)
     effective_scope = scope_json or {"mode": target_type}
-    effective_command_line = command_line or f"orgscan scan path {resolved_target} --scanner {scanner_impl.name}"
+    effective_command_line = command_line or f"orgscan scan path {resolved_target} --scanner {scanner_name}"
     effective_tool_target = tool_target or target_label or str(resolved_target)
 
     scan_job = storage.create_scan_job(
         target_type=target_type,
         target_id=effective_target_id,
         target_ref=target_ref,
-        scanner_name=scanner_impl.name,
+        scanner_name=scanner_name,
         status="pending",
         parameters_json={
             "path": str(resolved_target),
@@ -61,7 +63,8 @@ def execute_scan(
         scope_json=effective_scope,
     )
     tool_run = storage.create_tool_run(
-        tool_name=scanner_impl.name,
+        tool_name=scanner_name,
+        tool_version=scanner_impl.metadata.version,
         target=effective_tool_target,
         scan_job_id=scan_job.id,
         command_line=effective_command_line,
@@ -72,12 +75,20 @@ def execute_scan(
     storage.session.commit()
 
     try:
-        matches = _scan_matches(scanner_impl, resolved_target, target_ref=target_ref, scope_json=effective_scope)
-        source_class = getattr(scanner_impl, "source_class", "internal")
+        result = scanner_impl.scan(ScanContext(
+            target=ScanTarget(resolved_target, kind=target_type, ref=target_ref),
+            scan_job_id=scan_job.id,
+            organization_id=organization_id,
+            repository_id=repository_id,
+            timeout_seconds=settings.scanner_timeout_seconds if settings else 300,
+            options=effective_scope,
+        ))
+        matches = result.findings
+        source_class = scanner_impl.source_class
         finding_ids = _persist_matches(
             storage,
             matches=matches,
-            scanner_name=scanner_impl.name,
+            scanner_name=scanner_name,
             scan_job_id=scan_job.id,
             source_class=source_class,
             organization_id=organization_id,
@@ -94,7 +105,7 @@ def execute_scan(
 
     return ScanExecutionResult(
         scan_job_id=scan_job.id,
-        scanner=scanner_impl.name,
+        scanner=scanner_name,
         target=effective_tool_target,
         findings=len(matches),
         finding_ids=finding_ids,
@@ -223,7 +234,9 @@ def _persist_matches(
 
 
 def _scan_matches(scanner_impl: object, target_path: Path, *, target_ref: str | None, scope_json: dict[str, object]) -> list[ScanMatch]:
-    contextual_scan = getattr(scanner_impl, "scan_path_with_context", None)
-    if callable(contextual_scan):
-        return contextual_scan(target_path, target_ref=target_ref, scope_json=scope_json)
-    return scanner_impl.scan_path(target_path)
+    """Compatibility shim for callers of the old runner helper."""
+    metadata = getattr(scanner_impl, "metadata", None)
+    scanner_id = getattr(metadata, "scanner_id", None) or getattr(scanner_impl, "name", "scanner")
+    return ScannerAdapter(scanner_impl, scanner_id=scanner_id).scan(
+        ScanContext(ScanTarget(target_path, ref=target_ref), options=scope_json)
+    ).findings

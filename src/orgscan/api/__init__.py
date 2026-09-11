@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 import tarfile
 import tempfile
 import zipfile
@@ -45,7 +44,8 @@ from orgscan.api.schemas import (
     FindingUpdateRequest,
 )
 from orgscan.api.routes.findings import create_finding_router
-from orgscan.scanners import available_scanner_names
+from orgscan.scanners import get_registry
+from orgscan.services.scanner_service import artifact_scanner_options, scanner_inventory
 from orgscan.scanners.external import ScannerExecutionError
 
 MAX_ARTIFACT_UPLOAD_BYTES = 10_000_000
@@ -248,31 +248,14 @@ class OrgscanApiService:
         )
 
     def _artifact_scanner_options(self, *, selected: str = "custom-patterns") -> list[dict[str, Any]]:
-        supported = {"custom-patterns", "gitleaks", "detect-secrets", "semgrep", "trufflehog"}
-        external_binaries = {
-            "gitleaks": self.settings.gitleaks_binary,
-            "detect-secrets": self.settings.detect_secrets_binary,
-            "semgrep": self.settings.semgrep_binary,
-            "trufflehog": self.settings.trufflehog_binary,
-        }
-        options: list[dict[str, Any]] = []
-        for scanner_name in available_scanner_names():
-            if scanner_name not in supported:
-                continue
-            available = scanner_name == "custom-patterns" or bool(shutil.which(external_binaries[scanner_name]))
-            options.append(
-                {
-                    "name": scanner_name,
-                    "available": available,
-                    "selected": scanner_name == selected,
-                }
-            )
-        return options
+        return artifact_scanner_options(self.settings, selected=selected)
 
     def _tooling_payload(self) -> dict[str, object]:
         tools = optional_tool_inventory(self.settings)
         return {
             "scanners": self._artifact_scanner_options(),
+            "scanner_readiness": scanner_inventory(self.settings),
+            "scanner_registry_warnings": list(get_registry().warnings),
             "optional_tools": tools,
             "installed_optional_tools": [item["name"] for item in tools if item["installed"]],
             "missing_optional_tools": [item["name"] for item in tools if not item["installed"]],

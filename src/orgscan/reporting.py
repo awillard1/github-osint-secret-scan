@@ -515,7 +515,10 @@ def render_dashboard_html(
             selected="selected" if item.get("selected") else "",
             disabled="" if item.get("available") else "disabled",
             label=html.escape(
-                str(item["name"]) if item.get("available") else f"{item['name']} (not installed)"
+                str(item["name"]) if item.get("available") else (
+                    f"{item['name']} (not installed)" if item.get("status", "missing_binary") == "missing_binary"
+                    else f"{item['name']} (not ready)"
+                )
             ),
         )
         for item in (scanner_options or [{"name": "custom-patterns", "available": True, "selected": True}])

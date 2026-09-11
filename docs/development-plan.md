@@ -52,6 +52,8 @@ Exit:
 
 ## Phase 2 — Scanner contract and registry
 
+Status: implemented; see [roadmap](roadmap.md#phase-2--scanner-contract-and-registry) for compatibility, validation and remaining execution limits.
+
 Goal: make scanner integrations uniform.
 
 Deliverables:

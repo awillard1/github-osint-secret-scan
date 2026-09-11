@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     intelligencex_base_url: str = "https://2.intelx.io"
     intelligencex_api_key: str | None = None
     gitleaks_binary: str = "gitleaks"
+    scanner_timeout_seconds: float = Field(default=300, gt=0, allow_inf_nan=False)
     detect_secrets_binary: str = "detect-secrets"
     semgrep_binary: str = "semgrep"
     trufflehog_binary: str = "trufflehog"
@@ -125,6 +126,7 @@ def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
         "ORGSCAN_INTELLIGENCEX_BASE_URL": "https://2.intelx.io",
         "ORGSCAN_INTELLIGENCEX_API_KEY": "",
         "ORGSCAN_GITLEAKS_BINARY": "gitleaks",
+        "ORGSCAN_SCANNER_TIMEOUT_SECONDS": 300,
         "ORGSCAN_DETECT_SECRETS_BINARY": "detect-secrets",
         "ORGSCAN_SEMGREP_BINARY": "semgrep",
         "ORGSCAN_TRUFFLEHOG_BINARY": "trufflehog",

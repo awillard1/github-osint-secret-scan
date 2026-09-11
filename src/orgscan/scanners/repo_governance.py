@@ -3,8 +3,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from orgscan import __version__
 from orgscan.models import ConfidenceLevel, SeverityLevel
-from orgscan.scanners.base import ScanMatch
+from orgscan.scanners.base import ScanMatch, ScannerMetadata
 
 CODEOWNERS_LOCATIONS = (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")
 SECURITY_POLICY_LOCATIONS = (".github/SECURITY.md", "SECURITY.md", "docs/SECURITY.md")
@@ -29,6 +30,12 @@ RUNS_ON_LINE = re.compile(r"^\s*runs-on\s*:\s*(.+?)\s*$")
 class RepositoryGovernanceScanner:
     name = "repo-governance"
     source_class = "internal"
+    metadata = ScannerMetadata(
+        scanner_id=name,
+        display_name="Repository governance",
+        kind="builtin",
+        version=__version__,
+    )
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
         root = target if target.is_dir() else target.parent

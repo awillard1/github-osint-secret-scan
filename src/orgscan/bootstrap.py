@@ -8,6 +8,8 @@ import venv
 from pathlib import Path
 
 from orgscan.config import Settings
+from orgscan.scanners import get_registry
+from orgscan.services.scanner_service import scanner_inventory
 
 REQUIRED_COMMANDS = ("git", "curl", "openssl")
 OPTIONAL_COMMANDS = (
@@ -49,30 +51,6 @@ OPTIONAL_TOOL_METADATA = {
         "env_var": "ORGSCAN_REDIS_URL",
         "settings_attr": None,
     },
-    "gitleaks": {
-        "category": "scanner",
-        "description": "Generic secret scanner for files and uploaded artifacts.",
-        "env_var": "ORGSCAN_GITLEAKS_BINARY",
-        "settings_attr": "gitleaks_binary",
-    },
-    "detect-secrets": {
-        "category": "scanner",
-        "description": "Baseline-oriented secret scanner with plugin coverage.",
-        "env_var": "ORGSCAN_DETECT_SECRETS_BINARY",
-        "settings_attr": "detect_secrets_binary",
-    },
-    "semgrep": {
-        "category": "scanner",
-        "description": "Code and configuration rule scanner for policy findings.",
-        "env_var": "ORGSCAN_SEMGREP_BINARY",
-        "settings_attr": "semgrep_binary",
-    },
-    "trufflehog": {
-        "category": "scanner",
-        "description": "Secret scanner with verified-detector support.",
-        "env_var": "ORGSCAN_TRUFFLEHOG_BINARY",
-        "settings_attr": "trufflehog_binary",
-    },
     "subfinder": {
         "category": "provider",
         "description": "Passive subdomain discovery for ProjectDiscovery enrichment.",
@@ -107,7 +85,26 @@ def command_status(command: str) -> bool:
 
 def optional_tool_inventory(settings: Settings) -> list[dict[str, object]]:
     tools: list[dict[str, object]] = []
-    for command in OPTIONAL_COMMANDS:
+    scanner_tools = {}
+    for row in scanner_inventory(settings):
+        metadata = row["metadata"]
+        binary = metadata["binary"]
+        if binary and binary not in REQUIRED_COMMANDS:
+            scanner_tools[binary] = {
+                "name": binary,
+                "category": "scanner",
+                "description": metadata["description"] or metadata["display_name"],
+                "configured_command": row["configured_command"],
+                "env_var": metadata["binary_env_var"],
+                "installed": row["readiness"]["binary_path"] is not None,
+                "install_note": OPTIONAL_INSTALL_NOTES.get(binary, "Configure the scanner's declared requirements."),
+                "ready": row["readiness"]["ready"],
+                "status": row["readiness"]["status"],
+            }
+    for command in dict.fromkeys((*OPTIONAL_COMMANDS, *scanner_tools)):
+        if command in scanner_tools:
+            tools.append(scanner_tools[command])
+            continue
         metadata = OPTIONAL_TOOL_METADATA.get(command, {})
         configured_value = getattr(settings, str(metadata.get("settings_attr")), None) if metadata.get("settings_attr") else command
         resolved_command = str(configured_value or command)
@@ -167,12 +164,15 @@ def bootstrap(
             text=True,
         )
 
+    tools = optional_tool_inventory(settings)
     return {
         "platform": platform.platform(),
         "package_manager": package_manager,
         "required": {command: command_status(command) for command in REQUIRED_COMMANDS},
-        "optional": {command: command_status(command) for command in OPTIONAL_COMMANDS},
-        "optional_tools": optional_tool_inventory(settings),
+        "optional": {str(tool["name"]): tool["installed"] for tool in tools},
+        "optional_tools": tools,
+        "scanner_readiness": scanner_inventory(settings),
+        "scanner_registry_warnings": list(get_registry().warnings),
         "recommended_install": recommended_install_command(package_manager, REQUIRED_COMMANDS),
         "optional_install_notes": OPTIONAL_INSTALL_NOTES,
         "venv_path": str(venv_path),

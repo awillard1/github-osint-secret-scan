@@ -122,7 +122,7 @@ orgscan scan path ./path/to/scan --scanner trufflehog
 
 The built-in `git-history-patterns` scanner uses `git log --patch` to look for secrets in added and removed historical diffs, and the built-in `repo-governance` scanner checks for missing `CODEOWNERS`, missing `SECURITY.md`, and unpinned GitHub Actions references in workflow files.
 
-External scanner wrappers honor the configured `ORGSCAN_*_BINARY` settings, and additional scanners can be registered through Python entry points in the `orgscan.scanners` group.
+External scanner wrappers honor the configured `ORGSCAN_*_BINARY` settings and `ORGSCAN_SCANNER_TIMEOUT_SECONDS` (300 seconds per subprocess by default). Additional scanners register through Python entry points in the `orgscan.scanners` group; native and legacy plugins share registry-driven CLI/API readiness and artifact choices. See the [scanner contract](docs/scanner-contract.md) for integration and readiness limits.
 
 You can also ingest previously saved scanner output and normalize it into the same canonical data model:
 

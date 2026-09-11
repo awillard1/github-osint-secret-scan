@@ -37,6 +37,7 @@ from orgscan.reporting import build_summary, finding_rows, write_export, write_h
 from orgscan.runner import execute_scan, record_scan_results
 from orgscan.scanners import ScannerExecutionError, available_scanner_names, load_report
 from orgscan.scanners.base import ScanMatch
+from orgscan.services.scanner_service import scanner_inventory
 from orgscan.scheduler import next_run_from_cadence, run_due_reports, run_due_scans
 
 app = typer.Typer(help="OSINT Security Platform CLI foundation")
@@ -188,6 +189,7 @@ def config(
     payload = {
         "settings": settings.as_dict(include_secrets=show_secrets),
         "available_scanners": available_scanner_names(),
+        "scanner_readiness": scanner_inventory(settings),
         "available_domain_providers": available_domain_provider_names(),
         "available_execution_backends": ["local", "rq"],
         "optional_tools": optional_tools,
@@ -1256,6 +1258,9 @@ def verify_deps(
         for item in optional_tools:
             guidance = "" if item["installed"] else f" | configure via {item['env_var'] or 'PATH'} | {item['install_note']}"
             typer.echo(f"  - {item['name']} ({item['category']}): {'ok' if item['installed'] else 'missing'} -> {item['configured_command']}{guidance}")
+        typer.echo("Scanner readiness")
+        for item in result.get("scanner_readiness", scanner_inventory(settings)):
+            typer.echo(f"  - {item['name']}: {item['readiness']['status']}")
         if missing_required:
             typer.echo(f"Missing required dependencies: {', '.join(missing_required)}")
         else:

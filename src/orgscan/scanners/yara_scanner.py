@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from orgscan.config import Settings
+from orgscan.scanners.execution import run_scanner_process
 from orgscan.models import ConfidenceLevel, SeverityLevel
-from orgscan.scanners.base import ScanMatch
+from orgscan.scanners.base import ScanMatch, ScannerMetadata
 from orgscan.scanners.external import ScannerExecutionError, _not_installed_error
 
 DEFAULT_YARA_RULE_SOURCE = """
@@ -89,6 +89,16 @@ def _redact_in_line(line: str, value: str, label: str) -> str:
 class YaraScanner:
     name = "yara"
     source_class = "internal"
+    metadata = ScannerMetadata(
+        scanner_id=name,
+        display_name="YARA",
+        kind="external",
+        binary="yara",
+        binary_setting="yara_binary",
+        binary_env_var="ORGSCAN_YARA_BINARY",
+        configuration_requirements=("ORGSCAN_YARA_RULES_PATH (optional; defaults to bundled rules)",),
+        file_settings=("yara_rules_path",),
+    )
 
     def __init__(self, *, settings: Settings | None = None) -> None:
         self.settings = settings
@@ -111,14 +121,14 @@ class YaraScanner:
 
         rules_path, delete_after = self._resolve_rules_path()
         try:
-            completed = subprocess.run(
+            completed = run_scanner_process(
                 [self.binary, "-r", "-s", str(rules_path), str(target)],
                 check=False,
                 capture_output=True,
                 text=True,
             )
             if completed.returncode != 0:
-                raise ScannerExecutionError(completed.stderr.strip() or "yara execution failed")
+                raise ScannerExecutionError(f"yara execution failed (exit status {completed.returncode})")
             return self.parse_output(completed.stdout)
         finally:
             if delete_after:

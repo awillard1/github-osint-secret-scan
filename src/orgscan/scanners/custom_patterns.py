@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orgscan import __version__
 from orgscan.models import ConfidenceLevel, SeverityLevel
-from orgscan.scanners.base import ScanMatch
+from orgscan.scanners.base import ScanMatch, ScannerMetadata
 
 GENERIC_SECRET_ASSIGNMENT_NAME = "generic-secret-assignment"
 ASSIGNED_SECRET_VALUE = re.compile(r"[:=]\s*['\"]([^'\"]{8,})['\"]")
@@ -85,6 +86,12 @@ DEFAULT_PATTERNS: tuple[PatternDefinition, ...] = (
 class CustomPatternScanner:
     name = "custom-patterns"
     source_class = "internal"
+    metadata = ScannerMetadata(
+        scanner_id=name,
+        display_name="Custom patterns",
+        kind="builtin",
+        version=__version__,
+    )
 
     def __init__(self, patterns: tuple[PatternDefinition, ...] = DEFAULT_PATTERNS, max_file_bytes: int = 1_000_000) -> None:
         self._patterns = tuple((pattern, re.compile(pattern.regex)) for pattern in patterns)

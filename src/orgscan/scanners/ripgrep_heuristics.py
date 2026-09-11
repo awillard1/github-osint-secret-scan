@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from orgscan.config import Settings
+from orgscan.scanners.execution import run_scanner_process
 from orgscan.models import ConfidenceLevel, SeverityLevel
-from orgscan.scanners.base import ScanMatch
+from orgscan.scanners.base import ScanMatch, ScannerMetadata
 from orgscan.scanners.external import ScannerExecutionError, _not_installed_error
 
 
@@ -29,6 +29,14 @@ class HeuristicDefinition:
 class RipgrepHeuristicScanner:
     name = "ripgrep-heuristics"
     source_class = "internal"
+    metadata = ScannerMetadata(
+        scanner_id=name,
+        display_name="ripgrep heuristics",
+        kind="external",
+        binary="rg",
+        binary_setting="rg_binary",
+        binary_env_var="ORGSCAN_RG_BINARY",
+    )
 
     def __init__(self, *, settings: Settings | None = None) -> None:
         self.settings = settings
@@ -52,9 +60,9 @@ class RipgrepHeuristicScanner:
             ]
             if definition.fixed_strings:
                 command.insert(1, "-F")
-            completed = subprocess.run(command, check=False, capture_output=True, text=True)
+            completed = run_scanner_process(command, check=False, capture_output=True, text=True)
             if completed.returncode not in (0, 1):
-                raise ScannerExecutionError(completed.stderr.strip() or "ripgrep execution failed")
+                raise ScannerExecutionError(f"ripgrep execution failed (exit status {completed.returncode})")
             results.extend(self.parse_output(completed.stdout, definition))
         return results
 

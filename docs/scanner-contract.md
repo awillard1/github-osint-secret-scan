@@ -4,132 +4,54 @@
 
 Every scanner must behave predictably enough that the same scan orchestration can execute built-in detectors and external tools.
 
-This is the target contract. The current registry in `src/orgscan/scanners/__init__.py` already handles built-ins and entry-point plugins; adapters currently expose `name`, `source_class`, and `scan_path()` returning `ScanMatch` records, with optional report loaders. Uniform metadata/readiness/context/result types and duplicate-ID rejection remain future work. See the [baseline](roadmap.md#current-architecturecapability-baseline) before migrating existing adapters.
+Phase 2 implements this contract in `src/orgscan/scanners/base.py` and `registry.py`. Existing scanner parsers and `ScanMatch` remain the normalization input; the adapter preserves legacy plugins. See the [current baseline](roadmap.md#current-architecturecapability-baseline).
 
-## Required concepts
+## Implemented types
 
-### ScannerMetadata
+All contract records are frozen dataclasses:
 
-Recommended fields:
+- `ScannerMetadata`: stable `scanner_id`, `display_name`, `kind`, `supported_targets`, history/incremental flags, optional `version`, description, binary/settings/environment-key declarations, configuration requirements and optional file settings.
+- `ScannerReadiness`: `ready`, `status`, optional binary path/version, missing requirements and warnings. Checks must not execute scans. Built-in readiness checks executable presence and configured file readability; it does not probe external versions or validate runtime configuration. Built-in Python detectors declare the package version; external versions remain unknown.
+- `ScanTarget`: prepared `path`, `kind` (`path`, `mirror`, or `artifact`) and `ref`.
+- `ScanContext`: target, optional job/organization/repository IDs, positive finite `timeout_seconds`, optional environment overrides, and options carrying existing scope settings. Environment is excluded from repr; do not serialize/log contexts containing credentials. It is not an authorization context.
+- `ScanResult`: scanner ID, start/completion timestamps, `findings: list[ScanMatch]`, logical `exit_status` and warnings. Zero means the scanner accepted the tool's exit status, including tool-specific findings exits. Result warnings/timings are available to callers; the runner retains its existing persisted job/ToolRun timing model.
 
-```python
-scanner_id: str
-display_name: str
-kind: str  # builtin/external
-supported_targets: frozenset[str]
-supports_history: bool
-supports_incremental: bool
-homepage: str | None
-```
-
-`scanner_id` is stable and is used in configuration, jobs, evidence, and APIs.
-
-### ScannerReadiness
-
-Recommended fields:
-
-```python
-ready: bool
-status: str
-binary_path: str | None
-version: str | None
-missing_requirements: tuple[str, ...]
-warnings: tuple[str, ...]
-```
-
-Readiness checks must not execute a scan.
-
-### ScanTarget
-
-Represents a prepared target rather than a raw CLI string.
-
-Examples:
-
-- local path;
-- repository worktree;
-- repository mirror/history target;
-- uploaded artifact extraction root.
-
-### ScanContext
-
-Recommended fields:
-
-```python
-target
-repository_identity
-organization_identity
-scan_job_id
-timeout_seconds
-environment
-temp_dir
-options
-```
-
-Do not store raw authentication tokens in serializable/logged context fields.
-
-### ScanResult
-
-Recommended fields:
-
-```python
-scanner_id
-started_at
-completed_at
-exit_status
-findings
-warnings
-tool_logs
-metadata
-```
-
-## Interface
-
-The exact Python mechanism may be a Protocol, ABC, or compatible existing interface, but the behavior should be equivalent to:
+## Interface and compatibility
 
 ```python
 class ScannerPlugin(Protocol):
-    @property
-    def metadata(self) -> ScannerMetadata: ...
+    metadata: ScannerMetadata
+    source_class: str
 
     def readiness(self) -> ScannerReadiness: ...
-
     def supports(self, target: ScanTarget) -> bool: ...
-
     def scan(self, context: ScanContext) -> ScanResult: ...
 ```
 
-## Registry
+Use `get_registry().get(scanner_id, settings=settings)` for a contract adapter. Native plugins implement the interface above and may accept `settings` in their constructor. Legacy classes declaring `name`, `source_class` and `scan_path(path)` remain supported; optional `scan_path_with_context(path, target_ref=..., scope_json=...)` receives the existing scope. Legacy metadata is synthesized and readiness explicitly warns about its limited checks. `get_scanner()` still returns the underlying instance for compatibility, and existing `get_scanner_class()`, `available_scanner_names()` and `load_report()` imports remain available.
 
-Scanner selection must use a registry.
+The runner dispatches through the adapter, validates result identity/type/status, and preserves existing canonical persistence. A plugin can optionally expose `load_report(path)` returning `list[ScanMatch]`; saved-report ingestion does not require an installed executable.
 
-The registry should:
+## Registry and discovery
 
-- include built-ins;
-- load configured/entry-point plugins;
-- reject duplicate scanner IDs;
-- list metadata/readiness;
-- fetch a scanner by stable ID;
-- provide deterministic ordering.
+Register Python classes through the `orgscan.scanners` entry-point group. For example, a package may declare:
 
-Do not require edits to API and CLI dispatch code for every new scanner.
+```toml
+[project.entry-points."orgscan.scanners"]
+example = "example_package.scanner:ExampleScanner"
+```
+
+The registry includes all nine existing scanners, loads entry points in deterministic name/value order, and lists IDs in sorted order. Metadata IDs take precedence over legacy names. Duplicate IDs, including collisions with built-ins, raise `DuplicateScannerError`; an explicit registration ID must match the declared ID. Unloadable entry points are skipped with safe registry warnings. Entry-point discovery is cached for the process lifetime, as before.
+
+Registry inventory supplies `config`, `verify-deps`, bootstrap, `/scanners`, and dashboard scanner choices. Existing inventory fields remain, with metadata/readiness added. Artifact options use declared target capabilities instead of a scanner-name allowlist; new plugins need no API/CLI dispatch branches. Target support describes the prepared input kind, not guaranteed applicability to every file: history scanning still requires Git contents. Failed initialization/readiness is reported as unavailable without exposing arbitrary exception text. Duplicate registration remains a configuration error.
 
 ## External scanner execution
 
-Use `subprocess` with an argument array.
+Built-in adapters use `execution.run_scanner_process()` with argument arrays, captured stdout/stderr and exit status, the caller’s working directory explicitly preserved (including relative binary/config paths), and a per-process timeout. `ORGSCAN_SCANNER_TIMEOUT_SECONDS` defaults to 300 seconds. The shared runner supplies context; direct legacy built-in calls use the same default timeout. Context environment overrides merge with the inherited process environment and reset after the scan. Existing tool arguments, accepted exit codes and parsers are preserved.
 
-Never construct a shell string from untrusted values.
+Timeouts, process failures and malformed live results produce safe operator errors without raw tool stderr/stdout. `ScannerExecutionError` is reserved for safe diagnostic messages; plugin readiness messages and result metadata must also exclude secrets. Missing binaries remain optional readiness conditions. Temporary Gitleaks/YARA reports retain explicit cleanup.
 
-Requirements:
-
-- timeout;
-- working directory explicitly selected;
-- stdout/stderr captured;
-- exit code captured;
-- maximum output behavior considered;
-- secrets redacted before logging;
-- environment explicitly controlled where practical.
-
-A scanner binary being absent is a readiness condition, not an application crash.
+Limits: output is currently buffered without a size cap; the timeout applies to each subprocess, not the entire scan. The registry does not sandbox third-party plugins: they must use the helper or implement equivalent timeouts, safe diagnostics and cleanup. Readiness is not live compatibility certification. Mirror/provider subprocess hardening is outside this scanner phase.
 
 ## Normalization
 
