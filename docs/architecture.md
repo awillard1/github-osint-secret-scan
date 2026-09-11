@@ -6,13 +6,15 @@ The architecture should make it inexpensive to add scanners, discovery providers
 
 The most important design objective is not maximum abstraction. It is stable boundaries that reduce change amplification.
 
-This document describes the target architecture. See [Current architecture/capability baseline](roadmap.md#current-architecturecapability-baseline) for implemented scope and evidence. In particular, API/CLI remain modules; the scanner registry, mirror/ref scanning, AuthContext helpers, both RQ and DB queues, and PDF export already exist in partial form. The types and flows below are migration targets, not declarations that those foundations are missing.
+This document describes the target architecture. See [Current architecture/capability baseline](roadmap.md#current-architecturecapability-baseline) for implemented scope and evidence. API/CLI are now packages with extracted finding adapters; their roots retain the remaining code and compatibility exports. The scanner registry, mirror/ref scanning, AuthContext helpers, both RQ and DB queues, and PDF export already exist in partial form. The types and flows below are migration targets, not declarations that those foundations are missing.
 
 ## Current-state principle
 
 The repository already implements substantial functionality: FastAPI, CLI commands, SQLAlchemy persistence, Alembic migrations, scanner integrations, mirroring, reporting, scheduling/RQ, discovery, enrichment, and tests.
 
 Refactor incrementally. Preserve behavior while moving responsibilities to clearer boundaries.
+
+The initial Phase 1 slice routes finding reads and decisions through `services/finding_service.py`, using `Storage` and the existing session factory. HTTP serialization/request models and browser form mapping remain presentation concerns; CLI formatting and argument parsing remain in `cli/commands/findings.py`. `api/routes/findings.py` registers the JSON finding routes and dashboard workflow action. The service has no FastAPI/Typer imports and owns decision transactions. `api/__init__.py` and `cli/__init__.py` retain compatibility imports and unmigrated adapters; splitting these roots into the full target structure below is incremental follow-up work. See the [remaining Phase 1 items](roadmap.md#phase-1--initial-finding-management-decomposition).
 
 ## Layers
 

@@ -35,6 +35,8 @@ Exit:
 
 Goal: reduce change amplification in large presentation modules.
 
+Status: the initial finding-management service/router/command slice is implemented. The [roadmap](roadmap.md#phase-1--initial-finding-management-decomposition) records compatibility, validation and the exact remaining decomposition items; this does not mark the entire phase complete.
+
 Deliverables:
 
 - introduce service modules around existing use cases;

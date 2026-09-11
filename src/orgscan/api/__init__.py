@@ -5,7 +5,7 @@ import tarfile
 import tempfile
 import zipfile
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -13,7 +13,6 @@ from urllib.parse import parse_qs, urlparse
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel, Field
 
 from orgscan.bootstrap import optional_tool_inventory
 from orgscan.config import Settings, get_settings
@@ -31,6 +30,21 @@ from orgscan.reporting import (
     render_scan_job_detail_html,
 )
 from orgscan.repositories import Storage
+from orgscan.services.finding_service import (
+    FindingDecision,
+    FindingNotFound,
+    FindingQuery,
+    FindingService,
+    TriageUpdate,
+    high_signal_findings,
+)
+from orgscan.api.schemas import (
+    DashboardFindingWorkflowRequest,
+    FindingDecisionRequest,
+    FindingReopenRequest,
+    FindingUpdateRequest,
+)
+from orgscan.api.routes.findings import create_finding_router
 from orgscan.scanners import available_scanner_names
 from orgscan.scanners.external import ScannerExecutionError
 
@@ -155,32 +169,6 @@ def _serialize_tool_run(tool_run: ToolRun) -> dict[str, Any]:
     }
 
 
-class FindingUpdateRequest(BaseModel):
-    status: str | None = None
-    triage_state: str | None = None
-    triage_owner: str | None = None
-    triage_notes: str | None = None
-    remediation_due_date: date | None = None
-
-
-class FindingDecisionRequest(BaseModel):
-    reason: str = Field(min_length=1)
-    owner: str | None = None
-    note: str | None = None
-    due_date: date | None = None
-
-
-class FindingReopenRequest(BaseModel):
-    note: str | None = None
-
-
-class DashboardFindingWorkflowRequest(BaseModel):
-    action: str
-    owner: str | None = None
-    note: str | None = None
-    triage_state: str | None = None
-
-
 def _safe_artifact_name(filename: str | None) -> str:
     return (Path(filename or "artifact.txt").name or "artifact.txt").replace("\x00", "")
 
@@ -251,6 +239,7 @@ class OrgscanApiService:
         init_db(self.database_url)
         self.session_factory = create_session_factory(self.database_url)
         self.settings = get_settings()
+        self.finding_service = FindingService(self.session_factory)
 
     def _access_context_note(self) -> str:
         return (
@@ -315,31 +304,15 @@ class OrgscanApiService:
         high_signal_only: bool = False,
         min_confidence: str = "likely",
     ) -> dict[str, object]:
-        with self.session_factory() as session:
-            storage = Storage(session)
-            findings = storage.list_findings(
-                limit=max(limit * 4, limit) if high_signal_only else limit,
-                status=status,
-                severity=severity,
-                category=category,
-                confidence=confidence,
-                source_tool=source_tool,
-                triage_state=triage_state,
-                organization_id=organization_id,
-                domain_id=domain_id,
-                repository_id=repository_id,
-                account_id=account_id,
-                scan_job_id=scan_job_id,
-                risk_score_min=risk_score_min,
-                risk_score_max=risk_score_max,
-                detected_after=detected_after,
-                detected_before=detected_before,
-            )
-            if high_signal_only:
-                findings = self._high_signal_findings(findings, min_confidence=min_confidence, limit=limit)
-            return {
-                "findings": [_serialize_finding(finding) for finding in findings]
-            }
+        findings = self.finding_service.list_findings(FindingQuery(
+            limit=limit, status=status, severity=severity, category=category,
+            confidence=confidence, source_tool=source_tool, triage_state=triage_state,
+            organization_id=organization_id, domain_id=domain_id, repository_id=repository_id,
+            account_id=account_id, scan_job_id=scan_job_id, risk_score_min=risk_score_min,
+            risk_score_max=risk_score_max, detected_after=detected_after, detected_before=detected_before,
+            high_signal_only=high_signal_only, min_confidence=min_confidence,
+        ))
+        return {"findings": [_serialize_finding(finding) for finding in findings]}
 
     @staticmethod
     def _parse_datetime_param(value: str | None) -> datetime | None:
@@ -354,33 +327,18 @@ class OrgscanApiService:
         min_confidence: str = "likely",
         limit: int = 10,
     ) -> list[Any]:
-        allowed = set(Storage._allowed_confidences(min_confidence))
-        return [
-            finding
-            for finding in findings
-            if finding.confidence in allowed and finding.status not in {"suppressed"}
-        ][:limit]
+        return high_signal_findings(findings, min_confidence=min_confidence, limit=limit)
 
     def _update_finding_triage(
         self,
         finding_id: int,
         payload: FindingUpdateRequest,
     ) -> dict[str, object] | None:
-        with self.session_factory() as session:
-            storage = Storage(session)
-            finding = storage.get_finding(finding_id)
-            if finding is None:
-                return None
-            updated = storage.update_finding_triage(
-                finding_id,
-                status=payload.status,
-                triage_state=payload.triage_state,
-                triage_owner=payload.triage_owner,
-                triage_notes=payload.triage_notes,
-                remediation_due_date=payload.remediation_due_date,
-            )
-            session.commit()
-            return {"finding": _serialize_finding(updated, include_detail=True)}
+        try:
+            updated = self.finding_service.update_triage(finding_id, TriageUpdate(**payload.model_dump()))
+        except FindingNotFound:
+            return None
+        return {"finding": _serialize_finding(updated, include_detail=True)}
 
     def _apply_finding_decision(
         self,
@@ -389,40 +347,22 @@ class OrgscanApiService:
         *,
         status: str,
     ) -> dict[str, object] | None:
-        with self.session_factory() as session:
-            storage = Storage(session)
-            finding = storage.get_finding(finding_id)
-            if finding is None:
-                return None
-            updated = storage.suppress_finding(
-                finding_id,
-                reason=payload.reason,
-                owner=payload.owner,
-                deadline=payload.due_date,
-                notes=payload.note,
-                status=status,
-            )
-            session.commit()
-            return {"finding": _serialize_finding(updated, include_detail=True)}
+        try:
+            updated = self.finding_service.apply_decision(finding_id, FindingDecision(**payload.model_dump()), status=status)
+        except FindingNotFound:
+            return None
+        return {"finding": _serialize_finding(updated, include_detail=True)}
 
     def _reopen_finding(
         self,
         finding_id: int,
         payload: FindingReopenRequest,
     ) -> dict[str, object] | None:
-        with self.session_factory() as session:
-            storage = Storage(session)
-            finding = storage.get_finding(finding_id)
-            if finding is None:
-                return None
-            updated = storage.update_finding_triage(
-                finding_id,
-                status="open",
-                triage_state="reopened",
-                triage_notes=payload.note,
-            )
-            session.commit()
-            return {"finding": _serialize_finding(updated, include_detail=True)}
+        try:
+            updated = self.finding_service.reopen(finding_id, note=payload.note)
+        except FindingNotFound:
+            return None
+        return {"finding": _serialize_finding(updated, include_detail=True)}
 
     def _resolve_asset_context(
         self,
@@ -861,16 +801,14 @@ class OrgscanApiService:
             }
 
     def _finding_payload(self, finding_id: int) -> dict[str, object] | None:
-        with self.session_factory() as session:
-            storage = Storage(session)
-            finding = storage.get_finding(finding_id)
-            if finding is None:
-                return None
-            return {
-                "finding": _serialize_finding(finding, include_detail=True),
-                "evidence": [_serialize_evidence(evidence) for evidence in storage.list_finding_evidence(finding_id)],
-                "risk_scores": [_serialize_risk_score(score) for score in storage.list_risk_scores(finding_id=finding_id)],
-            }
+        detail = self.finding_service.get_detail(finding_id)
+        if detail is None:
+            return None
+        return {
+            "finding": _serialize_finding(detail.finding, include_detail=True),
+            "evidence": [_serialize_evidence(evidence) for evidence in detail.evidence],
+            "risk_scores": [_serialize_risk_score(score) for score in detail.risk_scores],
+        }
 
     def _risk_summary_payload(
         self,
@@ -1159,89 +1097,7 @@ def create_app(database_url: str) -> FastAPI:
     def scanners() -> dict[str, object]:
         return service._tooling_payload()
 
-    @app.get("/findings")
-    def findings(
-        limit: int = Query(50, ge=1, le=500),
-        status: str | None = None,
-        severity: str | None = None,
-        category: str | None = None,
-        confidence: str | None = None,
-        source_tool: str | None = None,
-        triage_state: str | None = None,
-        organization_id: int | None = None,
-        domain_id: int | None = None,
-        repository_id: int | None = None,
-        account_id: int | None = None,
-        scan_job_id: int | None = None,
-        risk_score_min: float | None = None,
-        risk_score_max: float | None = None,
-        detected_after: datetime | None = None,
-        detected_before: datetime | None = None,
-        high_signal_only: bool = False,
-        min_confidence: str = Query("likely", pattern="^(verified|likely|heuristic|unverified)$"),
-    ) -> dict[str, object]:
-        return service._findings_payload(
-            limit=limit,
-            status=status,
-            severity=severity,
-            category=category,
-            confidence=confidence,
-            source_tool=source_tool,
-            triage_state=triage_state,
-            organization_id=organization_id,
-            domain_id=domain_id,
-            repository_id=repository_id,
-            account_id=account_id,
-            scan_job_id=scan_job_id,
-            risk_score_min=risk_score_min,
-            risk_score_max=risk_score_max,
-            detected_after=detected_after,
-            detected_before=detected_before,
-            high_signal_only=high_signal_only,
-            min_confidence=min_confidence,
-        )
-
-    @app.get("/findings/{finding_id}")
-    def finding_detail(finding_id: int) -> dict[str, object]:
-        payload = service._finding_payload(finding_id)
-        if payload is None:
-            raise HTTPException(status_code=404, detail="Finding not found")
-        return payload
-
-    @app.patch("/findings/{finding_id}")
-    def update_finding(finding_id: int, payload: FindingUpdateRequest) -> dict[str, object]:
-        result = service._update_finding_triage(finding_id, payload)
-        if result is None:
-            raise HTTPException(status_code=404, detail="Finding not found")
-        return result
-
-    @app.post("/findings/{finding_id}/suppress")
-    def suppress_finding(finding_id: int, payload: FindingDecisionRequest) -> dict[str, object]:
-        result = service._apply_finding_decision(finding_id, payload, status="suppressed")
-        if result is None:
-            raise HTTPException(status_code=404, detail="Finding not found")
-        return result
-
-    @app.post("/findings/{finding_id}/accept-risk")
-    def accept_risk_finding(finding_id: int, payload: FindingDecisionRequest) -> dict[str, object]:
-        result = service._apply_finding_decision(finding_id, payload, status="accepted_risk")
-        if result is None:
-            raise HTTPException(status_code=404, detail="Finding not found")
-        return result
-
-    @app.post("/findings/{finding_id}/reopen")
-    def reopen_finding(finding_id: int, payload: FindingReopenRequest) -> dict[str, object]:
-        result = service._reopen_finding(finding_id, payload)
-        if result is None:
-            raise HTTPException(status_code=404, detail="Finding not found")
-        return result
-
-    @app.get("/findings/{finding_id}/evidence")
-    def finding_evidence(finding_id: int) -> dict[str, object]:
-        payload = service._finding_payload(finding_id)
-        if payload is None:
-            raise HTTPException(status_code=404, detail="Finding not found")
-        return {"finding_id": finding_id, "evidence": payload["evidence"]}
+    app.include_router(create_finding_router(service))
 
     @app.get("/organizations")
     def organizations(
@@ -1445,63 +1301,6 @@ def create_app(database_url: str) -> FastAPI:
         except HTTPException as exc:
             return HTMLResponse(
                 service._dashboard_html(artifact_scan_error=str(exc.detail), high_signal_only=False, min_confidence="likely"),
-                status_code=exc.status_code,
-            )
-
-    @app.post("/dashboard/findings/{finding_id}/workflow", response_class=HTMLResponse)
-    async def dashboard_finding_workflow(
-        finding_id: int,
-        action: str = Form(...),
-        owner: str | None = Form(None),
-        note: str | None = Form(None),
-        triage_state: str | None = Form(None),
-        limit: int = Form(100),
-        days: int = Form(30),
-        status: str | None = Form(None),
-        severity: str | None = Form(None),
-        category: str | None = Form(None),
-        confidence: str | None = Form(None),
-        high_signal_only: bool = Form(False),
-        min_confidence: str = Form("likely"),
-    ) -> HTMLResponse:
-        try:
-            result = service._dashboard_finding_workflow(
-                finding_id,
-                DashboardFindingWorkflowRequest(
-                    action=action,
-                    owner=owner,
-                    note=note,
-                    triage_state=triage_state,
-                ),
-            )
-            if result is None:
-                raise HTTPException(status_code=404, detail="Finding not found")
-            return HTMLResponse(
-                service._dashboard_html(
-                    limit=limit,
-                    days=days,
-                    status=status,
-                    severity=severity,
-                    category=category,
-                    confidence=confidence,
-                    high_signal_only=high_signal_only,
-                    min_confidence=min_confidence,
-                    finding_action_result=result["finding"],
-                )
-            )
-        except HTTPException as exc:
-            return HTMLResponse(
-                service._dashboard_html(
-                    limit=limit,
-                    days=days,
-                    status=status,
-                    severity=severity,
-                    category=category,
-                    confidence=confidence,
-                    high_signal_only=high_signal_only,
-                    min_confidence=min_confidence,
-                    finding_action_error=str(exc.detail),
-                ),
                 status_code=exc.status_code,
             )
 
