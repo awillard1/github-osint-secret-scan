@@ -75,7 +75,7 @@ This roadmap maps the current repository implementation to the phased goals from
 - saved output from supported external scanners can be ingested and normalized through the common finding model
 
 ## Remaining gaps versus the full project spec
-- no YARA or deeper repo-history/governance coverage beyond current detect-secrets, repo-governance, DNS, WHOIS, crt.sh, ProjectDiscovery, and local metadata support yet
+- no YARA or ripgrep-heuristic coverage yet; repo history coverage now includes built-in git-history pattern scanning alongside current detect-secrets, repo-governance, DNS, WHOIS, crt.sh, ProjectDiscovery, and local metadata support
 - no advanced distributed orchestration beyond the initial Redis/RQ worker backend, and no graph visualization UI, multi-tenant auth, or PDF reporting
 - no paid provider implementations; only the abstraction and free/local correlation path exist
 - no large-scale branch/history orchestration or incremental repo mirror management

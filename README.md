@@ -8,7 +8,7 @@
 - normalized core storage models for organizations, domains, repositories, accounts, scan jobs, findings, evidence, relationships, and risk scores
 - a SQLite-first persistence layer built on SQLAlchemy for future PostgreSQL support
 - target intake commands for organizations, domains, repositories, and accounts
-- finding inspection, GitHub metadata discovery, local scanning, governance scanning, reporting, export, dashboard generation, and dependency verification commands
+- finding inspection, GitHub metadata discovery, local scanning, git-history scanning, governance scanning, reporting, export, dashboard generation, and dependency verification commands
 - repository expansion, scheduled scanning, execution telemetry, intuitive configuration helpers, and a live FastAPI dashboard/API
 - tests for config, validation, storage, and CLI flows
 
@@ -107,9 +107,10 @@ Run the built-in custom pattern scanner against a file or directory:
 orgscan scan path ./path/to/scan --organization example-org --repository example-org/app
 ```
 
-If `repo-governance`, `gitleaks`, `detect-secrets`, `semgrep`, or `trufflehog` are available, you can run them through the same workflow:
+If `git-history-patterns`, `repo-governance`, `gitleaks`, `detect-secrets`, `semgrep`, or `trufflehog` are available, you can run them through the same workflow:
 
 ```bash
+orgscan scan path ./path/to/repository --scanner git-history-patterns
 orgscan scan path ./path/to/repository --scanner repo-governance
 orgscan scan path ./path/to/scan --scanner gitleaks
 orgscan scan path ./path/to/scan --scanner detect-secrets
@@ -117,7 +118,7 @@ orgscan scan path ./path/to/scan --scanner semgrep
 orgscan scan path ./path/to/scan --scanner trufflehog
 ```
 
-The built-in `repo-governance` scanner checks for missing `CODEOWNERS`, missing `SECURITY.md`, and unpinned GitHub Actions references in workflow files.
+The built-in `git-history-patterns` scanner uses `git log --patch` to look for secrets in added and removed historical diffs, and the built-in `repo-governance` scanner checks for missing `CODEOWNERS`, missing `SECURITY.md`, and unpinned GitHub Actions references in workflow files.
 
 External scanner wrappers honor the configured `ORGSCAN_*_BINARY` settings, and additional scanners can be registered through Python entry points in the `orgscan.scanners` group.
 
@@ -212,6 +213,7 @@ pytest
 - The optional crt.sh integration adds certificate-transparency-based host discovery for tracked domains.
 - The optional WHOIS integration adds registrar and nameserver enrichment for tracked domains.
 - The optional DNS integration adds record-level enrichment for tracked domains and previously discovered subdomains.
+- The built-in git-history-patterns scanner searches git diff history for added or removed content that matches the same core secret patterns used by the local file scanner.
 - The built-in repo-governance scanner checks for missing ownership/security policy files and unpinned GitHub Actions references.
 - The initial `scan` command uses the built-in `custom-patterns` scanner and stores scan jobs, findings, and evidence in SQLite for later reporting.
 - The `discover` command uses the public GitHub REST API and can use `ORGSCAN_GITHUB_TOKEN` when configured for higher rate limits.

@@ -4,6 +4,7 @@ This document summarizes what the current repository can accomplish directly and
 
 ## Already integrated or supported
 - Built-in custom pattern scanning for local files and directories
+- Built-in git-history pattern scanning for historical added and removed diff content in Git repositories
 - Built-in repository governance scanning for missing CODEOWNERS, missing SECURITY.md, and unpinned GitHub Actions references
 - Optional `gitleaks` integration for generic secret scanning
 - Optional `detect-secrets` integration for complementary baseline-style secret detection

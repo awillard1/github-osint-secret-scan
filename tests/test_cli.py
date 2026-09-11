@@ -175,6 +175,39 @@ def test_cli_scan_persists_findings(monkeypatch, tmp_path: Path) -> None:
     get_settings.cache_clear()
 
 
+def test_cli_scan_with_git_history_scanner_persists_historical_findings(monkeypatch, tmp_path: Path) -> None:
+    import subprocess
+
+    database_url = f"sqlite:///{tmp_path / 'history.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    sample = tmp_path / "config.py"
+    sample.write_text('api_key = "example-not-real-123456789"\n', encoding="utf-8")
+    subprocess.run(["git", "add", "config.py"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "add secret"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    sample.write_text("print('clean')\n", encoding="utf-8")
+    subprocess.run(["git", "add", "config.py"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "remove secret"], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    result = runner.invoke(app, ["scan", "path", str(sample), "--scanner", "git-history-patterns"])
+
+    assert result.exit_code == 0
+    assert "Completed scan job" in result.stdout
+
+    findings_result = runner.invoke(app, ["findings", "--json"])
+    assert findings_result.exit_code == 0
+    assert "git-history-patterns" in findings_result.stdout
+    assert "git history" in findings_result.stdout
+
+    get_settings.cache_clear()
+
+
 def test_cli_discover_report_export_and_dashboard(monkeypatch, tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'discover.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
