@@ -413,6 +413,12 @@ class Storage:
     def get_finding(self, finding_id: int) -> Finding | None:
         return self.session.get(Finding, finding_id)
 
+    def get_scan_job(self, scan_job_id: int) -> ScanJob | None:
+        return self.session.get(ScanJob, scan_job_id)
+
+    def get_tool_run(self, tool_run_id: int) -> ToolRun | None:
+        return self.session.get(ToolRun, tool_run_id)
+
     def list_finding_evidence(self, finding_id: int) -> Sequence[Evidence]:
         query = select(Evidence).where(Evidence.finding_id == finding_id).order_by(Evidence.observed_at.desc(), Evidence.id.desc())
         return list(self.session.scalars(query))
@@ -517,8 +523,11 @@ class Storage:
         query = select(ScanJob).order_by(ScanJob.created_at.desc(), ScanJob.id.desc()).limit(limit)
         return list(self.session.scalars(query))
 
-    def list_tool_runs(self, limit: int = 25) -> Sequence[ToolRun]:
-        query = select(ToolRun).order_by(ToolRun.created_at.desc(), ToolRun.id.desc()).limit(limit)
+    def list_tool_runs(self, limit: int = 25, scan_job_id: int | None = None) -> Sequence[ToolRun]:
+        query = select(ToolRun)
+        if scan_job_id is not None:
+            query = query.where(ToolRun.scan_job_id == scan_job_id)
+        query = query.order_by(ToolRun.created_at.desc(), ToolRun.id.desc()).limit(limit)
         return list(self.session.scalars(query))
 
     def list_scheduled_scans(self, enabled_only: bool = False) -> Sequence[ScheduledScan]:

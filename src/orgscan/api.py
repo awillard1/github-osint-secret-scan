@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import tarfile
 import tempfile
 import zipfile
@@ -14,10 +15,23 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
+from orgscan.config import Settings, get_settings
 from orgscan.db import create_session_factory, init_db
+from orgscan.models import ScanJob, ToolRun
 from orgscan.runner import execute_scan
-from orgscan.reporting import build_summary, finding_rows, finding_trends, relationship_graph, render_dashboard_html
+from orgscan.reporting import (
+    build_summary,
+    finding_rows,
+    finding_trends,
+    relationship_graph,
+    render_dashboard_html,
+    render_finding_detail_html,
+    render_graph_html,
+    render_scan_job_detail_html,
+)
 from orgscan.repositories import Storage
+from orgscan.scanners import available_scanner_names
+from orgscan.scanners.external import ScannerExecutionError
 
 MAX_ARTIFACT_UPLOAD_BYTES = 10_000_000
 MAX_ARTIFACT_EXTRACTED_BYTES = 25_000_000
@@ -108,6 +122,35 @@ def _serialize_risk_score(risk_score) -> dict[str, Any]:
         "confidence": risk_score.confidence,
         "rationale": risk_score.rationale,
         "calculated_at": risk_score.calculated_at.isoformat(),
+    }
+
+
+def _serialize_scan_job(scan_job: ScanJob) -> dict[str, Any]:
+    return {
+        "id": scan_job.id,
+        "target_type": scan_job.target_type,
+        "target_id": scan_job.target_id,
+        "scanner_name": scan_job.scanner_name,
+        "status": scan_job.status,
+        "parameters_json": scan_job.parameters_json,
+        "error_message": scan_job.error_message,
+        "started_at": scan_job.started_at.isoformat() if scan_job.started_at else None,
+        "completed_at": scan_job.completed_at.isoformat() if scan_job.completed_at else None,
+    }
+
+
+def _serialize_tool_run(tool_run: ToolRun) -> dict[str, Any]:
+    return {
+        "id": tool_run.id,
+        "scan_job_id": tool_run.scan_job_id,
+        "tool_name": tool_run.tool_name,
+        "target": tool_run.target,
+        "command_line": tool_run.command_line,
+        "status": tool_run.status,
+        "stdout_log": tool_run.stdout_log,
+        "stderr_log": tool_run.stderr_log,
+        "started_at": tool_run.started_at.isoformat() if tool_run.started_at else None,
+        "completed_at": tool_run.completed_at.isoformat() if tool_run.completed_at else None,
     }
 
 
@@ -206,6 +249,35 @@ class OrgscanApiService:
         self.database_url = database_url
         init_db(self.database_url)
         self.session_factory = create_session_factory(self.database_url)
+        self.settings = get_settings()
+
+    def _access_context_note(self) -> str:
+        return (
+            "The HTML dashboard is currently local-first and does not yet enforce tenant-scoped authentication. "
+            "Use API token controls separately until a dedicated tenant-aware dashboard session flow is added."
+        )
+
+    def _artifact_scanner_options(self, *, selected: str = "custom-patterns") -> list[dict[str, Any]]:
+        supported = {"custom-patterns", "gitleaks", "detect-secrets", "semgrep", "trufflehog"}
+        external_binaries = {
+            "gitleaks": self.settings.gitleaks_binary,
+            "detect-secrets": self.settings.detect_secrets_binary,
+            "semgrep": self.settings.semgrep_binary,
+            "trufflehog": self.settings.trufflehog_binary,
+        }
+        options: list[dict[str, Any]] = []
+        for scanner_name in available_scanner_names():
+            if scanner_name not in supported:
+                continue
+            available = scanner_name == "custom-patterns" or bool(shutil.which(external_binaries[scanner_name]))
+            options.append(
+                {
+                    "name": scanner_name,
+                    "available": available,
+                    "selected": scanner_name == selected,
+                }
+            )
+        return options
 
     def _summary_payload(self) -> dict[str, object]:
         with self.session_factory() as session:
@@ -369,6 +441,7 @@ class OrgscanApiService:
         *,
         filename: str | None,
         content: bytes,
+        scanner_name: str = "custom-patterns",
         organization: str | None,
         repository: str | None,
         provider: str,
@@ -379,53 +452,60 @@ class OrgscanApiService:
         if len(content) > MAX_ARTIFACT_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail="Uploaded artifact exceeds the allowed size limit.")
 
-        with tempfile.TemporaryDirectory(prefix="orgscan-artifact-") as temp_dir:
-            workspace = Path(temp_dir)
-            artifact_path = workspace / artifact_name
-            artifact_path.write_bytes(content)
-            archive_type = _archive_type(artifact_path)
-            scan_target = artifact_path
-            extracted = False
+        try:
+            with tempfile.TemporaryDirectory(prefix="orgscan-artifact-") as temp_dir:
+                workspace = Path(temp_dir)
+                artifact_path = workspace / artifact_name
+                artifact_path.write_bytes(content)
+                archive_type = _archive_type(artifact_path)
+                scan_target = artifact_path
+                extracted = False
 
-            if archive_type is not None:
-                extracted_root = workspace / "extracted"
-                extracted_root.mkdir()
-                try:
-                    extracted_files = (
-                        _extract_zip_artifact(artifact_path, extracted_root)
-                        if archive_type == "zip"
-                        else _extract_tar_artifact(artifact_path, extracted_root)
+                if archive_type is not None:
+                    extracted_root = workspace / "extracted"
+                    extracted_root.mkdir()
+                    try:
+                        extracted_files = (
+                            _extract_zip_artifact(artifact_path, extracted_root)
+                            if archive_type == "zip"
+                            else _extract_tar_artifact(artifact_path, extracted_root)
+                        )
+                    except (tarfile.TarError, zipfile.BadZipFile, ValueError) as exc:
+                        raise HTTPException(status_code=400, detail=f"Invalid uploaded archive: {exc}") from exc
+                    if extracted_files == 0:
+                        raise HTTPException(status_code=400, detail="Uploaded archive does not contain any regular files.")
+                    scan_target = extracted_root
+                    extracted = True
+
+                with self.session_factory() as session:
+                    storage = Storage(session)
+                    organization_id, repository_id = self._resolve_asset_context(
+                        storage,
+                        organization=organization,
+                        repository=repository,
+                        provider=provider,
                     )
-                except (tarfile.TarError, zipfile.BadZipFile, ValueError) as exc:
-                    raise HTTPException(status_code=400, detail=f"Invalid uploaded archive: {exc}") from exc
-                if extracted_files == 0:
-                    raise HTTPException(status_code=400, detail="Uploaded archive does not contain any regular files.")
-                scan_target = extracted_root
-                extracted = True
-
-            with self.session_factory() as session:
-                storage = Storage(session)
-                organization_id, repository_id = self._resolve_asset_context(
-                    storage,
-                    organization=organization,
-                    repository=repository,
-                    provider=provider,
-                )
-                result = execute_scan(
-                    storage,
-                    target_path=scan_target,
-                    scanner_name="custom-patterns",
-                    organization_id=organization_id,
-                    repository_id=repository_id,
-                    target_type="artifact",
-                    target_label=artifact_name,
-                    command_line=f"api artifact scan {artifact_name}",
-                    parameters_json={
-                        "artifact_name": artifact_name,
-                        "artifact_kind": archive_type or "file",
-                        "extracted": extracted,
-                    },
-                )
+                    result = execute_scan(
+                        storage,
+                        target_path=scan_target,
+                        scanner_name=scanner_name,
+                        settings=self.settings,
+                        organization_id=organization_id,
+                        repository_id=repository_id,
+                        target_type="artifact",
+                        target_label=artifact_name,
+                        command_line=f"api artifact scan {artifact_name} --scanner {scanner_name}",
+                        parameters_json={
+                            "artifact_name": artifact_name,
+                            "artifact_kind": archive_type or "file",
+                            "extracted": extracted,
+                            "scanner": scanner_name,
+                        },
+                    )
+        except ScannerExecutionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         return {
             "artifact_name": artifact_name,
@@ -437,6 +517,21 @@ class OrgscanApiService:
             "target": result.target,
             "extracted": extracted,
         }
+
+    def _finding_html_payload(self, finding_id: int) -> dict[str, object] | None:
+        return self._finding_payload(finding_id)
+
+    def _scan_job_payload(self, scan_job_id: int) -> dict[str, object] | None:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            scan_job = storage.get_scan_job(scan_job_id)
+            if scan_job is None:
+                return None
+            return {
+                "scan_job": _serialize_scan_job(scan_job),
+                "tool_runs": [_serialize_tool_run(run) for run in storage.list_tool_runs(limit=25, scan_job_id=scan_job_id)],
+                "findings": [_serialize_finding(finding) for finding in storage.list_findings(limit=100, scan_job_id=scan_job_id)],
+            }
 
     def _entity_risk_profile(
         self,
@@ -882,6 +977,10 @@ class OrgscanApiService:
                 artifact_scan_error=artifact_scan_error,
                 finding_action_result=finding_action_result,
                 finding_action_error=finding_action_error,
+                scanner_options=self._artifact_scanner_options(
+                    selected=str((artifact_scan_result or {}).get("scanner") or "custom-patterns")
+                ),
+                access_context_note=self._access_context_note(),
             )
 
     def _dashboard_finding_workflow(
@@ -1234,6 +1333,7 @@ def create_app(database_url: str) -> FastAPI:
     @app.post("/artifact-scans")
     async def artifact_scans(
         artifact: UploadFile = File(...),
+        scanner: str = Form("custom-patterns"),
         organization: str | None = Form(None),
         repository: str | None = Form(None),
         provider: str = Form("github"),
@@ -1241,6 +1341,7 @@ def create_app(database_url: str) -> FastAPI:
         return service._scan_uploaded_artifact(
             filename=artifact.filename,
             content=await artifact.read(),
+            scanner_name=scanner,
             organization=organization,
             repository=repository,
             provider=provider,
@@ -1282,9 +1383,28 @@ def create_app(database_url: str) -> FastAPI:
             )
         )
 
+    @app.get("/dashboard/findings/{finding_id}", response_class=HTMLResponse)
+    def dashboard_finding_detail(finding_id: int) -> HTMLResponse:
+        payload = service._finding_html_payload(finding_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Finding not found")
+        return HTMLResponse(render_finding_detail_html(payload))
+
+    @app.get("/dashboard/scan-jobs/{scan_job_id}", response_class=HTMLResponse)
+    def dashboard_scan_job_detail(scan_job_id: int) -> HTMLResponse:
+        payload = service._scan_job_payload(scan_job_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Scan job not found")
+        return HTMLResponse(render_scan_job_detail_html(payload))
+
+    @app.get("/dashboard/graph", response_class=HTMLResponse)
+    def dashboard_graph(limit: int = Query(200, ge=1, le=1000)) -> HTMLResponse:
+        return HTMLResponse(render_graph_html(service._relationship_graph_payload(limit=limit)))
+
     @app.post("/dashboard/artifact-scans", response_class=HTMLResponse)
     async def dashboard_artifact_scans(
         artifact: UploadFile = File(...),
+        scanner: str = Form("custom-patterns"),
         organization: str | None = Form(None),
         repository: str | None = Form(None),
         provider: str = Form("github"),
@@ -1293,13 +1413,23 @@ def create_app(database_url: str) -> FastAPI:
             result = service._scan_uploaded_artifact(
                 filename=artifact.filename,
                 content=await artifact.read(),
+                scanner_name=scanner,
                 organization=organization,
                 repository=repository,
                 provider=provider,
             )
-            return HTMLResponse(service._dashboard_html(artifact_scan_result=result))
+            return HTMLResponse(
+                service._dashboard_html(
+                    artifact_scan_result=result,
+                    high_signal_only=False,
+                    min_confidence="likely",
+                )
+            )
         except HTTPException as exc:
-            return HTMLResponse(service._dashboard_html(artifact_scan_error=str(exc.detail)), status_code=exc.status_code)
+            return HTMLResponse(
+                service._dashboard_html(artifact_scan_error=str(exc.detail), high_signal_only=False, min_confidence="likely"),
+                status_code=exc.status_code,
+            )
 
     @app.post("/dashboard/findings/{finding_id}/workflow", response_class=HTMLResponse)
     async def dashboard_finding_workflow(

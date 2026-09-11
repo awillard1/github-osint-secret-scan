@@ -205,6 +205,8 @@ def render_dashboard_html(
     artifact_scan_error: str | None = None,
     finding_action_result: dict[str, Any] | None = None,
     finding_action_error: str | None = None,
+    scanner_options: list[dict[str, Any]] | None = None,
+    access_context_note: str | None = None,
 ) -> str:
     def items(mapping: dict[str, Any]) -> str:
         return "".join(f"<li><strong>{html.escape(str(key))}</strong>: {html.escape(str(value))}</li>" for key, value in mapping.items())
@@ -223,11 +225,25 @@ def render_dashboard_html(
             "</div>"
         )
 
+    scanner_select = "".join(
+        (
+            "<option value='{name}' {selected} {disabled}>{label}</option>"
+        ).format(
+            name=html.escape(str(item["name"])),
+            selected="selected" if item.get("selected") else "",
+            disabled="" if item.get("available") else "disabled",
+            label=html.escape(
+                str(item["name"]) if item.get("available") else f"{item['name']} (not installed)"
+            ),
+        )
+        for item in (scanner_options or [{"name": "custom-patterns", "available": True, "selected": True}])
+    )
+
     def render_finding_row(row: dict[str, Any]) -> str:
         base = (
             "<tr>"
             f"<td>{html.escape(str(row['id']))}</td>"
-            f"<td>{html.escape(str(row['title']))}</td>"
+            f"<td><a href='/dashboard/findings/{html.escape(str(row['id']))}'>{html.escape(str(row['title']))}</a></td>"
             f"<td>{html.escape(str(row['category']))}</td>"
             f"<td>{html.escape(str(row['severity']))}</td>"
             f"<td>{html.escape(str(row['confidence']))}</td>"
@@ -283,7 +299,7 @@ def render_dashboard_html(
     top_findings = "".join(
         "<tr>"
         f"<td>{html.escape(str(row['id']))}</td>"
-        f"<td>{html.escape(str(row['title']))}</td>"
+        f"<td><a href='/dashboard/findings/{html.escape(str(row['id']))}'>{html.escape(str(row['title']))}</a></td>"
         f"<td>{html.escape(str(row['source_tool']))}</td>"
         f"<td>{html.escape(str(row['risk_score']))}</td>"
         f"<td>{html.escape(str(row['status']))}</td>"
@@ -316,7 +332,7 @@ def render_dashboard_html(
     ) or "<tr><td colspan='4'>No relationships</td></tr>"
     scan_job_rows = "".join(
         "<tr>"
-        f"<td>{html.escape(str(job['id']))}</td>"
+        f"<td><a href='/dashboard/scan-jobs/{html.escape(str(job['id']))}'>{html.escape(str(job['id']))}</a></td>"
         f"<td>{html.escape(str(job['scanner_name']))}</td>"
         f"<td>{html.escape(str(job['target_type']))}</td>"
         f"<td>{html.escape(str(job['target_id']))}</td>"
@@ -354,10 +370,19 @@ def render_dashboard_html(
             f"<strong>Finding workflow update failed.</strong> {html.escape(finding_action_error)}"
             "</div>"
         )
+    access_context_banner = (
+        f"<div class='banner info'><strong>Access context.</strong> {html.escape(access_context_note)}</div>"
+        if access_context_note
+        else ""
+    )
     graph_nodes = len((graph or {}).get("nodes", []))
     graph_edges = len((graph or {}).get("edges", []))
+    graph_node_badges = "".join(
+        f"<li><strong>{html.escape(str(node['entity_type']))}</strong>: {html.escape(str(node['label']))}</li>"
+        for node in (graph or {}).get("nodes", [])[:12]
+    ) or "<li>No graph nodes</li>"
     findings_header = (
-        "<tr><th>ID</th><th>Title</th><th>Category</th><th>Severity</th><th>Confidence</th><th>Risk / workflow</th><th>Tool</th><th>Detected</th>"
+        "<tr><th>ID</th><th>Title</th><th>Category</th><th>Severity</th><th>Confidence</th><th>Risk</th><th>Workflow</th><th>Tool</th><th>Detected</th>"
         + ("<th>Actions</th>" if live else "")
         + "</tr>"
     )
@@ -375,7 +400,7 @@ def render_dashboard_html(
           <h2>Live filters</h2>
           <p class="subtle">Refresh the dashboard view or jump to raw API outputs for automation.</p>
         </div>
-        <div class="quick-links"><a href="/summary">summary json</a><a href="/findings?limit={limit}">findings json</a><a href="/relationships/graph">graph json</a><a href="/trends/findings?days={days}">trends json</a></div>
+        <div class="quick-links"><a href="/summary">summary json</a><a href="/findings?limit={limit}">findings json</a><a href="/relationships/graph">graph json</a><a href="/trends/findings?days={days}">trends json</a><a href="/dashboard/graph">graph view</a></div>
       </div>
       <form method="get" action="/dashboard" class="filters">
         <label>Status <input type="text" name="status" value="{status}"></label>
@@ -405,6 +430,7 @@ def render_dashboard_html(
       </div>
       <form method="post" action="/dashboard/artifact-scans" enctype="multipart/form-data" class="upload-form">
         <label>Artifact file <input type="file" name="artifact" required></label>
+        <label>Scanner <select name="scanner">{scanner_select}</select></label>
         <label>Organization <input type="text" name="organization" placeholder="example-org"></label>
         <label>Repository <input type="text" name="repository" placeholder="example-org/app"></label>
         <label>Provider <input type="text" name="provider" value="github"></label>
@@ -423,6 +449,7 @@ def render_dashboard_html(
         high_signal_only="checked" if (filters or {}).get("high_signal_only") else "",
         limit=html.escape(str((filters or {}).get("limit", 100))),
         days=html.escape(str((filters or {}).get("days", 30))),
+        scanner_select=scanner_select,
     ) if live else ""
     return f"""<!doctype html>
 <html lang=\"en\">
@@ -458,6 +485,7 @@ def render_dashboard_html(
       .banner {{ margin: 0 0 1rem 0; padding: 0.9rem 1rem; border-radius: 12px; border: 1px solid; }}
       .banner.success {{ background: #ecfdf5; border-color: #86efac; color: #166534; }}
       .banner.error {{ background: #fef2f2; border-color: #fca5a5; color: #991b1b; }}
+      .banner.info {{ background: #eff6ff; border-color: #93c5fd; color: #1d4ed8; }}
       @media (max-width: 1024px) {{ .hero, .grid, .filters, .upload-form {{ grid-template-columns: 1fr 1fr; }} }}
       @media (max-width: 640px) {{ main {{ padding: 1rem; }} .hero, .grid, .filters, .upload-form {{ grid-template-columns: 1fr; }} .section-header {{ flex-direction: column; align-items: flex-start; }} }}
     </style>
@@ -468,6 +496,7 @@ def render_dashboard_html(
     <p class="subtle">Analyst workspace for findings, entity risk, upload-driven artifact triage, and recent scan activity.</p>
     {artifact_result_banner}
     {finding_result_banner}
+    {access_context_banner}
     {live_header}
     <div class=\"hero\">
       {metric_card("Findings", summary['counts'].get('findings', 0), "critical")}
@@ -522,7 +551,8 @@ def render_dashboard_html(
     </section>
     <section>
       <h2>Relationship graph edges</h2>
-      <p>Nodes: {html.escape(str(graph_nodes))} · Edges: {html.escape(str(graph_edges))}</p>
+      <p>Nodes: {html.escape(str(graph_nodes))} · Edges: {html.escape(str(graph_edges))} · <a href="/dashboard/graph">open graph view</a></p>
+      <ul>{graph_node_badges}</ul>
       <table>
         <thead>
           <tr><th>From</th><th>Relation</th><th>To</th><th>Confidence</th></tr>
@@ -585,3 +615,204 @@ def write_html(output_path: Path, summary: dict[str, Any], findings: list[dict[s
         encoding="utf-8",
     )
     return output_path
+
+
+def _render_html_page(title: str, body: str) -> str:
+    return f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>{html.escape(title)}</title>
+    <style>
+      body {{ font-family: Inter, system-ui, sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }}
+      main {{ max-width: 1200px; margin: 0 auto; padding: 2rem; }}
+      section {{ background: white; border: 1px solid #dbe3ef; border-radius: 16px; padding: 1rem; margin-bottom: 1rem; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06); }}
+      a {{ color: #2563eb; }}
+      table {{ border-collapse: collapse; width: 100%; }}
+      th, td {{ border: 1px solid #dbe3ef; padding: 0.65rem; text-align: left; vertical-align: top; }}
+      th {{ background: #eff6ff; }}
+      pre {{ background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 12px; overflow-x: auto; white-space: pre-wrap; }}
+      .subtle {{ color: #475569; }}
+      .grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }}
+      .hero {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }}
+      .pill {{ display: inline-block; padding: 0.2rem 0.55rem; border-radius: 999px; background: #eff6ff; border: 1px solid #bfdbfe; margin: 0 0.35rem 0.35rem 0; }}
+      @media (max-width: 800px) {{ main {{ padding: 1rem; }} .grid, .hero {{ grid-template-columns: 1fr; }} }}
+    </style>
+  </head>
+  <body>
+    <main>{body}</main>
+  </body>
+</html>"""
+
+
+def render_finding_detail_html(payload: dict[str, Any]) -> str:
+    finding = payload["finding"]
+    evidence_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(item.get('source') or ''))}</td>"
+        f"<td>{html.escape(str(item.get('repository_path') or ''))}</td>"
+        f"<td>{html.escape(str(item.get('line_start') or ''))}</td>"
+        f"<td><pre>{html.escape(str(item.get('snippet') or ''))}</pre></td>"
+        "</tr>"
+        for item in payload.get("evidence", [])
+    ) or "<tr><td colspan='4'>No evidence available</td></tr>"
+    risk_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(item.get('entity_type') or ''))}</td>"
+        f"<td>{html.escape(str(item.get('entity_id') or ''))}</td>"
+        f"<td>{html.escape(str(item.get('score') or ''))}</td>"
+        f"<td>{html.escape(str(item.get('rationale') or ''))}</td>"
+        "</tr>"
+        for item in payload.get("risk_scores", [])
+    ) or "<tr><td colspan='4'>No risk score records available</td></tr>"
+    metadata = json.dumps(finding.get("metadata") or {}, indent=2, sort_keys=True)
+    raw_payload = json.dumps(finding.get("raw_payload") or {}, indent=2, sort_keys=True)
+    body = f"""
+    <p><a href="/dashboard">← Back to dashboard</a></p>
+    <section>
+      <h1>Finding #{html.escape(str(finding['id']))}</h1>
+      <p class="subtle">{html.escape(str(finding['title']))}</p>
+      <div class="hero">
+        <section><h3>Severity</h3><p>{html.escape(str(finding['severity']))}</p></section>
+        <section><h3>Confidence</h3><p>{html.escape(str(finding['confidence']))}</p></section>
+        <section><h3>Risk score</h3><p>{html.escape(str(finding.get('risk_score') or 0))}</p></section>
+      </div>
+    </section>
+    <div class="grid">
+      <section>
+        <h2>Workflow</h2>
+        <ul>
+          <li>Status: {html.escape(str(finding['status']))}</li>
+          <li>Triage: {html.escape(str(finding['triage_state']))}</li>
+          <li>Owner: {html.escape(str(finding.get('triage_owner') or 'unassigned'))}</li>
+          <li>Detected: {html.escape(str(finding['detected_at']))}</li>
+        </ul>
+      </section>
+      <section>
+        <h2>Context</h2>
+        <ul>
+          <li>Category: {html.escape(str(finding['category']))}</li>
+          <li>Source tool: {html.escape(str(finding['source_tool']))}</li>
+          <li>Repository ID: {html.escape(str(finding.get('repository_id') or ''))}</li>
+          <li>Scan job ID: {html.escape(str(finding.get('scan_job_id') or ''))}</li>
+        </ul>
+      </section>
+    </div>
+    <section>
+      <h2>Description</h2>
+      <p>{html.escape(str(finding['description']))}</p>
+      <p><strong>Remediation:</strong> {html.escape(str(finding.get('remediation_hint') or 'No remediation hint recorded.'))}</p>
+    </section>
+    <section>
+      <h2>Evidence</h2>
+      <table><thead><tr><th>Source</th><th>Path</th><th>Line</th><th>Snippet</th></tr></thead><tbody>{evidence_rows}</tbody></table>
+    </section>
+    <section>
+      <h2>Risk scores</h2>
+      <table><thead><tr><th>Entity type</th><th>Entity ID</th><th>Score</th><th>Rationale</th></tr></thead><tbody>{risk_rows}</tbody></table>
+    </section>
+    <div class="grid">
+      <section><h2>Metadata</h2><pre>{html.escape(metadata)}</pre></section>
+      <section><h2>Raw payload</h2><pre>{html.escape(raw_payload)}</pre></section>
+    </div>
+    """
+    return _render_html_page(f"Finding {finding['id']}", body)
+
+
+def render_scan_job_detail_html(payload: dict[str, Any]) -> str:
+    scan_job = payload["scan_job"]
+    tool_runs = payload.get("tool_runs", [])
+    findings = payload.get("findings", [])
+    tool_sections = "".join(
+        f"""
+        <section>
+          <h3>Tool run #{html.escape(str(run['id']))} — {html.escape(str(run['tool_name']))}</h3>
+          <p class="subtle">Status: {html.escape(str(run['status']))} · Target: {html.escape(str(run['target']))}</p>
+          <div class="grid">
+            <section><h4>stdout</h4><pre>{html.escape(str(run.get('stdout_log') or ''))}</pre></section>
+            <section><h4>stderr</h4><pre>{html.escape(str(run.get('stderr_log') or ''))}</pre></section>
+          </div>
+        </section>
+        """
+        for run in tool_runs
+    ) or "<section><p>No tool runs recorded for this scan job.</p></section>"
+    finding_rows = "".join(
+        "<tr>"
+        f"<td><a href='/dashboard/findings/{html.escape(str(item['id']))}'>{html.escape(str(item['id']))}</a></td>"
+        f"<td>{html.escape(str(item['title']))}</td>"
+        f"<td>{html.escape(str(item['severity']))}</td>"
+        f"<td>{html.escape(str(item['confidence']))}</td>"
+        f"<td>{html.escape(str(item['status']))}</td>"
+        "</tr>"
+        for item in findings
+    ) or "<tr><td colspan='5'>No findings recorded for this scan job.</td></tr>"
+    parameters = json.dumps(scan_job.get("parameters_json") or {}, indent=2, sort_keys=True)
+    body = f"""
+    <p><a href="/dashboard">← Back to dashboard</a></p>
+    <section>
+      <h1>Scan job #{html.escape(str(scan_job['id']))}</h1>
+      <p class="subtle">{html.escape(str(scan_job['scanner_name']))} against {html.escape(str(scan_job['target_id']))}</p>
+      <div class="hero">
+        <section><h3>Status</h3><p>{html.escape(str(scan_job['status']))}</p></section>
+        <section><h3>Target type</h3><p>{html.escape(str(scan_job['target_type']))}</p></section>
+        <section><h3>Findings</h3><p>{html.escape(str(len(findings)))}</p></section>
+      </div>
+    </section>
+    <div class="grid">
+      <section>
+        <h2>Execution metadata</h2>
+        <ul>
+          <li>Started: {html.escape(str(scan_job.get('started_at') or ''))}</li>
+          <li>Completed: {html.escape(str(scan_job.get('completed_at') or ''))}</li>
+          <li>Error: {html.escape(str(scan_job.get('error_message') or ''))}</li>
+        </ul>
+      </section>
+      <section>
+        <h2>Parameters</h2>
+        <pre>{html.escape(parameters)}</pre>
+      </section>
+    </div>
+    <section>
+      <h2>Findings from this scan</h2>
+      <table><thead><tr><th>ID</th><th>Title</th><th>Severity</th><th>Confidence</th><th>Status</th></tr></thead><tbody>{finding_rows}</tbody></table>
+    </section>
+    {tool_sections}
+    """
+    return _render_html_page(f"Scan job {scan_job['id']}", body)
+
+
+def render_graph_html(graph: dict[str, Any]) -> str:
+    node_cards = "".join(
+        f"<span class='pill'>{html.escape(str(node['entity_type']))}: {html.escape(str(node['label']))}</span>"
+        for node in graph.get("nodes", [])
+    ) or "<p>No nodes available.</p>"
+    edge_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(edge['from']))}</td>"
+        f"<td>{html.escape(str(edge['relation_type']))}</td>"
+        f"<td>{html.escape(str(edge['to']))}</td>"
+        f"<td>{html.escape(str(edge['confidence']))}</td>"
+        "</tr>"
+        for edge in graph.get("edges", [])
+    ) or "<tr><td colspan='4'>No relationships available.</td></tr>"
+    body = f"""
+    <p><a href="/dashboard">← Back to dashboard</a></p>
+    <section>
+      <h1>Relationship graph</h1>
+      <p class="subtle">Visual inventory of the currently known entities and their relationships.</p>
+      <div class="hero">
+        <section><h3>Nodes</h3><p>{html.escape(str(len(graph.get('nodes', []))))}</p></section>
+        <section><h3>Edges</h3><p>{html.escape(str(len(graph.get('edges', []))))}</p></section>
+        <section><h3>Linked entities</h3><p>{html.escape(str(len({edge['from'] for edge in graph.get('edges', [])} | {edge['to'] for edge in graph.get('edges', [])})))} </p></section>
+      </div>
+    </section>
+    <section>
+      <h2>Nodes</h2>
+      <div>{node_cards}</div>
+    </section>
+    <section>
+      <h2>Relationships</h2>
+      <table><thead><tr><th>From</th><th>Relation</th><th>To</th><th>Confidence</th></tr></thead><tbody>{edge_rows}</tbody></table>
+    </section>
+    """
+    return _render_html_page("Relationship graph", body)

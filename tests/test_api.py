@@ -7,9 +7,10 @@ from fastapi.testclient import TestClient
 
 from orgscan.api import OrgscanApiService, create_app
 from orgscan.db import create_session_factory, init_db
-from orgscan.models import ScanJob
+from orgscan.models import ConfidenceLevel, ScanJob, SeverityLevel
 from orgscan.repositories import Storage
 from orgscan.schemas import CanonicalFinding
+from orgscan.scanners.base import ScanMatch
 
 
 def test_api_service_returns_summary_and_findings(tmp_path: Path) -> None:
@@ -382,6 +383,79 @@ def test_dashboard_artifact_upload_returns_html_result(tmp_path: Path) -> None:
     assert "Recent scan activity" in response.text
 
 
+def test_dashboard_finding_and_scan_job_detail_pages(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'dashboard-detail.db'}"
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        repo, _ = storage.get_or_create_repository("example-org/app")
+        scan_job = storage.create_scan_job("artifact", "bundle.zip", "custom-patterns", status="completed")
+        tool_run = storage.create_tool_run(
+            "custom-patterns",
+            "bundle.zip",
+            scan_job_id=scan_job.id,
+            status="completed",
+            stdout_log="findings=1",
+            stderr_log="",
+        )
+        finding = storage.create_finding(
+            CanonicalFinding(
+                source_tool="custom-patterns",
+                source_name="custom-patterns",
+                category="secret",
+                title="Detailed finding",
+                description="Detail view coverage",
+                repository_id=repo.id,
+                scan_job_id=scan_job.id,
+                risk_score=73,
+            )
+        )
+        storage.create_evidence(
+            finding.id,
+            "custom-patterns",
+            repository_path="nested/secrets.txt",
+            line_start=4,
+            line_end=4,
+            snippet="<redacted:custom-patterns>",
+            extracted_indicator="prod...7890",
+        )
+        storage.create_risk_score("finding", str(finding.id), 73, finding_id=finding.id, severity="high", confidence="likely")
+        session.commit()
+
+    client = TestClient(create_app(database_url))
+    finding_response = client.get(f"/dashboard/findings/{finding.id}")
+    scan_job_response = client.get(f"/dashboard/scan-jobs/{scan_job.id}")
+
+    assert finding_response.status_code == 200
+    assert "Detailed finding" in finding_response.text
+    assert "Evidence" in finding_response.text
+    assert scan_job_response.status_code == 200
+    assert "Scan job" in scan_job_response.text
+    assert "findings=1" in scan_job_response.text
+    assert "Detailed finding" in scan_job_response.text
+
+
+def test_dashboard_graph_view_renders_relationships(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'graph-view.db'}"
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        org = storage.create_organization("example-org")
+        repo = storage.create_repository("example-org/app", organization_id=org.id)
+        storage.create_relationship("organization", str(org.id), "repository", str(repo.id), "owns", confidence="verified")
+        session.commit()
+
+    client = TestClient(create_app(database_url))
+    response = client.get("/dashboard/graph")
+
+    assert response.status_code == 200
+    assert "Relationship graph" in response.text
+    assert "organization" in response.text
+    assert "owns" in response.text
+
+
 def test_dashboard_artifact_upload_returns_html_error(tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'dashboard-artifact-error.db'}"
     client = TestClient(create_app(database_url))
@@ -430,6 +504,44 @@ def test_dashboard_finding_workflow_updates_state(tmp_path: Path) -> None:
         assert stored is not None
         assert stored.status == "suppressed"
         assert stored.triage_owner == "alice"
+
+
+def test_api_artifact_upload_supports_external_scanner_selection(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'artifact-external.db'}"
+
+    class FakeExternalScanner:
+        name = "gitleaks"
+        source_class = "free"
+
+        def scan_path(self, target: Path) -> list[ScanMatch]:
+            return [
+                ScanMatch(
+                    path=target / "results.txt" if target.is_dir() else target,
+                    line_start=1,
+                    line_end=1,
+                    category="secret",
+                    title="Gitleaks: fake-rule",
+                    description="Fake external result",
+                    severity=SeverityLevel.HIGH,
+                    confidence=ConfidenceLevel.LIKELY,
+                    indicator="prod...7890",
+                    snippet="<redacted:gitleaks>",
+                )
+            ]
+
+    monkeypatch.setattr("orgscan.runner.get_scanner", lambda name, settings=None: FakeExternalScanner())
+    client = TestClient(create_app(database_url))
+
+    response = client.post(
+        "/artifact-scans",
+        data={"scanner": "gitleaks"},
+        files={"artifact": ("credentials.env", b'token = "prod-super-secret-1234567890"\n', "text/plain")},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["scanner"] == "gitleaks"
+    assert payload["findings"] == 1
 
 
 def test_api_artifact_upload_scans_text_file(tmp_path: Path) -> None:
