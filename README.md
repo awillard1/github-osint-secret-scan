@@ -202,6 +202,7 @@ Key routes:
 - `/trends/findings` findings trend JSON
 
 The live `/dashboard` view now also includes an artifact upload form so analysts can submit files and archives from the browser and immediately review the resulting scan activity.
+The dashboard also supports inline finding workflow actions for triage, suppress, accept-risk, and reopen operations without leaving the web UI.
 
 Artifact upload example:
 

@@ -349,7 +349,7 @@ def test_fastapi_dashboard_and_json_routes(tmp_path: Path) -> None:
     client = TestClient(create_app(database_url))
 
     root = client.get("/", follow_redirects=False)
-    dashboard = client.get("/dashboard?severity=critical&limit=5&days=14")
+    dashboard = client.get("/dashboard?severity=critical&limit=5&days=14&high_signal_only=true&min_confidence=likely")
     findings = client.get("/findings?severity=critical")
     summary = client.get("/summary")
 
@@ -358,6 +358,7 @@ def test_fastapi_dashboard_and_json_routes(tmp_path: Path) -> None:
     assert dashboard.status_code == 200
     assert "Live filters" in dashboard.text
     assert "Artifact upload analysis" in dashboard.text
+    assert "High signal only" in dashboard.text
     assert "Live dashboard finding" in dashboard.text
     assert findings.status_code == 200
     assert findings.json()["findings"][0]["title"] == "Live dashboard finding"
@@ -393,6 +394,42 @@ def test_dashboard_artifact_upload_returns_html_error(tmp_path: Path) -> None:
     assert response.status_code == 400
     assert "Artifact scan failed." in response.text
     assert "Invalid uploaded archive" in response.text
+
+
+def test_dashboard_finding_workflow_updates_state(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'dashboard-finding-workflow.db'}"
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        repo, _ = storage.get_or_create_repository("example-org/app")
+        finding = storage.create_finding(
+            CanonicalFinding(
+                source_tool="custom-patterns",
+                source_name="custom-patterns",
+                category="secret",
+                title="Dashboard workflow finding",
+                description="Needs analyst action",
+                repository_id=repo.id,
+            )
+        )
+        session.commit()
+
+    client = TestClient(create_app(database_url))
+    response = client.post(
+        f"/dashboard/findings/{finding.id}/workflow",
+        data={"action": "suppress", "owner": "alice", "note": "confirmed false positive", "high_signal_only": "false"},
+    )
+
+    assert response.status_code == 200
+    assert "Finding workflow updated." in response.text
+    assert "suppressed" in response.text
+
+    with session_factory() as session:
+        stored = Storage(session).get_finding(finding.id)
+        assert stored is not None
+        assert stored.status == "suppressed"
+        assert stored.triage_owner == "alice"
 
 
 def test_api_artifact_upload_scans_text_file(tmp_path: Path) -> None:

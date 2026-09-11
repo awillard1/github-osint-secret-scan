@@ -202,6 +202,8 @@ def render_dashboard_html(
     live: bool = False,
     artifact_scan_result: dict[str, Any] | None = None,
     artifact_scan_error: str | None = None,
+    finding_action_result: dict[str, Any] | None = None,
+    finding_action_error: str | None = None,
 ) -> str:
     def items(mapping: dict[str, Any]) -> str:
         return "".join(f"<li><strong>{html.escape(str(key))}</strong>: {html.escape(str(value))}</li>" for key, value in mapping.items())
@@ -227,9 +229,49 @@ def render_dashboard_html(
         f"<td>{html.escape(str(row['category']))}</td>"
         f"<td>{html.escape(str(row['severity']))}</td>"
         f"<td>{html.escape(str(row['confidence']))}</td>"
-        f"<td>{html.escape(str(row['status']))}</td>"
+        f"<td>{html.escape(str(row['risk_score']))}</td>"
+        f"<td>{html.escape(str(row['status']))}</td> / {html.escape(str(row['triage_state']))}"
+        f"<br><span class='subtle'>{html.escape(str(row['triage_owner'] or 'unassigned'))}</span>"
+        f"<td>{html.escape(str(row['source_tool']))}</td>"
+        f"<td>{html.escape(str(row['detected_at']))}</td>"
+        "<td>"
+        "<form method='post' action='/dashboard/findings/{id}/workflow' class='finding-action'>"
+        "<input type='hidden' name='limit' value='{limit}'>"
+        "<input type='hidden' name='days' value='{days}'>"
+        "<input type='hidden' name='status' value='{status}'>"
+        "<input type='hidden' name='severity' value='{severity}'>"
+        "<input type='hidden' name='category' value='{category}'>"
+        "<input type='hidden' name='confidence' value='{confidence}'>"
+        "<input type='hidden' name='high_signal_only' value='{high_signal_only}'>"
+        "<input type='hidden' name='min_confidence' value='{min_confidence}'>"
+        "<select name='action'>"
+        "<option value='triage'>triage</option>"
+        "<option value='suppress'>suppress</option>"
+        "<option value='accept-risk'>accept risk</option>"
+        "<option value='reopen'>reopen</option>"
+        "</select>"
+        "<input type='text' name='owner' placeholder='owner'>"
+        "<input type='text' name='note' placeholder='note or reason'>"
+        "<select name='triage_state'>"
+        "<option value='reviewing'>reviewing</option>"
+        "<option value='validated'>validated</option>"
+        "<option value='false_positive'>false_positive</option>"
+        "</select>"
+        "<button type='submit'>Apply</button>"
+        "</form>"
+        "</td>"
         "</tr>"
         for row in findings
+        for limit, days, status, severity, category, confidence, high_signal_only, min_confidence in [(
+            html.escape(str((filters or {}).get("limit", 100))),
+            html.escape(str((filters or {}).get("days", 30))),
+            html.escape(str((filters or {}).get("status", ""))),
+            html.escape(str((filters or {}).get("severity", ""))),
+            html.escape(str((filters or {}).get("category", ""))),
+            html.escape(str((filters or {}).get("confidence", ""))),
+            "true" if (filters or {}).get("high_signal_only") else "false",
+            html.escape(str((filters or {}).get("min_confidence", "likely"))),
+        )]
     )
     top_findings = "".join(
         "<tr>"
@@ -290,6 +332,21 @@ def render_dashboard_html(
             f"<strong>Artifact scan failed.</strong> {html.escape(artifact_scan_error)}"
             "</div>"
         )
+    finding_result_banner = ""
+    if finding_action_result is not None:
+        finding_result_banner = (
+            "<div class='banner success'>"
+            f"<strong>Finding workflow updated.</strong> Finding #{html.escape(str(finding_action_result.get('id', 'n/a')))} "
+            f"is now {html.escape(str(finding_action_result.get('status', 'updated')))}"
+            f" / {html.escape(str(finding_action_result.get('triage_state', 'updated')))}."
+            "</div>"
+        )
+    elif finding_action_error:
+        finding_result_banner = (
+            "<div class='banner error'>"
+            f"<strong>Finding workflow update failed.</strong> {html.escape(finding_action_error)}"
+            "</div>"
+        )
     graph_nodes = len((graph or {}).get("nodes", []))
     graph_edges = len((graph or {}).get("edges", []))
     identity_labels = [
@@ -313,6 +370,15 @@ def render_dashboard_html(
         <label>Severity <input type="text" name="severity" value="{severity}"></label>
         <label>Category <input type="text" name="category" value="{category}"></label>
         <label>Confidence <input type="text" name="confidence" value="{confidence}"></label>
+        <label>Minimum confidence
+          <select name="min_confidence">
+            <option value="verified" {min_confidence_verified}>verified</option>
+            <option value="likely" {min_confidence_likely}>likely</option>
+            <option value="heuristic" {min_confidence_heuristic}>heuristic</option>
+            <option value="unverified" {min_confidence_unverified}>unverified</option>
+          </select>
+        </label>
+        <label class="checkbox"><input type="checkbox" name="high_signal_only" value="true" {high_signal_only}>High signal only</label>
         <label>Limit <input type="number" min="1" max="500" name="limit" value="{limit}"></label>
         <label>Trend days <input type="number" min="1" max="365" name="days" value="{days}"></label>
         <button type="submit">Refresh</button>
@@ -338,6 +404,11 @@ def render_dashboard_html(
         severity=html.escape(str((filters or {}).get("severity", ""))),
         category=html.escape(str((filters or {}).get("category", ""))),
         confidence=html.escape(str((filters or {}).get("confidence", ""))),
+        min_confidence_verified="selected" if (filters or {}).get("min_confidence", "likely") == "verified" else "",
+        min_confidence_likely="selected" if (filters or {}).get("min_confidence", "likely") == "likely" else "",
+        min_confidence_heuristic="selected" if (filters or {}).get("min_confidence", "likely") == "heuristic" else "",
+        min_confidence_unverified="selected" if (filters or {}).get("min_confidence", "likely") == "unverified" else "",
+        high_signal_only="checked" if (filters or {}).get("high_signal_only") else "",
         limit=html.escape(str((filters or {}).get("limit", 100))),
         days=html.escape(str((filters or {}).get("days", 30))),
     ) if live else ""
@@ -358,13 +429,16 @@ def render_dashboard_html(
       tbody tr:nth-child(even) {{ background: #f8fbff; }}
       h1, h2, h3 {{ margin-top: 0; }}
       .filters, .upload-form {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; align-items: end; }}
+      .finding-action {{ display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }}
       label {{ display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.95rem; }}
-      input {{ padding: 0.55rem; border: 1px solid #cbd5e1; border-radius: 10px; }}
+      input, select {{ padding: 0.55rem; border: 1px solid #cbd5e1; border-radius: 10px; background: white; }}
       button {{ padding: 0.7rem 1rem; border: 0; border-radius: 10px; background: #2563eb; color: white; cursor: pointer; font-weight: 600; }}
       .subtle {{ color: #475569; margin: 0; }}
       .section-header {{ display: flex; justify-content: space-between; gap: 1rem; align-items: center; margin-bottom: 1rem; }}
       .quick-links {{ display: flex; flex-wrap: wrap; gap: 0.75rem; }}
       .quick-links a {{ text-decoration: none; color: #2563eb; font-weight: 600; }}
+      .checkbox {{ flex-direction: row; align-items: center; gap: 0.5rem; padding-bottom: 0.3rem; }}
+      .checkbox input {{ width: auto; }}
       .metric p {{ font-size: 2rem; font-weight: 700; margin: 0; }}
       .metric.critical {{ background: linear-gradient(180deg, #fff1f2 0%, #ffffff 100%); }}
       .metric.warning {{ background: linear-gradient(180deg, #fffbeb 0%, #ffffff 100%); }}
@@ -381,6 +455,7 @@ def render_dashboard_html(
     <h1>orgscan dashboard</h1>
     <p class="subtle">Analyst workspace for findings, entity risk, upload-driven artifact triage, and recent scan activity.</p>
     {artifact_result_banner}
+    {finding_result_banner}
     {live_header}
     <div class=\"hero\">
       {metric_card("Findings", summary['counts'].get('findings', 0), "critical")}
@@ -465,7 +540,7 @@ def render_dashboard_html(
       <h2>Recent findings</h2>
       <table>
         <thead>
-          <tr><th>ID</th><th>Title</th><th>Category</th><th>Severity</th><th>Confidence</th><th>Status</th></tr>
+          <tr><th>ID</th><th>Title</th><th>Category</th><th>Severity</th><th>Confidence</th><th>Risk / workflow</th><th>Tool</th><th>Detected</th><th>Actions</th></tr>
         </thead>
         <tbody>{rows}</tbody>
       </table>

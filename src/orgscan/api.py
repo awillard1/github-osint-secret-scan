@@ -130,6 +130,13 @@ class FindingReopenRequest(BaseModel):
     note: str | None = None
 
 
+class DashboardFindingWorkflowRequest(BaseModel):
+    action: str
+    owner: str | None = None
+    note: str | None = None
+    triage_state: str | None = None
+
+
 def _safe_artifact_name(filename: str | None) -> str:
     return (Path(filename or "artifact.txt").name or "artifact.txt").replace("\x00", "")
 
@@ -813,12 +820,25 @@ class OrgscanApiService:
         severity: str | None = None,
         category: str | None = None,
         confidence: str | None = None,
+        high_signal_only: bool = False,
+        min_confidence: str = "likely",
         artifact_scan_result: dict[str, object] | None = None,
         artifact_scan_error: str | None = None,
+        finding_action_result: dict[str, object] | None = None,
+        finding_action_error: str | None = None,
     ) -> str:
         with self.session_factory() as session:
             storage = Storage(session)
             summary = build_summary(storage)
+            findings = storage.list_findings(
+                limit=max(limit * 4, limit) if high_signal_only else limit,
+                status=status,
+                severity=severity,
+                category=category,
+                confidence=confidence,
+            )
+            if high_signal_only:
+                findings = self._high_signal_findings(findings, min_confidence=min_confidence, limit=limit)
             filtered_rows = [
                 {
                     "id": finding.id,
@@ -836,16 +856,11 @@ class OrgscanApiService:
                     "source_name": finding.source_name,
                     "repository_id": finding.repository_id,
                     "scan_job_id": finding.scan_job_id,
+                    "risk_score": finding.risk_score or 0,
                     "detected_at": finding.detected_at.isoformat(),
                     "fingerprint": finding.fingerprint,
                 }
-                for finding in storage.list_findings(
-                    limit=limit,
-                    status=status,
-                    severity=severity,
-                    category=category,
-                    confidence=confidence,
-                )
+                for finding in findings
             ]
             return render_dashboard_html(
                 summary,
@@ -859,11 +874,55 @@ class OrgscanApiService:
                     "severity": severity or "",
                     "category": category or "",
                     "confidence": confidence or "",
+                    "high_signal_only": high_signal_only,
+                    "min_confidence": min_confidence,
                 },
                 live=True,
                 artifact_scan_result=artifact_scan_result,
                 artifact_scan_error=artifact_scan_error,
+                finding_action_result=finding_action_result,
+                finding_action_error=finding_action_error,
             )
+
+    def _dashboard_finding_workflow(
+        self,
+        finding_id: int,
+        payload: DashboardFindingWorkflowRequest,
+    ) -> dict[str, object] | None:
+        action = payload.action.strip().lower()
+        if action == "triage":
+            return self._update_finding_triage(
+                finding_id,
+                FindingUpdateRequest(
+                    status="triaged",
+                    triage_state=payload.triage_state or "reviewing",
+                    triage_owner=payload.owner,
+                    triage_notes=payload.note,
+                ),
+            )
+        if action == "suppress":
+            return self._apply_finding_decision(
+                finding_id,
+                FindingDecisionRequest(
+                    reason=payload.note or "Updated from dashboard",
+                    owner=payload.owner,
+                    note=payload.note,
+                ),
+                status="suppressed",
+            )
+        if action == "accept-risk":
+            return self._apply_finding_decision(
+                finding_id,
+                FindingDecisionRequest(
+                    reason=payload.note or "Updated from dashboard",
+                    owner=payload.owner,
+                    note=payload.note,
+                ),
+                status="accepted_risk",
+            )
+        if action == "reopen":
+            return self._reopen_finding(finding_id, FindingReopenRequest(note=payload.note))
+        raise HTTPException(status_code=400, detail=f"Unsupported dashboard finding action: {payload.action}")
 
     def handle(self, path: str) -> tuple[int, dict[str, object]]:
         parsed = urlparse(path)
@@ -1207,6 +1266,8 @@ def create_app(database_url: str) -> FastAPI:
         severity: str | None = None,
         category: str | None = None,
         confidence: str | None = None,
+        high_signal_only: bool = False,
+        min_confidence: str = Query("likely", pattern="^(verified|likely|heuristic|unverified)$"),
     ) -> HTMLResponse:
         return HTMLResponse(
             service._dashboard_html(
@@ -1216,6 +1277,8 @@ def create_app(database_url: str) -> FastAPI:
                 severity=severity,
                 category=category,
                 confidence=confidence,
+                high_signal_only=high_signal_only,
+                min_confidence=min_confidence,
             )
         )
 
@@ -1237,6 +1300,63 @@ def create_app(database_url: str) -> FastAPI:
             return HTMLResponse(service._dashboard_html(artifact_scan_result=result))
         except HTTPException as exc:
             return HTMLResponse(service._dashboard_html(artifact_scan_error=str(exc.detail)), status_code=exc.status_code)
+
+    @app.post("/dashboard/findings/{finding_id}/workflow", response_class=HTMLResponse)
+    async def dashboard_finding_workflow(
+        finding_id: int,
+        action: str = Form(...),
+        owner: str | None = Form(None),
+        note: str | None = Form(None),
+        triage_state: str | None = Form(None),
+        limit: int = Form(100),
+        days: int = Form(30),
+        status: str | None = Form(None),
+        severity: str | None = Form(None),
+        category: str | None = Form(None),
+        confidence: str | None = Form(None),
+        high_signal_only: bool = Form(False),
+        min_confidence: str = Form("likely"),
+    ) -> HTMLResponse:
+        try:
+            result = service._dashboard_finding_workflow(
+                finding_id,
+                DashboardFindingWorkflowRequest(
+                    action=action,
+                    owner=owner,
+                    note=note,
+                    triage_state=triage_state,
+                ),
+            )
+            if result is None:
+                raise HTTPException(status_code=404, detail="Finding not found")
+            return HTMLResponse(
+                service._dashboard_html(
+                    limit=limit,
+                    days=days,
+                    status=status,
+                    severity=severity,
+                    category=category,
+                    confidence=confidence,
+                    high_signal_only=high_signal_only,
+                    min_confidence=min_confidence,
+                    finding_action_result=result["finding"],
+                )
+            )
+        except HTTPException as exc:
+            return HTMLResponse(
+                service._dashboard_html(
+                    limit=limit,
+                    days=days,
+                    status=status,
+                    severity=severity,
+                    category=category,
+                    confidence=confidence,
+                    high_signal_only=high_signal_only,
+                    min_confidence=min_confidence,
+                    finding_action_error=str(exc.detail),
+                ),
+                status_code=exc.status_code,
+            )
 
     return app
 
