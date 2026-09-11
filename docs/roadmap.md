@@ -27,13 +27,21 @@ The package now has `api/` (FastAPI, compatibility `OrgscanApiService`, artifact
 Follow [development-plan.md](development-plan.md) in order, extending existing code rather than recreating these capabilities:
 
 - **Phase 1 (initial slice implemented):** finding reads/decisions now share a service and extracted adapters. Continue the remaining families listed below while preserving adapters and imports.
-- **Phase 2 (implemented):** common scanner contract and registry, documented below. **Phase 3 (missing):** shared ScanPlan and profile resolution.
+- **Phase 2 (implemented):** common scanner contract and registry, documented below. **Phase 3 (implemented):** shared ScanPlan, eight profiles and persisted resolved intent.
 - **Phases 4–5:** extend existing mirror/ref/history execution with checkpoints, isolation and incremental decisions.
 - **Phases 6–7:** harden existing YARA and ripgrep adapters and introduce validated rule-driven configuration.
 - **Phases 8–9:** extend existing finding deduplication and graph relationships.
 - **Phase 10:** extend existing GitHub public search and integrate its provenance/results more fully; the provider is already implemented.
 - **Phases 11–14:** integrate authentication into HTTP/browser flows, formalize lifecycle history, improve operator views and job reliability.
 - **Phases 15–16:** extend existing exports/PDF/scheduled reports with SARIF and report variants; add doctor/release hardening beyond existing setup/verify-deps.
+
+## Phase 3 — ScanPlan and profiles
+
+`services/scan_plan.py` resolves eight explicit profiles, validates target/scanner/scope combinations, and serializes versioned intent. `services/scan_service.py` shares execution across CLI/API, scheduler and both existing queue backends. Existing explicit single-scanner selection remains available; omitted profiles keep previous defaults. Schedules retain resolved plans in metadata; legacy schedules resolve their existing scanner/scope. Jobs persist the plan alongside existing parameters. No schema migration or canonical normalization change is required.
+
+CLI scan/schedule/mirror commands and artifact API/dashboard POST accept profiles. `scan-plan` validates or executes resolved JSON, including domain-only and osint-only plans through existing providers. Batch responses add individual results and aggregate findings, retaining first-run identifiers. Invalid combinations now fail before job creation. Profiles never silently skip unavailable tools. Incremental/all-branch execution remains deferred to Phase 5; historical mirror ref behavior is retained. See [scan-plans.md](scan-plans.md) for all defaults, override precedence, partial-batch behavior and discovery/UI limitations.
+
+Validation: Phase 2 baseline **185 passed**; Phase 3 focused checks passed **27 service/runner/scheduler/queue/mirror tests** and **5 API integration tests**. The full suite passed **206 tests**, with the same two dependency deprecation warnings, in 86.01 seconds outside the sandbox. Diff/whitespace checks passed. No static checker is configured.
 
 ## Phase 2 — Scanner contract and registry
 

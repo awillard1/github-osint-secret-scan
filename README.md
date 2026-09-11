@@ -124,6 +124,8 @@ The built-in `git-history-patterns` scanner uses `git log --patch` to look for s
 
 External scanner wrappers honor the configured `ORGSCAN_*_BINARY` settings and `ORGSCAN_SCANNER_TIMEOUT_SECONDS` (300 seconds per subprocess by default). Additional scanners register through Python entry points in the `orgscan.scanners` group; native and legacy plugins share registry-driven CLI/API readiness and artifact choices. See the [scanner contract](docs/scanner-contract.md) for integration and readiness limits.
 
+Scan commands accept `--profile` (for example `standard` or `history`); explicit `--scanner` overrides profile selection. See [scan plans](docs/scan-plans.md) for defaults, scheduled execution and JSON plans.
+
 You can also ingest previously saved scanner output and normalize it into the same canonical data model:
 
 ```bash

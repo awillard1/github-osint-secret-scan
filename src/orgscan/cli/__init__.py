@@ -38,6 +38,8 @@ from orgscan.runner import execute_scan, record_scan_results
 from orgscan.scanners import ScannerExecutionError, available_scanner_names, load_report
 from orgscan.scanners.base import ScanMatch
 from orgscan.services.scanner_service import scanner_inventory
+from orgscan.services.scan_plan import ScanPlan, resolve_scan_plan
+from orgscan.services.scan_service import execute_plan, result_payload
 from orgscan.scheduler import next_run_from_cadence, run_due_reports, run_due_scans
 
 app = typer.Typer(help="OSINT Security Platform CLI foundation")
@@ -605,7 +607,8 @@ def report(
 def scan(
     target_type: ScanTargetType,
     target: Path,
-    scanner: str = typer.Option("custom-patterns", "--scanner", help="Scanner implementation to run."),
+    scanner: str | None = typer.Option(None, "--scanner", help="Scanner implementation to run."),
+    profile: str | None = typer.Option(None, "--profile", help="Scan profile; explicit --scanner overrides its scanner list."),
     organization: str | None = typer.Option(None, "--organization", help="Optional organization association."),
     repository: str | None = typer.Option(None, "--repository", help="Optional repository association."),
     provider: str = typer.Option("github", "--provider", help="Provider name for repository records."),
@@ -633,30 +636,20 @@ def scan(
         )
 
         try:
-            result = execute_scan(
-                storage,
-                target_path=resolved_target,
-                scanner_name=scanner,
-                settings=settings,
-                organization_id=organization_id,
-                repository_id=repository_id,
-            )
+            plan = resolve_scan_plan(target=str(resolved_target), profile=profile,
+                                     scanners=[scanner] if scanner else None, settings=settings,
+                                     organization_id=organization_id, repository_id=repository_id)
+            results = execute_plan(storage, plan, settings=settings)
+            result = results[0]
         except ScannerExecutionError as exc:
             typer.echo(f"Scan failed: {exc}", err=True)
             raise typer.Exit(code=1) from exc
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
 
-    result_payload = {
-        "scanner": result.scanner,
-        "target": result.target,
-        "scan_job_id": result.scan_job_id,
-        "tool_run_id": result.tool_run_id,
-        "findings": result.findings,
-        "finding_ids": result.finding_ids,
-    }
+    payload = result_payload(results)
     if json_output:
-        typer.echo(json.dumps(result_payload, indent=2, default=str))
+        typer.echo(json.dumps(payload, indent=2, default=str))
     else:
         typer.echo(f"Completed scan job {result.scan_job_id} with {result.findings} finding(s).")
         typer.echo(f"Target: {result.target}")
@@ -720,7 +713,8 @@ def ingest_results(
 @app.command("schedule-scan")
 def schedule_scan(
     target: Path,
-    scanner: str = typer.Option("custom-patterns", "--scanner", help="Scanner to schedule."),
+    scanner: str | None = typer.Option(None, "--scanner", help="Scanner to schedule."),
+    profile: str | None = typer.Option(None, "--profile", help="Scan profile; explicit --scanner overrides its scanner list."),
     cadence: ScanCadence = typer.Option(ScanCadence.DAILY, "--cadence", help="How often to rerun the scan."),
     organization: str | None = typer.Option(None, "--organization", help="Optional organization association."),
     repository: str | None = typer.Option(None, "--repository", help="Optional repository association."),
@@ -738,13 +732,20 @@ def schedule_scan(
             provider="github",
             tenant_key=tenant_key,
         )
+        try:
+            plan = resolve_scan_plan(target=str(target.resolve()), target_type="path", profile=profile,
+                                     scanners=[scanner] if scanner else None, refs=None, settings=settings,
+                                     organization_id=organization_id, repository_id=repository_id, tenant_key=tenant_key)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
         scheduled = storage.create_scheduled_scan(
             "path",
             str(target.resolve()),
-            scanner,
+            plan.scanners[0],
             next_run_from_cadence(cadence.value),
             cadence=cadence.value,
             metadata_json={
+                "scan_plan": plan.serialized(),
                 "organization_id": organization_id,
                 "repository_id": repository_id,
                 "tenant_key": tenant_key,
@@ -757,7 +758,8 @@ def schedule_scan(
 @app.command("schedule-mirror-scan")
 def schedule_mirror_scan(
     repository: str = typer.Argument(..., help="Repository full name, such as owner/name."),
-    scanner: str = typer.Option("git-history-patterns", "--scanner", help="Scanner to schedule against the repository mirror."),
+    scanner: str | None = typer.Option(None, "--scanner", help="Scanner to schedule against the repository mirror."),
+    profile: str | None = typer.Option(None, "--profile", help="Scan profile; explicit --scanner overrides its scanner list."),
     cadence: ScanCadence = typer.Option(ScanCadence.DAILY, "--cadence", help="How often to rerun the mirror scan."),
     ref: list[str] = typer.Option([], "--ref", help="Specific branch or tag refs to scan; repeat for multiple refs."),
     provider: str = typer.Option("github", "--provider", help="Repository provider name."),
@@ -773,13 +775,20 @@ def schedule_mirror_scan(
         repository_record = storage.get_repository_by_full_name(repository)
         organization_id = repository_record.organization_id if repository_record else None
         repository_id = repository_record.id if repository_record else None
+        try:
+            plan = resolve_scan_plan(target=repository, target_type="mirror", profile=profile,
+                                     scanners=[scanner] if scanner else None, refs=list(ref), settings=settings,
+                                     organization_id=organization_id, repository_id=repository_id, tenant_key=tenant_key)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
         scheduled = storage.create_scheduled_scan(
             "mirror",
             repository,
-            scanner,
+            plan.scanners[0],
             next_run_from_cadence(cadence.value),
             cadence=cadence.value,
             metadata_json={
+                "scan_plan": plan.serialized(),
                 "organization_id": organization_id,
                 "repository_id": repository_id,
                 "provider": provider,
@@ -995,7 +1004,8 @@ def sync_mirrors(
 @app.command("scan-mirror")
 def scan_mirror(
     repository: str = typer.Argument(..., help="Repository full name, such as owner/name."),
-    scanner: str = typer.Option("git-history-patterns", "--scanner", help="Scanner implementation to run against the mirror."),
+    scanner: str | None = typer.Option(None, "--scanner", help="Scanner implementation to run against the mirror."),
+    profile: str | None = typer.Option(None, "--profile", help="Scan profile; explicit --scanner overrides its scanner list."),
     ref: list[str] = typer.Option([], "--ref", help="Specific branch or tag refs to scan from the mirror; repeat for multiple refs."),
     resync: bool = typer.Option(False, "--resync/--no-resync", help="Refresh the mirror before scanning."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
@@ -1006,21 +1016,24 @@ def scan_mirror(
     with session_factory() as session:
         storage = Storage(session)
         try:
+            plan = resolve_scan_plan(target=repository, target_type="mirror", profile=profile,
+                                     scanners=[scanner] if scanner else None, refs=list(ref), settings=settings)
             results = scan_repository_mirror_refs(
                 storage,
                 settings=settings,
                 repository_full_name=repository,
-                scanner_name=scanner,
+                scanner_name=plan.scanners[0],
+                plan=plan,
                 refs=list(ref),
                 resync=resync,
             )
-        except MirrorError as exc:
+        except (MirrorError, ValueError, ScannerExecutionError) as exc:
             typer.echo(f"Mirror scan failed: {exc}", err=True)
             raise typer.Exit(code=1) from exc
         session.commit()
     payload = {
         "repository": repository,
-        "scanner": scanner,
+        "scanner": plan.scanners[0],
         "refs": list(ref),
         "resync": resync,
         "results": [
@@ -1271,3 +1284,22 @@ def verify_deps(
 
 def main() -> None:
     app()
+
+
+@app.command("scan-plan")
+def scan_plan_command(plan_file: Path, dry_run: bool = typer.Option(False, "--dry-run")) -> None:
+    """Validate or execute a serialized resolved plan (including domain plans)."""
+    settings = _settings()
+    try:
+        plan = ScanPlan.model_validate_json(plan_file.read_text())
+        from orgscan.services.scan_plan import validate_plan_scanners
+        validate_plan_scanners(plan, settings=settings)
+        if dry_run:
+            typer.echo(plan.model_dump_json(indent=2))
+            return
+        init_db(settings.database_url)
+        with create_session_factory(settings.database_url)() as session:
+            payload = result_payload(execute_plan(Storage(session), plan, settings=settings))
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    except (ValueError, OSError, ScannerExecutionError, MirrorError) as exc:
+        raise typer.BadParameter(str(exc)) from exc

@@ -39,6 +39,7 @@ def execute_scan(
     scope_json: dict[str, object] | None = None,
     command_line: str | None = None,
     tool_target: str | None = None,
+    plan=None,
 ) -> ScanExecutionResult:
     scanner = get_scanner(scanner_name, settings=settings) if settings is not None else get_scanner(scanner_name)
     scanner_impl = ScannerAdapter(scanner, scanner_id=scanner_name, settings=settings)
@@ -47,6 +48,11 @@ def execute_scan(
     effective_scope = scope_json or {"mode": target_type}
     effective_command_line = command_line or f"orgscan scan path {resolved_target} --scanner {scanner_name}"
     effective_tool_target = tool_target or target_label or str(resolved_target)
+
+    from orgscan.services.scan_plan import ScanPlan
+    plan = plan or ScanPlan(target=str(resolved_target), target_type=target_type, scanners=(scanner_name,),
+                            organization_id=organization_id, repository_id=repository_id,
+                            timeout_seconds=settings.scanner_timeout_seconds if settings else 300, scope=effective_scope)
 
     scan_job = storage.create_scan_job(
         target_type=target_type,
@@ -59,6 +65,7 @@ def execute_scan(
             "target_ref": target_ref,
             "target_type": target_type,
             **(parameters_json or {}),
+            "scan_plan": plan.serialized(),
         },
         scope_json=effective_scope,
     )
@@ -80,7 +87,7 @@ def execute_scan(
             scan_job_id=scan_job.id,
             organization_id=organization_id,
             repository_id=repository_id,
-            timeout_seconds=settings.scanner_timeout_seconds if settings else 300,
+            timeout_seconds=plan.timeout_seconds,
             options=effective_scope,
         ))
         matches = result.findings

@@ -144,7 +144,7 @@ Preserve the `orgscan` console entry point.
 
 ## Scanner architecture
 
-See [scanner-contract.md](scanner-contract.md). Phase 2 implements the common metadata/readiness/context/result types and a registry adapter for native and legacy scanners. The shared runner uses this contract; scanner inventory and artifact choices are registry-driven. ScanPlan/profile resolution remains a later phase.
+See [scanner-contract.md](scanner-contract.md). Phase 2 implements the common metadata/readiness/context/result types and a registry adapter for native and legacy scanners. The shared runner uses this contract; scanner inventory and artifact choices are registry-driven. Phase 3 adds shared [ScanPlan/profile resolution](scan-plans.md), execution and serialized job intent.
 
 High-level flow:
 

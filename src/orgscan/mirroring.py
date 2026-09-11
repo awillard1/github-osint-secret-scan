@@ -107,10 +107,15 @@ def scan_repository_mirror_refs(
     provider: str = "github",
     clone_url: str | None = None,
     resync: bool = False,
+    plan=None,
 ):
     from orgscan.runner import execute_scan
 
-    resolved_refs = _normalize_refs(refs)
+    from orgscan.services.scan_plan import resolve_scan_plan
+    plan = plan or resolve_scan_plan(target=repository_full_name, target_type="mirror", scanners=[scanner_name], refs=refs, settings=settings)
+    if plan.mode == "incremental" or plan.branch_policy == "all":
+        raise ValueError("Incremental/all-branch orchestration is not implemented yet")
+    resolved_refs = _normalize_refs(list(plan.refs))
     repository = storage.get_repository_by_full_name(repository_full_name)
     if resync:
         repository, _ = sync_repository_mirror(
@@ -138,27 +143,31 @@ def scan_repository_mirror_refs(
         metadata["current_ref"] = ref_name
         repository.metadata_json = metadata
         storage.session.flush()
-        results.append(
-            execute_scan(
-                storage,
-                target_path=mirror_path,
-                scanner_name=scanner_name,
-                settings=settings,
-                organization_id=repository.organization_id,
-                repository_id=repository.id,
-                target_type="mirror",
-                target_id=repository.full_name,
-                target_ref=ref_name,
-                scope_json={
-                    "mode": "mirror",
-                    "repository_full_name": repository.full_name,
-                    "mirror_path": str(mirror_path),
-                    "ref_name": ref_name,
-                },
-                command_line=f"orgscan scan-mirror {repository.full_name} --scanner {scanner_name} --ref {ref_name}",
-                tool_target=f"{repository.full_name}@{ref_name}",
+        for scanner_name in plan.scanners:
+            results.append(
+                execute_scan(
+                    storage,
+                    target_path=mirror_path,
+                    scanner_name=scanner_name,
+                    settings=settings,
+                    plan=plan,
+                    organization_id=repository.organization_id,
+                    repository_id=repository.id,
+                    target_type="mirror",
+                    target_id=repository.full_name,
+                    target_ref=ref_name,
+                    scope_json={
+                        "mode": "mirror",
+                        "history_mode": plan.history_policy,
+                        **plan.scope,
+                        "repository_full_name": repository.full_name,
+                        "mirror_path": str(mirror_path),
+                        "ref_name": ref_name,
+                    },
+                    command_line=f"orgscan scan-mirror {repository.full_name} --scanner {scanner_name} --ref {ref_name}",
+                    tool_target=f"{repository.full_name}@{ref_name}",
+                )
             )
-        )
     return results
 
 

@@ -99,7 +99,8 @@ def test_declared_target_capabilities_filter_choices_and_reject_execution(plugin
     assert "does not support artifact targets" in response.json()["detail"]
     assert calls == []
     with create_session_factory(database_url)() as session:
-        assert Storage(session).list_scan_jobs()[0].status == "failed"
+        # Invalid intent is rejected by plan validation before creating a job.
+        assert Storage(session).list_scan_jobs() == []
 
 
 def test_not_ready_scanner_is_disabled_and_cannot_execute(plugin_environment):

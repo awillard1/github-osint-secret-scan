@@ -46,6 +46,8 @@ from orgscan.api.schemas import (
 from orgscan.api.routes.findings import create_finding_router
 from orgscan.scanners import get_registry
 from orgscan.services.scanner_service import artifact_scanner_options, scanner_inventory
+from orgscan.services.scan_plan import resolve_scan_plan
+from orgscan.services.scan_service import execute_plan, result_payload
 from orgscan.scanners.external import ScannerExecutionError
 
 MAX_ARTIFACT_UPLOAD_BYTES = 10_000_000
@@ -374,7 +376,8 @@ class OrgscanApiService:
         *,
         filename: str | None,
         content: bytes,
-        scanner_name: str = "custom-patterns",
+        scanner_name: str | None = None,
+        profile: str | None = None,
         organization: str | None,
         repository: str | None,
         provider: str,
@@ -418,21 +421,18 @@ class OrgscanApiService:
                         repository=repository,
                         provider=provider,
                     )
-                    result = execute_scan(
-                        storage,
-                        target_path=scan_target,
-                        scanner_name=scanner_name,
-                        settings=self.settings,
-                        organization_id=organization_id,
-                        repository_id=repository_id,
-                        target_type="artifact",
+                    plan = resolve_scan_plan(target=str(scan_target), target_type="artifact", profile=profile,
+                                             scanners=[scanner_name] if scanner_name else None, settings=self.settings,
+                                             organization_id=organization_id, repository_id=repository_id)
+                    results = execute_plan(
+                        storage, plan, settings=self.settings,
                         target_label=artifact_name,
-                        command_line=f"api artifact scan {artifact_name} --scanner {scanner_name}",
+                        command_line=f"api artifact scan {artifact_name} --scanners {','.join(plan.scanners)}",
                         parameters_json={
                             "artifact_name": artifact_name,
                             "artifact_kind": archive_type or "file",
                             "extracted": extracted,
-                            "scanner": scanner_name,
+                            "scanner": plan.scanners[0],
                         },
                     )
         except ScannerExecutionError as exc:
@@ -440,16 +440,7 @@ class OrgscanApiService:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        return {
-            "artifact_name": artifact_name,
-            "scanner": result.scanner,
-            "scan_job_id": result.scan_job_id,
-            "tool_run_id": result.tool_run_id,
-            "findings": result.findings,
-            "finding_ids": result.finding_ids,
-            "target": result.target,
-            "extracted": extracted,
-        }
+        return {**result_payload(results), "artifact_name": artifact_name, "extracted": extracted}
 
     def _finding_html_payload(self, finding_id: int) -> dict[str, object] | None:
         return self._finding_payload(finding_id)
@@ -1189,7 +1180,8 @@ def create_app(database_url: str) -> FastAPI:
     @app.post("/artifact-scans")
     async def artifact_scans(
         artifact: UploadFile = File(...),
-        scanner: str = Form("custom-patterns"),
+        scanner: str | None = Form(None),
+        profile: str | None = Form(None),
         organization: str | None = Form(None),
         repository: str | None = Form(None),
         provider: str = Form("github"),
@@ -1198,6 +1190,7 @@ def create_app(database_url: str) -> FastAPI:
             filename=artifact.filename,
             content=await artifact.read(),
             scanner_name=scanner,
+            profile=profile,
             organization=organization,
             repository=repository,
             provider=provider,
@@ -1260,7 +1253,8 @@ def create_app(database_url: str) -> FastAPI:
     @app.post("/dashboard/artifact-scans", response_class=HTMLResponse)
     async def dashboard_artifact_scans(
         artifact: UploadFile = File(...),
-        scanner: str = Form("custom-patterns"),
+        scanner: str | None = Form(None),
+        profile: str | None = Form(None),
         organization: str | None = Form(None),
         repository: str | None = Form(None),
         provider: str = Form("github"),
@@ -1270,6 +1264,7 @@ def create_app(database_url: str) -> FastAPI:
                 filename=artifact.filename,
                 content=await artifact.read(),
                 scanner_name=scanner,
+                profile=profile,
                 organization=organization,
                 repository=repository,
                 provider=provider,

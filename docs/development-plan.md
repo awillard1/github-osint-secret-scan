@@ -70,6 +70,8 @@ Exit:
 
 ## Phase 3 — ScanPlan and profiles
 
+Status: implemented; see [scan plans](scan-plans.md) for defaults, precedence and execution limits.
+
 Goal: one representation of scan intent.
 
 Deliverables:
