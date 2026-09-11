@@ -1,18 +1,27 @@
 from __future__ import annotations
 
+import tarfile
+import tempfile
+import zipfile
 from collections.abc import Sequence
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from orgscan.db import create_session_factory, init_db
+from orgscan.runner import execute_scan
 from orgscan.reporting import build_summary, finding_rows, finding_trends, relationship_graph, render_dashboard_html
 from orgscan.repositories import Storage
+
+MAX_ARTIFACT_UPLOAD_BYTES = 10_000_000
+MAX_ARTIFACT_EXTRACTED_BYTES = 25_000_000
+MAX_ARTIFACT_EXTRACTED_FILES = 2_000
 
 
 def _serialize_finding(finding, *, include_detail: bool = False) -> dict[str, Any]:
@@ -119,6 +128,70 @@ class FindingDecisionRequest(BaseModel):
 
 class FindingReopenRequest(BaseModel):
     note: str | None = None
+
+
+def _safe_artifact_name(filename: str | None) -> str:
+    return (Path(filename or "artifact.txt").name or "artifact.txt").replace("\x00", "")
+
+
+def _archive_type(path: Path) -> str | None:
+    name = path.name.lower()
+    if name.endswith(".zip"):
+        return "zip"
+    if name.endswith(".tar") or name.endswith(".tar.gz") or name.endswith(".tgz"):
+        return "tar"
+    return None
+
+
+def _safe_extract_destination(root: Path, member_name: str) -> Path:
+    normalized = Path(member_name.lstrip("/"))
+    destination = (root / normalized).resolve()
+    if destination != root and root not in destination.parents:
+        raise ValueError(f"Unsafe archive entry: {member_name}")
+    return destination
+
+
+def _extract_zip_artifact(artifact_path: Path, destination_root: Path) -> int:
+    file_count = 0
+    total_bytes = 0
+    with zipfile.ZipFile(artifact_path) as archive:
+        for member in archive.infolist():
+            if member.is_dir():
+                continue
+            file_count += 1
+            if file_count > MAX_ARTIFACT_EXTRACTED_FILES:
+                raise ValueError("Uploaded archive contains too many files.")
+            total_bytes += member.file_size
+            if total_bytes > MAX_ARTIFACT_EXTRACTED_BYTES:
+                raise ValueError("Uploaded archive expands beyond the allowed size limit.")
+            destination = _safe_extract_destination(destination_root, member.filename)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(archive.read(member))
+    return file_count
+
+
+def _extract_tar_artifact(artifact_path: Path, destination_root: Path) -> int:
+    file_count = 0
+    total_bytes = 0
+    with tarfile.open(artifact_path) as archive:
+        for member in archive.getmembers():
+            if member.isdir():
+                continue
+            if not member.isfile():
+                raise ValueError("Uploaded archive contains unsupported special entries.")
+            file_count += 1
+            if file_count > MAX_ARTIFACT_EXTRACTED_FILES:
+                raise ValueError("Uploaded archive contains too many files.")
+            total_bytes += member.size
+            if total_bytes > MAX_ARTIFACT_EXTRACTED_BYTES:
+                raise ValueError("Uploaded archive expands beyond the allowed size limit.")
+            extracted = archive.extractfile(member)
+            if extracted is None:
+                continue
+            destination = _safe_extract_destination(destination_root, member.name)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(extracted.read())
+    return file_count
 
 
 class OrgscanApiService:
@@ -261,6 +334,102 @@ class OrgscanApiService:
             )
             session.commit()
             return {"finding": _serialize_finding(updated, include_detail=True)}
+
+    def _resolve_asset_context(
+        self,
+        storage: Storage,
+        *,
+        organization: str | None,
+        repository: str | None,
+        provider: str,
+    ) -> tuple[int | None, int | None]:
+        organization_id = None
+        repository_id = None
+        if organization:
+            organization_record, _ = storage.get_or_create_organization(organization)
+            organization_id = organization_record.id
+        if repository:
+            repository_record, _ = storage.get_or_create_repository(
+                repository,
+                organization_id=organization_id,
+                provider=provider,
+            )
+            repository_id = repository_record.id
+        return organization_id, repository_id
+
+    def _scan_uploaded_artifact(
+        self,
+        *,
+        filename: str | None,
+        content: bytes,
+        organization: str | None,
+        repository: str | None,
+        provider: str,
+    ) -> dict[str, object]:
+        artifact_name = _safe_artifact_name(filename)
+        if not content:
+            raise HTTPException(status_code=400, detail="Uploaded artifact is empty.")
+        if len(content) > MAX_ARTIFACT_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Uploaded artifact exceeds the allowed size limit.")
+
+        with tempfile.TemporaryDirectory(prefix="orgscan-artifact-") as temp_dir:
+            workspace = Path(temp_dir)
+            artifact_path = workspace / artifact_name
+            artifact_path.write_bytes(content)
+            archive_type = _archive_type(artifact_path)
+            scan_target = artifact_path
+            extracted = False
+
+            if archive_type is not None:
+                extracted_root = workspace / "extracted"
+                extracted_root.mkdir()
+                try:
+                    extracted_files = (
+                        _extract_zip_artifact(artifact_path, extracted_root)
+                        if archive_type == "zip"
+                        else _extract_tar_artifact(artifact_path, extracted_root)
+                    )
+                except (tarfile.TarError, zipfile.BadZipFile, ValueError) as exc:
+                    raise HTTPException(status_code=400, detail=f"Invalid uploaded archive: {exc}") from exc
+                if extracted_files == 0:
+                    raise HTTPException(status_code=400, detail="Uploaded archive does not contain any regular files.")
+                scan_target = extracted_root
+                extracted = True
+
+            with self.session_factory() as session:
+                storage = Storage(session)
+                organization_id, repository_id = self._resolve_asset_context(
+                    storage,
+                    organization=organization,
+                    repository=repository,
+                    provider=provider,
+                )
+                result = execute_scan(
+                    storage,
+                    target_path=scan_target,
+                    scanner_name="custom-patterns",
+                    organization_id=organization_id,
+                    repository_id=repository_id,
+                    target_type="artifact",
+                    target_label=artifact_name,
+                    command_line=f"api artifact scan {artifact_name}",
+                    parameters_json={
+                        "artifact_name": artifact_name,
+                        "artifact_kind": archive_type or "file",
+                        "extracted": extracted,
+                    },
+                )
+
+        return {
+            "artifact_name": artifact_name,
+            "scanner": result.scanner,
+            "scan_job_id": result.scan_job_id,
+            "tool_run_id": result.tool_run_id,
+            "findings": result.findings,
+            "finding_ids": result.finding_ids,
+            "target": result.target,
+            "extracted": extracted,
+        }
 
     def _entity_risk_profile(
         self,
@@ -998,6 +1167,21 @@ def create_app(database_url: str) -> FastAPI:
         limit: int = Query(50, ge=1, le=500),
     ) -> dict[str, object]:
         return service._risk_summary_payload(entity_type=entity_type or None, min_confidence=min_confidence, limit=limit)
+
+    @app.post("/artifact-scans")
+    async def artifact_scans(
+        artifact: UploadFile = File(...),
+        organization: str | None = Form(None),
+        repository: str | None = Form(None),
+        provider: str = Form("github"),
+    ) -> dict[str, object]:
+        return service._scan_uploaded_artifact(
+            filename=artifact.filename,
+            content=await artifact.read(),
+            organization=organization,
+            repository=repository,
+            provider=provider,
+        )
 
     @app.get("/scheduled-scans")
     def scheduled_scans() -> dict[str, object]:

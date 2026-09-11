@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from orgscan.config import Settings
 from orgscan.repositories import Storage
@@ -29,22 +30,27 @@ def execute_scan(
     settings: Settings | None = None,
     organization_id: int | None = None,
     repository_id: int | None = None,
+    target_type: str = "path",
+    target_label: str | None = None,
+    command_line: str | None = None,
+    parameters_json: dict[str, Any] | None = None,
 ) -> ScanExecutionResult:
     scanner_impl = get_scanner(scanner_name, settings=settings) if settings is not None else get_scanner(scanner_name)
     resolved_target = target_path.resolve()
+    target_identifier = target_label or str(resolved_target)
 
     scan_job = storage.create_scan_job(
-        target_type="path",
-        target_id=str(resolved_target),
+        target_type=target_type,
+        target_id=target_identifier,
         scanner_name=scanner_impl.name,
         status="pending",
-        parameters_json={"path": str(resolved_target)},
+        parameters_json={"path": str(resolved_target), **(parameters_json or {})},
     )
     tool_run = storage.create_tool_run(
         tool_name=scanner_impl.name,
-        target=str(resolved_target),
+        target=target_identifier,
         scan_job_id=scan_job.id,
-        command_line=f"orgscan scan path {resolved_target} --scanner {scanner_impl.name}",
+        command_line=command_line or f"orgscan scan path {resolved_target} --scanner {scanner_impl.name}",
         status="pending",
     )
     storage.mark_scan_job_running(scan_job)
@@ -75,7 +81,7 @@ def execute_scan(
     return ScanExecutionResult(
         scan_job_id=scan_job.id,
         scanner=scanner_impl.name,
-        target=str(resolved_target),
+        target=target_identifier,
         findings=len(matches),
         finding_ids=finding_ids,
         tool_run_id=tool_run.id,

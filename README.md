@@ -194,11 +194,21 @@ Key routes:
 - `/findings/{id}/evidence` evidence-only JSON for a finding
 - `/findings/{id}` `PATCH` to update triage state, owner, notes, and due date
 - `/findings/{id}/suppress`, `/findings/{id}/accept-risk`, `/findings/{id}/reopen` to manage false positives and analyst workflow state
+- `/artifact-scans` `POST` multipart upload route that scans uploaded files or zip/tar/tar.gz/tgz artifacts for secret-like content with the built-in `custom-patterns` scanner
 - `/organizations`, `/repositories`, `/domains`, `/accounts` entity inventory JSON with high-signal risk summaries
 - `/organizations/{id}`, `/repositories/{id}`, `/domains/{id}`, `/accounts/{id}` entity detail JSON with related findings and relationships
 - `/risk-summary` aggregated entity risk profiles filtered by minimum confidence
 - `/relationships/graph` relationship graph JSON
 - `/trends/findings` findings trend JSON
+
+Artifact upload example:
+
+```bash
+curl -X POST http://127.0.0.1:8000/artifact-scans \
+  -F artifact=@./artifact.zip \
+  -F organization=example-org \
+  -F repository=example-org/app
+```
 
 Verify required local dependencies:
 

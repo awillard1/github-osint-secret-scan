@@ -1,3 +1,6 @@
+import io
+import tarfile
+import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -5,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from orgscan.api import OrgscanApiService, create_app
 from orgscan.db import create_session_factory, init_db
+from orgscan.models import ScanJob
 from orgscan.repositories import Storage
 from orgscan.schemas import CanonicalFinding
 
@@ -359,3 +363,64 @@ def test_fastapi_dashboard_and_json_routes(tmp_path: Path) -> None:
     assert findings.json()["findings"][0]["title"] == "Live dashboard finding"
     assert summary.status_code == 200
     assert summary.json()["counts"]["findings"] == 1
+
+
+def test_api_artifact_upload_scans_text_file(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'artifact.db'}"
+    client = TestClient(create_app(database_url))
+
+    response = client.post(
+        "/artifact-scans",
+        data={"organization": "example-org", "repository": "example-org/app"},
+        files={"artifact": ("credentials.env", b'password = "prod-super-secret-1234567890"\n', "text/plain")},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["scanner"] == "custom-patterns"
+    assert payload["extracted"] is False
+    assert payload["findings"] == 1
+
+    session_factory = create_session_factory(database_url)
+    with session_factory() as session:
+        stored = Storage(session).list_findings(limit=10)
+        assert len(stored) == 1
+        assert stored[0].repository_id is not None
+        assert stored[0].organization_id is not None
+        scan_job = session.get(ScanJob, payload["scan_job_id"])
+        assert scan_job is not None
+        assert scan_job.target_type == "artifact"
+        assert scan_job.target_id == "credentials.env"
+        assert scan_job.parameters_json["artifact_kind"] == "file"
+
+
+def test_api_artifact_upload_scans_zip_archive(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'artifact-zip.db'}"
+    client = TestClient(create_app(database_url))
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zipped:
+        zipped.writestr("nested/secrets.txt", 'token = "prod-real-token-1234567890"\n')
+        zipped.writestr("nested/example.txt", 'password = "example-not-real-password"\n')
+
+    response = client.post(
+        "/artifact-scans",
+        files={"artifact": ("bundle.zip", archive.getvalue(), "application/zip")},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["extracted"] is True
+    assert payload["findings"] == 1
+
+
+def test_api_artifact_upload_rejects_invalid_archive(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'artifact-invalid.db'}"
+    client = TestClient(create_app(database_url))
+
+    response = client.post(
+        "/artifact-scans",
+        files={"artifact": ("bundle.zip", b"not-a-valid-zip", "application/zip")},
+    )
+
+    assert response.status_code == 400
+    assert "Invalid uploaded archive" in response.json()["detail"]
