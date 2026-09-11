@@ -12,7 +12,9 @@ from orgscan.scanners.base import ScanMatch
 from orgscan.scanners.custom_patterns import CustomPatternScanner
 from orgscan.scanners.external import DetectSecretsScanner, GitleaksScanner, ScannerExecutionError, SemgrepScanner, TruffleHogScanner
 from orgscan.scanners.git_history import GitHistoryPatternScanner
+from orgscan.scanners.ripgrep_heuristics import RipgrepHeuristicScanner
 from orgscan.scanners.repo_governance import RepositoryGovernanceScanner
+from orgscan.scanners.yara_scanner import YaraScanner
 
 if TYPE_CHECKING:
     from orgscan.config import Settings
@@ -27,8 +29,10 @@ BUILTIN_SCANNERS: dict[str, ScannerClass] = {
     RepositoryGovernanceScanner.name: RepositoryGovernanceScanner,
     DetectSecretsScanner.name: DetectSecretsScanner,
     GitleaksScanner.name: GitleaksScanner,
+    RipgrepHeuristicScanner.name: RipgrepHeuristicScanner,
     SemgrepScanner.name: SemgrepScanner,
     TruffleHogScanner.name: TruffleHogScanner,
+    YaraScanner.name: YaraScanner,
 }
 
 
@@ -93,8 +97,10 @@ __all__ = [
     "RepositoryGovernanceScanner",
     "DetectSecretsScanner",
     "GitleaksScanner",
+    "RipgrepHeuristicScanner",
     "SemgrepScanner",
     "TruffleHogScanner",
+    "YaraScanner",
     "ScannerExecutionError",
     "available_scanner_names",
     "get_scanner",

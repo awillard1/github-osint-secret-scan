@@ -28,3 +28,7 @@ def test_optional_tool_inventory_reports_configured_commands(tmp_path: Path) -> 
     assert gitleaks["configured_command"] == "/opt/tools/gitleaks"
     assert gitleaks["env_var"] == "ORGSCAN_GITLEAKS_BINARY"
     assert gitleaks["category"] == "scanner"
+
+    result = bootstrap(settings, verify_only=True)
+    assert "yara" in result["optional"]
+    assert "rg" in result["optional"]

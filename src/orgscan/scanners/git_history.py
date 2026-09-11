@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
-from orgscan.models import ConfidenceLevel, SeverityLevel
+from orgscan.config import Settings
 from orgscan.scanners.base import ScanMatch
-from orgscan.scanners.custom_patterns import DEFAULT_PATTERNS, PatternDefinition, should_skip_pattern_match
-from orgscan.scanners.external import ScannerExecutionError
+from orgscan.scanners.custom_patterns import DEFAULT_PATTERNS, CustomPatternScanner, PatternDefinition, should_skip_pattern_match
+from orgscan.scanners.external import ScannerExecutionError, _not_installed_error
 
 HUNK_HEADER = re.compile(r"^@@ -(?P<old>\d+)(?:,\d+)? \+(?P<new>\d+)(?:,\d+)? @@")
 
@@ -18,28 +20,39 @@ class GitHistoryPatternScanner:
 
     def __init__(
         self,
-        patterns: tuple[PatternDefinition, ...] = DEFAULT_PATTERNS,
+        max_commits: int | None = None,
         *,
+        settings: Settings | None = None,
+        patterns: tuple[PatternDefinition, ...] = DEFAULT_PATTERNS,
         git_binary: str = "git",
-        max_commits: int | None = 250,
     ) -> None:
+        self.settings = settings
         self.git_binary = git_binary
-        self.max_commits = max_commits
+        self.max_commits = max_commits if max_commits is not None else (settings.git_history_max_commits if settings else 250)
         self._patterns = tuple((pattern, re.compile(pattern.regex)) for pattern in patterns)
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
-        repository_root = self._repository_root(target)
-        if repository_root is None:
-            return []
+        return self.scan_path_with_context(target)
 
+    def scan_path_with_context(
+        self,
+        target: Path,
+        *,
+        target_ref: str | None = None,
+        scope_json: dict[str, Any] | None = None,
+    ) -> list[ScanMatch]:
+        if not shutil.which(self.git_binary):
+            raise _not_installed_error(self.git_binary)
+
+        repository_root = self._repository_root(target)
         relative_target = self._relative_target(repository_root, target)
         command = [
             self.git_binary,
             "-C",
             str(repository_root),
             "log",
-            "--all",
-            "--format=commit %H",
+            *self._revision_args(target_ref=target_ref, scope_json=scope_json),
+            "--format=commit:%H",
             "--patch",
             "--unified=0",
             "--no-ext-diff",
@@ -52,26 +65,34 @@ class GitHistoryPatternScanner:
         completed = subprocess.run(command, check=False, capture_output=True, text=True)
         if completed.returncode != 0:
             raise ScannerExecutionError(completed.stderr.strip() or "git history scan failed")
-        return self._parse_history(repository_root, completed.stdout)
+        effective_ref = target_ref if target_ref and target_ref != "workspace" else "all"
+        return self.parse_output(completed.stdout, repo_root=repository_root, ref_name=effective_ref)
 
-    def _parse_history(self, repository_root: Path, patch_text: str) -> list[ScanMatch]:
+    def parse_output(self, output: str, *, repo_root: Path, ref_name: str = "all") -> list[ScanMatch]:
         matches: list[ScanMatch] = []
-        commit = ""
+        commit_sha: str | None = None
         old_path: Path | None = None
         new_path: Path | None = None
         old_line = 1
         new_line = 1
 
-        for line in patch_text.splitlines():
+        for line in output.splitlines():
+            if line.startswith("commit:"):
+                commit_sha = line.removeprefix("commit:").strip() or None
+                old_path = None
+                new_path = None
+                old_line = 1
+                new_line = 1
+                continue
             if line.startswith("commit "):
-                commit = line.removeprefix("commit ").strip()
+                commit_sha = line.removeprefix("commit ").strip() or None
                 old_path = None
                 new_path = None
                 old_line = 1
                 new_line = 1
                 continue
             if line.startswith("diff --git "):
-                old_path, new_path = self._parse_diff_paths(repository_root, line)
+                old_path, new_path = self._parse_diff_paths(repo_root, line)
                 old_line = 1
                 new_line = 1
                 continue
@@ -82,15 +103,18 @@ class GitHistoryPatternScanner:
                 old_line = int(hunk.group("old"))
                 new_line = int(hunk.group("new"))
                 continue
+            if commit_sha is None:
+                continue
             if line.startswith("+") and not line.startswith("+++"):
                 content = line[1:]
                 matches.extend(
                     self._scan_diff_line(
                         content,
-                        path=new_path or old_path or repository_root,
+                        path=new_path or old_path or repo_root,
                         line_number=new_line,
-                        commit=commit,
+                        commit_sha=commit_sha,
                         change_type="added",
+                        ref_name=ref_name,
                     )
                 )
                 new_line += 1
@@ -100,10 +124,11 @@ class GitHistoryPatternScanner:
                 matches.extend(
                     self._scan_diff_line(
                         content,
-                        path=old_path or new_path or repository_root,
+                        path=old_path or new_path or repo_root,
                         line_number=old_line,
-                        commit=commit,
+                        commit_sha=commit_sha,
                         change_type="removed",
+                        ref_name=ref_name,
                     )
                 )
                 old_line += 1
@@ -119,8 +144,9 @@ class GitHistoryPatternScanner:
         *,
         path: Path,
         line_number: int,
-        commit: str,
+        commit_sha: str,
         change_type: str,
+        ref_name: str,
     ) -> list[ScanMatch]:
         results: list[ScanMatch] = []
         for pattern, compiled in self._patterns:
@@ -128,36 +154,40 @@ class GitHistoryPatternScanner:
                 value = matched.group(0)
                 if should_skip_pattern_match(pattern.name, value):
                     continue
+                redacted = CustomPatternScanner._redact(value)
                 results.append(
                     ScanMatch(
                         path=path,
-                        line_start=line_number,
-                        line_end=line_number,
+                        line_start=line_number or 1,
+                        line_end=line_number or 1,
                         category=pattern.category,
                         title=f"{pattern.title} in git history",
-                        description=f"A historical git diff {change_type} a line that matched this detector.",
+                        description=f"{pattern.description} The match appeared in commit {commit_sha} ({change_type} line).",
                         severity=pattern.severity,
                         confidence=pattern.confidence,
-                        indicator=self._redact(value),
-                        snippet=self._redact_in_line(line, value, pattern.name),
+                        indicator=redacted,
+                        snippet=CustomPatternScanner._redact_in_line(line, value, pattern.name),
                         remediation_hint=pattern.remediation_hint,
                         raw_payload={
                             "pattern": pattern.name,
-                            "commit": commit,
+                            "match": redacted,
+                            "commit": commit_sha,
+                            "commit_sha": commit_sha,
                             "change_type": change_type,
-                            "match": self._redact(value),
                         },
                         metadata={
                             "path": str(path),
                             "pattern": pattern.name,
-                            "commit": commit,
+                            "commit": commit_sha,
+                            "commit_sha": commit_sha,
                             "change_type": change_type,
+                            "ref_name": ref_name,
                         },
                     )
                 )
         return results
 
-    def _repository_root(self, target: Path) -> Path | None:
+    def _repository_root(self, target: Path) -> Path:
         starting_path = target if target.is_dir() else target.parent
         completed = subprocess.run(
             [self.git_binary, "-C", str(starting_path), "rev-parse", "--show-toplevel"],
@@ -166,16 +196,19 @@ class GitHistoryPatternScanner:
             text=True,
         )
         if completed.returncode != 0:
-            return None
+            raise ScannerExecutionError("git-history-patterns requires a git repository target")
         return Path(completed.stdout.strip())
 
     @staticmethod
     def _relative_target(repository_root: Path, target: Path) -> str:
         resolved_target = target.resolve()
-        try:
-            return str(resolved_target.relative_to(repository_root))
-        except ValueError:
+        resolved_root = repository_root.resolve()
+        if resolved_target == resolved_root:
             return "."
+        try:
+            return str(resolved_target.relative_to(resolved_root))
+        except ValueError:
+            raise ScannerExecutionError("scan target must be inside the selected git repository") from None
 
     @staticmethod
     def _parse_diff_paths(repository_root: Path, line: str) -> tuple[Path | None, Path | None]:
@@ -185,11 +218,10 @@ class GitHistoryPatternScanner:
         return old_path, new_path
 
     @staticmethod
-    def _redact(value: str) -> str:
-        if len(value) <= 8:
-            return "<redacted>"
-        return f"{value[:4]}...{value[-4:]}"
-
-    @classmethod
-    def _redact_in_line(cls, line: str, value: str, pattern_name: str) -> str:
-        return line.replace(value, f"<redacted:{pattern_name}>")
+    def _revision_args(*, target_ref: str | None, scope_json: dict[str, Any] | None) -> list[str]:
+        if target_ref and target_ref != "workspace":
+            return [target_ref]
+        history_mode = str((scope_json or {}).get("history_mode") or "").strip().lower()
+        if history_mode == "current-ref":
+            return ["HEAD"]
+        return ["--all"]

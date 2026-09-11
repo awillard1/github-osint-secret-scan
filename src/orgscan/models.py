@@ -42,6 +42,13 @@ class ScanJobStatus(StrEnum):
     FAILED = "failed"
 
 
+class QueueTaskStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class VerificationStatus(StrEnum):
     VERIFIED = "verified"
     LIKELY = "likely"
@@ -68,6 +75,7 @@ class Organization(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    tenant_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     github_handle: Mapped[str | None] = mapped_column(String(255), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -107,6 +115,8 @@ class Repository(TimestampMixin, Base):
     url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     default_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_private: Mapped[bool] = mapped_column(Boolean, default=False)
+    mirror_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    last_mirrored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     organization: Mapped[Organization | None] = relationship(back_populates="repositories")
@@ -136,9 +146,11 @@ class ScanJob(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     target_type: Mapped[str] = mapped_column(String(64), index=True)
     target_id: Mapped[str] = mapped_column(String(1024), index=True)
+    target_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
     scanner_name: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(32), default=ScanJobStatus.PENDING.value)
     parameters_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    scope_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -195,6 +207,7 @@ class Evidence(TimestampMixin, Base):
     source_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     repository_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     commit_sha: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    ref_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     line_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
     line_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
     snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -231,6 +244,7 @@ class Relationship(TimestampMixin, Base):
     confidence: Mapped[str] = mapped_column(String(32), default=ConfidenceLevel.UNVERIFIED.value)
     source: Mapped[str | None] = mapped_column(String(255), nullable=True)
     evidence_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class RiskScore(TimestampMixin, Base):
@@ -258,6 +272,8 @@ class ToolRun(TimestampMixin, Base):
     tool_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     target: Mapped[str] = mapped_column(String(1024))
     command_line: Mapped[str | None] = mapped_column(Text, nullable=True)
+    artifact_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    artifact_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default=ScanJobStatus.PENDING.value)
     stdout_log: Mapped[str | None] = mapped_column(Text, nullable=True)
     stderr_log: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -278,6 +294,104 @@ class ScheduledScan(TimestampMixin, Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class ScheduledReport(TimestampMixin, Base):
+    __tablename__ = "scheduled_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_type: Mapped[str] = mapped_column(String(64), index=True, default="global")
+    target_value: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    output_format: Mapped[str] = mapped_column(String(32), default="json")
+    cadence: Mapped[str] = mapped_column(String(32), default="daily")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    output_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    webhook_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+
+class User(TimestampMixin, Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    email: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    tenant_memberships: Mapped[list[UserTenantMembership]] = relationship(back_populates="user")
+    sessions: Mapped[list[UserSession]] = relationship(back_populates="user")
+
+
+class UserTenantMembership(TimestampMixin, Base):
+    __tablename__ = "user_tenant_memberships"
+    __table_args__ = (UniqueConstraint("user_id", "tenant_key", name="uq_user_tenant_membership"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    tenant_key: Mapped[str] = mapped_column(String(255), index=True)
+    role: Mapped[str] = mapped_column(String(32), default="reader")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    user: Mapped[User] = relationship(back_populates="tenant_memberships")
+
+
+class UserSession(TimestampMixin, Base):
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    session_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    role: Mapped[str] = mapped_column(String(32), default="reader")
+    tenant_scopes_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    user: Mapped[User] = relationship(back_populates="sessions")
+
+
+class QueueTask(TimestampMixin, Base):
+    __tablename__ = "queue_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scheduled_scan_id: Mapped[int] = mapped_column(ForeignKey("scheduled_scans.id"), index=True)
+    backend: Mapped[str] = mapped_column(String(32), default="db", index=True)
+    queue_name: Mapped[str] = mapped_column(String(255), default="orgscan:db")
+    status: Mapped[str] = mapped_column(String(32), default=QueueTaskStatus.QUEUED.value, index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=2)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
+    lease_owner: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    result_scan_job_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    result_tool_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+
+    scheduled_scan: Mapped[ScheduledScan] = relationship()
+
+
+class RateLimitState(TimestampMixin, Base):
+    __tablename__ = "rate_limit_states"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scope: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    backend: Mapped[str] = mapped_column(String(32), default="db", index=True)
+    requests_per_minute: Mapped[int] = mapped_column(Integer, default=0)
+    min_interval_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    window_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_request_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_allowed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 

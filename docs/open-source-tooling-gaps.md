@@ -14,6 +14,7 @@ This document summarizes what the current repository can accomplish directly and
 - Optional `crt.sh` integration for certificate-transparency host discovery
 - Optional `whois` integration for registrar and nameserver enrichment
 - Optional `dnspython` integration for DNS record enrichment
+- Optional paid-provider integrations for Have I Been Pwned, DeHashed, and Intelligence X
 - GitHub REST API discovery for public repository and organization metadata
 - Local correlation of domains against stored repository metadata and account emails
 - SQLite-backed persistence, exports, reports, and local API responses
@@ -49,4 +50,4 @@ Use the current repository as the local-first control plane, then layer in:
 2. Semgrep + crt.sh + ProjectDiscovery enrichment with clear local install guidance
 3. deeper retries/rate-aware scaling on top of the initial Redis/RQ queue workers
 4. stronger tenant-aware auth around the current FastAPI dashboard before shared beta usage
-5. Optional paid providers after the free-first path is solid
+5. Optional paid providers such as Have I Been Pwned, DeHashed, and Intelligence X after the free-first path is solid

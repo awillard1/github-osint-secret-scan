@@ -3,31 +3,172 @@ from __future__ import annotations
 import csv
 import html
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+
+from orgscan.config import Settings
 from orgscan.repositories import Storage
 
 
-def build_summary(storage: Storage) -> dict[str, Any]:
-    repositories = {repo.id: repo.full_name for repo in storage.list_repositories()}
-    top_risky_findings = list(storage.list_top_risky_findings(limit=10))
-    repository_breakdown = storage.finding_counts_by_repository(limit=10)
-    trend_rows = finding_trends(storage, days=30)
-    graph = relationship_graph(storage, limit=200)
+def _scoped_assets(storage: Storage, tenant_keys: list[str] | None = None) -> dict[str, Any]:
+    organizations = list(storage.list_organizations())
+    if tenant_keys is not None:
+        organizations = [org for org in organizations if org.tenant_key in tenant_keys]
+    organization_ids = {org.id for org in organizations}
+
+    repositories = [repo for repo in storage.list_repositories() if tenant_keys is None or repo.organization_id in organization_ids]
+    repository_ids = {repo.id for repo in repositories}
+    domains = [domain for domain in storage.list_domains() if tenant_keys is None or domain.organization_id in organization_ids]
+    domain_ids = {domain.id for domain in domains}
+    accounts = [account for account in storage.list_accounts() if tenant_keys is None or account.organization_id in organization_ids]
+    account_ids = {account.id for account in accounts}
+
+    findings = [
+        finding
+        for finding in storage.list_findings(limit=None)
+        if tenant_keys is None
+        or finding.organization_id in organization_ids
+        or finding.repository_id in repository_ids
+        or finding.domain_id in domain_ids
+        or finding.account_id in account_ids
+    ]
+    finding_ids = {finding.id for finding in findings}
+    scan_job_ids = {finding.scan_job_id for finding in findings if finding.scan_job_id is not None}
+    domain_exposures = [exposure for exposure in storage.list_domain_exposures(limit=None) if tenant_keys is None or exposure.domain_id in domain_ids]
+    identity_correlations = [
+        correlation for correlation in storage.list_identity_correlations() if tenant_keys is None or correlation.domain_id in domain_ids
+    ]
+    relationships = list(storage.list_relationships(limit=None))
+    if tenant_keys is not None:
+        allowed_ids = {
+            "organization": {str(value) for value in organization_ids},
+            "repository": {str(value) for value in repository_ids},
+            "domain": {str(value) for value in domain_ids},
+            "account": {str(value) for value in account_ids},
+        }
+        relationships = [
+            relationship
+            for relationship in relationships
+            if relationship.from_entity_id in allowed_ids.get(relationship.from_entity_type, set())
+            or relationship.to_entity_id in allowed_ids.get(relationship.to_entity_type, set())
+        ]
+    scan_jobs = [job for job in storage.list_scan_jobs(limit=None) if tenant_keys is None or job.id in scan_job_ids]
+    tool_runs = [run for run in storage.list_tool_runs(limit=None) if tenant_keys is None or run.scan_job_id in scan_job_ids]
+    scheduled_scans = [
+        scan
+        for scan in storage.list_scheduled_scans()
+        if tenant_keys is None
+        or (scan.metadata_json or {}).get("organization_id") in organization_ids
+        or (scan.metadata_json or {}).get("repository_id") in repository_ids
+    ]
+    scheduled_reports = [
+        report
+        for report in storage.list_scheduled_reports()
+        if tenant_keys is None
+        or report.target_type == "global"
+        or (report.target_type == "tenant" and report.target_value in tenant_keys)
+    ]
+    return {
+        "organizations": organizations,
+        "repositories": repositories,
+        "domains": domains,
+        "accounts": accounts,
+        "findings": findings,
+        "scan_jobs": scan_jobs,
+        "tool_runs": tool_runs,
+        "scheduled_scans": scheduled_scans,
+        "scheduled_reports": scheduled_reports,
+        "domain_exposures": domain_exposures,
+        "identity_correlations": identity_correlations,
+        "relationships": relationships,
+        "finding_ids": finding_ids,
+        "scan_job_ids": scan_job_ids,
+    }
+
+
+def _filtered_findings(
+    storage: Storage,
+    *,
+    tenant_keys: list[str] | None = None,
+    status: str | None = None,
+    severity: str | None = None,
+    category: str | None = None,
+    confidence: str | None = None,
+) -> list[Any]:
+    findings = list(_scoped_assets(storage, tenant_keys)["findings"])
+    if status:
+        findings = [finding for finding in findings if finding.status == status]
+    if severity:
+        findings = [finding for finding in findings if finding.severity == severity]
+    if category:
+        findings = [finding for finding in findings if finding.category == category]
+    if confidence:
+        findings = [finding for finding in findings if finding.confidence == confidence]
+    return findings
+
+
+def build_summary(storage: Storage, *, tenant_keys: list[str] | None = None) -> dict[str, Any]:
+    scope = _scoped_assets(storage, tenant_keys)
+    findings = list(scope["findings"])
+    repositories = {repo.id: repo.full_name for repo in scope["repositories"]}
+    top_risky_findings = sorted(findings, key=lambda finding: (finding.risk_score or 0, finding.detected_at, finding.id), reverse=True)[:10]
+    repository_counts: dict[str, int] = {}
+    severity_breakdown: dict[str, int] = {}
+    category_breakdown: dict[str, int] = {}
+    source_tool_breakdown: dict[str, int] = {}
+    workflow_breakdown: dict[str, int] = {}
+    evidence_count = 0
+    risk_score_count = 0
+    for finding in findings:
+        repository_label = repositories.get(finding.repository_id, "unassigned")
+        repository_counts[repository_label] = repository_counts.get(repository_label, 0) + 1
+        severity_breakdown[finding.severity] = severity_breakdown.get(finding.severity, 0) + 1
+        category_breakdown[finding.category] = category_breakdown.get(finding.category, 0) + 1
+        source_tool_breakdown[finding.source_tool] = source_tool_breakdown.get(finding.source_tool, 0) + 1
+        workflow_breakdown[finding.status] = workflow_breakdown.get(finding.status, 0) + 1
+        evidence_count += len(finding.evidence_items)
+        if finding.risk_score is not None:
+            risk_score_count += 1
+    repository_breakdown = sorted(repository_counts.items(), key=lambda item: (-item[1], item[0]))[:10]
+    trend_rows = finding_trends(storage, days=30, tenant_keys=tenant_keys)
+    graph = relationship_graph(storage, limit=200, tenant_keys=tenant_keys)
 
     return {
-        "counts": dict(storage.counts()),
-        "severity_breakdown": dict(storage.finding_counts_by_severity()),
-        "category_breakdown": dict(storage.finding_counts_by_category()),
-        "source_tool_breakdown": dict(storage.finding_counts_by_source_tool()),
-        "workflow_breakdown": dict(storage.finding_counts_by_status()),
-        "organizations": [org.name for org in storage.list_organizations()],
+        "counts": {
+            "organizations": len(scope["organizations"]),
+            "domains": len(scope["domains"]),
+            "repositories": len(scope["repositories"]),
+            "accounts": len(scope["accounts"]),
+            "scan_jobs": len(scope["scan_jobs"]),
+            "findings": len(findings),
+            "evidence": evidence_count,
+            "domain_exposures": len(scope["domain_exposures"]),
+            "identity_correlations": len(scope["identity_correlations"]),
+            "relationships": len(scope["relationships"]),
+            "risk_scores": risk_score_count,
+            "scheduled_scans": len(scope["scheduled_scans"]),
+            "scheduled_reports": len(scope["scheduled_reports"]),
+            "suppressions": 0,
+            "tool_runs": len(scope["tool_runs"]),
+        },
+        "severity_breakdown": severity_breakdown,
+        "category_breakdown": category_breakdown,
+        "source_tool_breakdown": source_tool_breakdown,
+        "workflow_breakdown": workflow_breakdown,
+        "organizations": [org.name for org in scope["organizations"]],
         "repositories": list(repositories.values()),
-        "accounts": [account.username for account in storage.list_accounts()],
-        "domain_exposures": [exposure.result_summary for exposure in storage.list_domain_exposures()],
+        "accounts": [account.username for account in scope["accounts"]],
+        "domain_exposures": [exposure.result_summary for exposure in scope["domain_exposures"]],
         "finding_trends": trend_rows,
         "relationship_graph": graph,
+        "organization_comparison": organization_comparison(storage, limit=10, tenant_keys=tenant_keys),
+        "remediation_suggestions": remediation_suggestions(storage, limit=10, tenant_keys=tenant_keys),
         "identity_correlations": [
             {
                 "domain_id": correlation.domain_id,
@@ -35,7 +176,7 @@ def build_summary(storage: Storage) -> dict[str, Any]:
                 "username": correlation.username,
                 "relation_type": correlation.relation_type,
             }
-            for correlation in storage.list_identity_correlations()
+            for correlation in scope["identity_correlations"]
         ],
         "recent_scan_jobs": [
             {
@@ -45,7 +186,7 @@ def build_summary(storage: Storage) -> dict[str, Any]:
                 "scanner_name": job.scanner_name,
                 "status": job.status,
             }
-            for job in storage.list_scan_jobs()
+            for job in scope["scan_jobs"][:25]
         ],
         "recent_tool_runs": [
             {
@@ -54,7 +195,7 @@ def build_summary(storage: Storage) -> dict[str, Any]:
                 "target": run.target,
                 "status": run.status,
             }
-            for run in storage.list_tool_runs()
+            for run in scope["tool_runs"][:25]
         ],
         "top_risky_findings": [
             {
@@ -81,12 +222,21 @@ def build_summary(storage: Storage) -> dict[str, Any]:
                 "cadence": scan.cadence,
                 "enabled": scan.enabled,
             }
-            for scan in storage.list_scheduled_scans()
+            for scan in scope["scheduled_scans"]
         ],
     }
 
 
-def finding_rows(storage: Storage, limit: int = 500) -> list[dict[str, Any]]:
+def finding_rows(
+    storage: Storage,
+    limit: int = 500,
+    *,
+    tenant_keys: list[str] | None = None,
+    status: str | None = None,
+    severity: str | None = None,
+    category: str | None = None,
+    confidence: str | None = None,
+) -> list[dict[str, Any]]:
     return [
         {
             "id": finding.id,
@@ -108,27 +258,42 @@ def finding_rows(storage: Storage, limit: int = 500) -> list[dict[str, Any]]:
             "detected_at": finding.detected_at.isoformat(),
             "fingerprint": finding.fingerprint,
         }
-        for finding in storage.list_findings(limit=limit)
+        for finding in _filtered_findings(
+            storage,
+            tenant_keys=tenant_keys,
+            status=status,
+            severity=severity,
+            category=category,
+            confidence=confidence,
+        )[:limit]
     ]
 
 
-def finding_trends(storage: Storage, days: int = 30) -> list[dict[str, Any]]:
+def finding_trends(storage: Storage, days: int = 30, *, tenant_keys: list[str] | None = None) -> list[dict[str, Any]]:
+    cutoff_date = (datetime.now(UTC) - timedelta(days=max(days, 1) - 1)).date()
     series: dict[str, dict[str, Any]] = {}
-    for day, severity, count in storage.finding_trends_by_day(days=days):
+    for finding in _filtered_findings(storage, tenant_keys=tenant_keys):
+        detected_date = finding.detected_at.date()
+        if detected_date < cutoff_date:
+            continue
+        day = detected_date.isoformat()
         entry = series.setdefault(day, {"date": day, "total": 0, "by_severity": {}})
-        entry["total"] += count
-        entry["by_severity"][severity] = count
+        entry["total"] += 1
+        entry["by_severity"][finding.severity] = entry["by_severity"].get(finding.severity, 0) + 1
     return [series[day] for day in sorted(series)]
 
 
-def relationship_graph(storage: Storage, limit: int = 200) -> dict[str, Any]:
-    relationships = storage.list_relationships(limit=limit)
-    repositories = {str(repo.id): repo.full_name for repo in storage.list_repositories()}
-    organizations = {str(org.id): org.name for org in storage.list_organizations()}
-    accounts = {str(account.id): account.username for account in storage.list_accounts()}
-    domain_names = {str(domain.id): domain.name for domain in storage.list_domains()}
+def relationship_graph(storage: Storage, limit: int = 200, *, tenant_keys: list[str] | None = None) -> dict[str, Any]:
+    scope = _scoped_assets(storage, tenant_keys)
+    relationships = list(scope["relationships"])[:limit]
+    repositories = {str(repo.id): repo.full_name for repo in scope["repositories"]}
+    organizations = {str(org.id): org.name for org in scope["organizations"]}
+    accounts = {str(account.id): account.username for account in scope["accounts"]}
+    domain_names = {str(domain.id): domain.name for domain in scope["domains"]}
 
     nodes: dict[tuple[str, str], dict[str, str]] = {}
+    degrees: dict[str, int] = {}
+    relation_breakdown: dict[str, int] = {}
 
     def resolve_label(entity_type: str, entity_id: str) -> str:
         if entity_type == "repository":
@@ -173,8 +338,84 @@ def relationship_graph(storage: Storage, limit: int = 200) -> dict[str, Any]:
                 "source": relationship.source or "",
             }
         )
+        from_id = f"{relationship.from_entity_type}:{relationship.from_entity_id}"
+        to_id = f"{relationship.to_entity_type}:{relationship.to_entity_id}"
+        degrees[from_id] = degrees.get(from_id, 0) + 1
+        degrees[to_id] = degrees.get(to_id, 0) + 1
+        relation_breakdown[relationship.relation_type] = relation_breakdown.get(relationship.relation_type, 0) + 1
 
-    return {"nodes": list(nodes.values()), "edges": edges}
+    for node in nodes.values():
+        node["degree"] = str(degrees.get(node["id"], 0))
+
+    return {
+        "nodes": list(nodes.values()),
+        "edges": edges,
+        "summary": {
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "relation_breakdown": relation_breakdown,
+            "entity_breakdown": {
+                entity_type: sum(1 for node in nodes.values() if node["entity_type"] == entity_type)
+                for entity_type in sorted({node["entity_type"] for node in nodes.values()})
+            },
+        },
+    }
+
+
+def organization_comparison(storage: Storage, limit: int = 10, *, tenant_keys: list[str] | None = None) -> list[dict[str, Any]]:
+    findings = _filtered_findings(storage, tenant_keys=tenant_keys)
+    organizations = {org.id: org.name for org in storage.list_organizations()}
+    grouped: dict[str, dict[str, Any]] = {}
+    for finding in findings:
+        label = organizations.get(finding.organization_id or -1, "unassigned")
+        entry = grouped.setdefault(
+            label,
+            {"organization": label, "findings": 0, "critical_high": 0, "open_findings": 0, "average_risk_score": 0.0, "_risk_values": []},
+        )
+        entry["findings"] += 1
+        if finding.severity in {"critical", "high"}:
+            entry["critical_high"] += 1
+        if finding.status == "open":
+            entry["open_findings"] += 1
+        if finding.risk_score is not None:
+            entry["_risk_values"].append(float(finding.risk_score))
+    rows = []
+    for entry in grouped.values():
+        risk_values = entry.pop("_risk_values")
+        entry["average_risk_score"] = round(sum(risk_values) / len(risk_values), 1) if risk_values else 0.0
+        rows.append(entry)
+    rows.sort(key=lambda item: (-int(item["findings"]), str(item["organization"])))
+    return rows[:limit]
+
+
+def remediation_suggestions(storage: Storage, limit: int = 10, *, tenant_keys: list[str] | None = None) -> list[dict[str, Any]]:
+    findings = _filtered_findings(storage, tenant_keys=tenant_keys)
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for finding in findings:
+        hint = finding.remediation_hint or _default_remediation_hint(finding.category)
+        key = (finding.category, hint)
+        entry = grouped.setdefault(
+            key,
+            {"category": finding.category, "suggestion": hint, "findings": 0, "critical_high": 0, "open_findings": 0},
+        )
+        entry["findings"] += 1
+        if finding.severity in {"critical", "high"}:
+            entry["critical_high"] += 1
+        if finding.status == "open":
+            entry["open_findings"] += 1
+    suggestions = list(grouped.values())
+    suggestions.sort(key=lambda item: (-int(item["critical_high"]), -int(item["findings"]), str(item["category"])))
+    return suggestions[:limit]
+
+
+def _default_remediation_hint(category: str) -> str:
+    if category == "secret":
+        return "Rotate exposed credentials, remove them from source control, and move them into managed secret storage."
+    if category in {"governance", "supply-chain", "code-policy"}:
+        return "Tighten repository governance and workflow controls, then verify that risky configuration paths are minimized."
+    if category in {"infrastructure-exposure", "domain-exposure", "org-exposure"}:
+        return "Reduce publicly exposed internal identifiers, hosts, and environment references where they are not required."
+    return "Review the finding, validate impact, and track a remediation action with ownership and due date."
 
 
 def write_json(output_path: Path, payload: Any) -> Path:
@@ -191,6 +432,46 @@ def write_csv(output_path: Path, rows: list[dict[str, Any]]) -> Path:
         writer.writeheader()
         writer.writerows(rows)
     return output_path
+
+
+def write_export(output_path: Path, export_format: str, summary: dict[str, Any], rows: list[dict[str, Any]]) -> Path:
+    normalized = export_format.lower()
+    if normalized == "json":
+        return write_json(output_path, {"summary": summary, "findings": rows})
+    if normalized == "csv":
+        return write_csv(output_path, rows)
+    if normalized == "pdf":
+        return write_pdf(output_path, summary, rows)
+    return write_html(output_path, summary, rows)
+
+
+def scheduled_reports_directory(settings: Settings) -> Path:
+    path = settings.ensure_data_dir() / "reports"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def scheduled_report_output_path(settings: Settings, *, schedule_id: int, export_format: str, configured_path: str | None = None) -> Path:
+    if configured_path:
+        return Path(configured_path)
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return scheduled_reports_directory(settings) / f"scheduled-report-{schedule_id}-{timestamp}.{export_format.lower()}"
+
+
+def deliver_report_webhook(webhook_url: str, *, timeout: int, payload: dict[str, Any]) -> None:
+    request = Request(
+        webhook_url,
+        method="POST",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "User-Agent": "orgscan/0.1.0"},
+    )
+    try:
+        with urlopen(request, timeout=timeout):
+            return
+    except HTTPError as exc:
+        raise RuntimeError(f"alert delivery failed with status {exc.code}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"alert delivery failed: {exc.reason}") from exc
 
 
 def render_dashboard_html(
@@ -554,6 +835,7 @@ def render_dashboard_html(
     </section>
     <section>
       <h2>Finding trends</h2>
+      <p class="subtle">Client-side trend chart data is available from the findings trend series below.</p>
       <table>
         <thead>
           <tr><th>Date</th><th>Total findings</th><th>Severity mix</th></tr>
@@ -844,3 +1126,46 @@ def render_graph_html(graph: dict[str, Any]) -> str:
     </section>
     """
     return _render_html_page("Relationship graph", body)
+
+
+def write_pdf(output_path: Path, summary: dict[str, Any], findings: list[dict[str, Any]]) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf = canvas.Canvas(str(output_path), pagesize=letter)
+    width, height = letter
+    y = height - 40
+
+    def line(text: str, *, indent: int = 0) -> None:
+        nonlocal y
+        if y < 50:
+            pdf.showPage()
+            y = height - 40
+        pdf.drawString(40 + indent, y, text[:110])
+        y -= 14
+
+    pdf.setTitle("orgscan report")
+    pdf.setFont("Helvetica-Bold", 16)
+    line("orgscan report")
+    pdf.setFont("Helvetica", 10)
+    line("")
+    line("Counts")
+    for key, value in summary.get("counts", {}).items():
+        line(f"{key}: {value}", indent=12)
+    line("")
+    line("Organization comparison")
+    for row in summary.get("organization_comparison", []):
+        line(
+            f"{row['organization']}: findings={row['findings']} critical_high={row['critical_high']} "
+            f"open={row['open_findings']} avg_risk={row['average_risk_score']}",
+            indent=12,
+        )
+    line("")
+    line("Remediation suggestions")
+    for row in summary.get("remediation_suggestions", []):
+        line(f"{row['category']}: {row['suggestion']}", indent=12)
+    line("")
+    line("Recent findings")
+    for finding in findings[:30]:
+        line(f"#{finding['id']} [{finding['severity']}] {finding['title']}", indent=12)
+
+    pdf.save()
+    return output_path

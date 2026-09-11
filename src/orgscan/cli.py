@@ -2,29 +2,32 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from enum import StrEnum
 
 import typer
 from sqlalchemy import text
 
+from orgscan.auth import create_db_session_token
 from orgscan.bootstrap import bootstrap, optional_tool_inventory
 from orgscan.api import serve_api
 from orgscan.config import Settings, get_settings, render_env_template
-from orgscan.db import create_session_factory, init_db
+from orgscan.db import create_session_factory, current_db_revision, init_db
 from orgscan.discovery import DiscoveryError, GitHubDiscoveryClient
 from orgscan.expansion import GitHubExpansionEngine
 from orgscan.logging_config import setup_logging
+from orgscan.mirroring import MirrorError, scan_repository_mirror_refs, sync_repository_mirror
 from orgscan.models import Finding
-from orgscan.providers import DomainProviderError, get_domain_provider
+from orgscan.providers import DomainProviderError, available_domain_provider_names, get_domain_provider
 from orgscan.queueing import QueueBackendError, enqueue_due_scheduled_scans, queue_status, run_worker
+from orgscan.rate_limit import list_rate_limit_states
 from orgscan.repositories import Storage
-from orgscan.reporting import build_summary, finding_rows, write_csv, write_html, write_json
+from orgscan.reporting import build_summary, finding_rows, write_export, write_html
 from orgscan.runner import execute_scan, record_scan_results
 from orgscan.scanners import ScannerExecutionError, available_scanner_names, load_report
 from orgscan.scanners.base import ScanMatch
-from orgscan.scheduler import next_run_from_cadence, run_due_scans
+from orgscan.scheduler import next_run_from_cadence, run_due_reports, run_due_scans
 
 app = typer.Typer(help="OSINT Security Platform CLI foundation")
 
@@ -55,6 +58,7 @@ class ExportFormat(StrEnum):
     JSON = "json"
     CSV = "csv"
     HTML = "html"
+    PDF = "pdf"
 
 
 class ScanCadence(StrEnum):
@@ -106,11 +110,7 @@ def _serialize_finding(finding: Finding) -> dict[str, object]:
 
 
 def _write_export(output_path: Path, export_format: ExportFormat, summary: dict[str, object], rows: list[dict[str, object]]) -> Path:
-    if export_format == ExportFormat.JSON:
-        return write_json(output_path, {"summary": summary, "findings": rows})
-    if export_format == ExportFormat.CSV:
-        return write_csv(output_path, rows)
-    return write_html(output_path, summary, rows)
+    return write_export(output_path, export_format.value, summary, rows)
 
 
 def _parse_due_date(value: str | None) -> date | None:
@@ -130,6 +130,11 @@ def _parse_datetime(value: str | None, *, option_name: str) -> datetime | None:
     except ValueError as exc:
         raise typer.BadParameter(f"{option_name} must use ISO 8601 datetime format.") from exc
 
+def _parse_expiration(hours: int | None) -> datetime | None:
+    if hours is None:
+        return None
+    return datetime.now(UTC) + timedelta(hours=hours)
+
 
 def _resolve_asset_context(
     storage: Storage,
@@ -137,11 +142,12 @@ def _resolve_asset_context(
     organization: str | None,
     repository: str | None,
     provider: str,
+    tenant_key: str | None = None,
 ) -> tuple[int | None, int | None]:
     organization_id = None
     repository_id = None
     if organization:
-        organization_record, _ = storage.get_or_create_organization(organization)
+        organization_record, _ = storage.get_or_create_organization(organization, tenant_key=tenant_key)
         organization_id = organization_record.id
     if repository:
         repository_record, _ = storage.get_or_create_repository(
@@ -204,6 +210,15 @@ def init_database() -> None:
     settings = _settings()
     init_db(settings.database_url)
     typer.echo(f"Initialized database at {settings.database_url}")
+    typer.echo(f"schema_revision: {current_db_revision(settings.database_url) or 'unknown'}")
+
+
+@app.command("migrate-db")
+def migrate_database() -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    typer.echo(f"Migrated database at {settings.database_url}")
+    typer.echo(f"schema_revision: {current_db_revision(settings.database_url) or 'unknown'}")
 
 
 @app.command("config")
@@ -217,7 +232,7 @@ def config(
     payload = {
         "settings": settings.as_dict(include_secrets=show_secrets),
         "available_scanners": available_scanner_names(),
-        "available_domain_providers": ["local-metadata", "crtsh", "projectdiscovery", "whois", "dns", "all"],
+        "available_domain_providers": available_domain_provider_names(),
         "available_execution_backends": ["local", "rq"],
         "optional_tools": optional_tools,
         "dependency_status": {
@@ -272,6 +287,7 @@ def add_target(
         help="Optional organization name to associate with domains, repositories, or accounts.",
     ),
     provider: str = typer.Option("github", "--provider", help="Provider name for repository/account targets."),
+    tenant_key: str | None = typer.Option(None, "--tenant-key", help="Optional tenant scope for organization-linked records."),
 ) -> None:
     settings = _settings()
     init_db(settings.database_url)
@@ -281,11 +297,11 @@ def add_target(
         storage = Storage(session)
         organization_id = None
         if organization:
-            org_record, _ = storage.get_or_create_organization(organization)
+            org_record, _ = storage.get_or_create_organization(organization, tenant_key=tenant_key)
             organization_id = org_record.id
 
         if target_type == TargetType.ORGANIZATION:
-            record, created = storage.get_or_create_organization(value)
+            record, created = storage.get_or_create_organization(value, tenant_key=tenant_key)
         elif target_type == TargetType.DOMAIN:
             record, created = storage.get_or_create_domain(value, organization_id=organization_id)
         elif target_type == TargetType.REPOSITORY:
@@ -306,10 +322,98 @@ def add_target(
     typer.echo(f"{action} {target_type.value}: {value} (id={record.id})")
 
 
+@app.command("create-user")
+def create_user(
+    username: str,
+    email: str | None = typer.Option(None, "--email", help="Optional user email."),
+    display_name: str | None = typer.Option(None, "--display-name", help="Optional display name."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        user, created = storage.get_or_create_user(username, email=email, display_name=display_name)
+        session.commit()
+    typer.echo(f"{'Created' if created else 'Updated'} user {user.username} (id={user.id})")
+
+
+@app.command("grant-tenant-role")
+def grant_tenant_role(
+    username: str,
+    tenant_key: str,
+    role: str = typer.Option("reader", "--role", help="Tenant role: reader, analyst, or admin."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        user = storage.get_user_by_username(username)
+        if user is None:
+            raise typer.BadParameter(f"Unknown user: {username}")
+        membership = storage.grant_tenant_membership(user.id, tenant_key, role)
+        session.commit()
+    typer.echo(f"Granted {membership.role} on {tenant_key} to {username}")
+
+
+@app.command("create-session")
+def create_session_token(
+    username: str,
+    session_name: str | None = typer.Option(None, "--session-name", help="Optional human-readable session label."),
+    role: str | None = typer.Option(None, "--role", help="Optional explicit session role override."),
+    tenant: list[str] = typer.Option([], "--tenant", help="Optional tenant scope; repeat for multiple tenants."),
+    expires_in_hours: int | None = typer.Option(None, "--expires-in-hours", min=1, help="Optional expiration in hours."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        session_row, raw_token = create_db_session_token(
+            storage,
+            username=username,
+            session_name=session_name,
+            role=role,
+            tenants=list(tenant),
+            expires_at=_parse_expiration(expires_in_hours),
+        )
+        session.commit()
+    payload = {
+        "session_id": session_row.id,
+        "username": username,
+        "role": session_row.role,
+        "tenants": session_row.tenant_scopes_json,
+        "expires_at": session_row.expires_at.isoformat() if session_row.expires_at else None,
+        "token": raw_token,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2))
+    else:
+        typer.echo(f"Created session {session_row.id} for {username}")
+        typer.echo(f"token={raw_token}")
+
+
+@app.command("revoke-session")
+def revoke_session(
+    session_id: int,
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        session_row = storage.revoke_user_session(session_id)
+        session.commit()
+    typer.echo(f"Revoked session {session_row.id}")
+
+
 @app.command("status")
 def status() -> None:
     settings = _settings()
     init_db(settings.database_url)
+    revision = current_db_revision(settings.database_url)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         session.execute(text("SELECT 1"))
@@ -318,6 +422,7 @@ def status() -> None:
     typer.echo(f"app: {settings.app_name}")
     typer.echo(f"environment: {settings.app_env}")
     typer.echo(f"database_url: {settings.database_url}")
+    typer.echo(f"schema_revision: {revision or 'unknown'}")
     typer.echo(_format_counts(counts))
 
 
@@ -327,6 +432,7 @@ def discover(
     value: str,
     limit: int = typer.Option(10, "--limit", min=1, max=100, help="Maximum repositories to ingest for organization discovery."),
     provider: str = typer.Option("local-metadata", "--provider", help="Domain provider to use for domain discovery."),
+    tenant_key: str | None = typer.Option(None, "--tenant-key", help="Optional tenant scope for discovered organization records."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
@@ -395,6 +501,7 @@ def discover(
             if record.owner_type.lower() == "organization":
                 organization_record, _ = storage.get_or_create_organization(
                     record.owner_login,
+                    tenant_key=tenant_key,
                     github_handle=record.owner_login,
                 )
                 organization_id = organization_record.id
@@ -710,6 +817,7 @@ def scan(
     organization: str | None = typer.Option(None, "--organization", help="Optional organization association."),
     repository: str | None = typer.Option(None, "--repository", help="Optional repository association."),
     provider: str = typer.Option("github", "--provider", help="Provider name for repository records."),
+    tenant_key: str | None = typer.Option(None, "--tenant-key", help="Optional tenant scope for associated organization."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     if target_type != ScanTargetType.PATH:
@@ -729,6 +837,7 @@ def scan(
             organization=organization,
             repository=repository,
             provider=provider,
+            tenant_key=tenant_key,
         )
 
         try:
@@ -823,6 +932,7 @@ def schedule_scan(
     cadence: ScanCadence = typer.Option(ScanCadence.DAILY, "--cadence", help="How often to rerun the scan."),
     organization: str | None = typer.Option(None, "--organization", help="Optional organization association."),
     repository: str | None = typer.Option(None, "--repository", help="Optional repository association."),
+    tenant_key: str | None = typer.Option(None, "--tenant-key", help="Optional tenant scope for associated organization."),
 ) -> None:
     settings = _settings()
     init_db(settings.database_url)
@@ -834,6 +944,7 @@ def schedule_scan(
             organization=organization,
             repository=repository,
             provider="github",
+            tenant_key=tenant_key,
         )
         scheduled = storage.create_scheduled_scan(
             "path",
@@ -844,10 +955,50 @@ def schedule_scan(
             metadata_json={
                 "organization_id": organization_id,
                 "repository_id": repository_id,
+                "tenant_key": tenant_key,
             },
         )
         session.commit()
     typer.echo(f"Scheduled scan {scheduled.id} for {target.resolve()} ({cadence.value})")
+
+
+@app.command("schedule-mirror-scan")
+def schedule_mirror_scan(
+    repository: str = typer.Argument(..., help="Repository full name, such as owner/name."),
+    scanner: str = typer.Option("git-history-patterns", "--scanner", help="Scanner to schedule against the repository mirror."),
+    cadence: ScanCadence = typer.Option(ScanCadence.DAILY, "--cadence", help="How often to rerun the mirror scan."),
+    ref: list[str] = typer.Option([], "--ref", help="Specific branch or tag refs to scan; repeat for multiple refs."),
+    provider: str = typer.Option("github", "--provider", help="Repository provider name."),
+    clone_url: str | None = typer.Option(None, "--clone-url", help="Optional explicit clone URL."),
+    tenant_key: str | None = typer.Option(None, "--tenant-key", help="Optional tenant scope for this scheduled mirror scan."),
+    resync_before_run: bool = typer.Option(True, "--resync/--no-resync", help="Whether to refresh the mirror before each scheduled run."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        repository_record = storage.get_repository_by_full_name(repository)
+        organization_id = repository_record.organization_id if repository_record else None
+        repository_id = repository_record.id if repository_record else None
+        scheduled = storage.create_scheduled_scan(
+            "mirror",
+            repository,
+            scanner,
+            next_run_from_cadence(cadence.value),
+            cadence=cadence.value,
+            metadata_json={
+                "organization_id": organization_id,
+                "repository_id": repository_id,
+                "provider": provider,
+                "clone_url": clone_url,
+                "refs": list(ref),
+                "tenant_key": tenant_key,
+                "resync_before_run": resync_before_run,
+            },
+        )
+        session.commit()
+    typer.echo(f"Scheduled mirror scan {scheduled.id} for {repository} ({cadence.value})")
 
 
 @app.command("run-scheduled")
@@ -884,6 +1035,63 @@ def run_scheduled(
         typer.echo(f"Ran {len(results)} scheduled scan(s).")
 
 
+@app.command("schedule-report")
+def schedule_report(
+    export_format: ExportFormat = typer.Option(ExportFormat.JSON, "--format", help="Output format."),
+    cadence: ScanCadence = typer.Option(ScanCadence.DAILY, "--cadence", help="How often to generate the report."),
+    tenant_key: str | None = typer.Option(None, "--tenant-key", help="Optional tenant scope for this report."),
+    output_path: Path | None = typer.Option(None, "--output-path", help="Optional fixed output path for the generated report."),
+    webhook_url: str | None = typer.Option(None, "--webhook-url", help="Optional webhook URL for alert delivery."),
+    enabled: bool = typer.Option(True, "--enabled/--disabled", help="Whether the schedule starts enabled."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        scheduled = storage.create_scheduled_report(
+            "tenant" if tenant_key else "global",
+            next_run_from_cadence(cadence.value),
+            target_value=tenant_key,
+            output_format=export_format.value,
+            cadence=cadence.value,
+            enabled=enabled,
+            output_path=str(output_path.resolve()) if output_path is not None else None,
+            webhook_url=webhook_url,
+            metadata_json={"delivery": "webhook" if webhook_url else "filesystem"},
+        )
+        session.commit()
+    typer.echo(f"Scheduled report {scheduled.id} ({scheduled.output_format})")
+
+
+@app.command("run-scheduled-reports")
+def run_scheduled_reports_command(
+    limit: int = typer.Option(10, "--limit", min=1, help="Maximum number of due report schedules to run."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        results = run_due_reports(storage, limit=limit, settings=settings)
+        session.commit()
+    payload = [
+        {
+            "scheduled_report_id": result.scheduled_report_id,
+            "output_path": result.output_path,
+            "output_format": result.output_format,
+            "delivered": result.delivered,
+            "tool_run_id": result.tool_run_id,
+        }
+        for result in results
+    ]
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        typer.echo(f"Ran {len(results)} scheduled report(s).")
+
+
 @app.command("enqueue-scheduled")
 def enqueue_scheduled(
     limit: int = typer.Option(10, "--limit", min=1, help="Maximum number of due scheduled scans to enqueue."),
@@ -907,6 +1115,139 @@ def enqueue_scheduled(
         typer.echo(f"Enqueued {len(results)} scheduled scan(s) onto {status['queue_name']}.")
 
 
+@app.command("sync-mirror")
+def sync_mirror(
+    repository: str = typer.Argument(..., help="Repository full name, such as owner/name."),
+    provider: str = typer.Option("github", "--provider", help="Repository provider name."),
+    clone_url: str | None = typer.Option(None, "--clone-url", help="Optional explicit clone URL."),
+    ref: list[str] = typer.Option([], "--ref", help="Tracked branch or tag ref; repeat for multiple refs."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        try:
+            record, created = sync_repository_mirror(
+                storage,
+                settings=settings,
+                repository_full_name=repository,
+                provider=provider,
+                clone_url=clone_url,
+                refs=list(ref),
+            )
+        except MirrorError as exc:
+            typer.echo(f"Mirror sync failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        session.commit()
+    payload = {
+        "repository": record.full_name,
+        "mirror_path": record.mirror_path,
+        "last_mirrored_at": record.last_mirrored_at.isoformat() if record.last_mirrored_at else None,
+        "created": created,
+        "tracked_refs": (record.metadata_json or {}).get("tracked_refs", []),
+        "available_refs": (record.metadata_json or {}).get("available_refs", []),
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2))
+    else:
+        typer.echo(f"Synchronized mirror for {record.full_name} at {record.mirror_path}")
+
+
+@app.command("sync-mirrors")
+def sync_mirrors(
+    organization: str | None = typer.Option(None, "--organization", help="Only sync repositories for this organization."),
+    ref: list[str] = typer.Option([], "--ref", help="Tracked branch or tag ref; repeat for multiple refs."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        repositories = [
+            repository
+            for repository in storage.list_repositories()
+            if organization is None or (repository.organization and repository.organization.name == organization)
+        ]
+        payload = []
+        for repository_record in repositories:
+            try:
+                synced, _ = sync_repository_mirror(
+                    storage,
+                    settings=settings,
+                    repository_full_name=repository_record.full_name,
+                    provider=repository_record.provider,
+                    clone_url=repository_record.url,
+                    refs=list(ref),
+                )
+            except MirrorError as exc:
+                payload.append({"repository": repository_record.full_name, "status": "failed", "error": str(exc)})
+                continue
+            payload.append(
+                {
+                    "repository": synced.full_name,
+                    "status": "ok",
+                    "mirror_path": synced.mirror_path,
+                    "tracked_refs": (synced.metadata_json or {}).get("tracked_refs", []),
+                }
+            )
+        session.commit()
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2))
+    else:
+        typer.echo(f"Synchronized {sum(1 for row in payload if row['status'] == 'ok')} mirror(s).")
+
+
+@app.command("scan-mirror")
+def scan_mirror(
+    repository: str = typer.Argument(..., help="Repository full name, such as owner/name."),
+    scanner: str = typer.Option("git-history-patterns", "--scanner", help="Scanner implementation to run against the mirror."),
+    ref: list[str] = typer.Option([], "--ref", help="Specific branch or tag refs to scan from the mirror; repeat for multiple refs."),
+    resync: bool = typer.Option(False, "--resync/--no-resync", help="Refresh the mirror before scanning."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    init_db(settings.database_url)
+    session_factory = create_session_factory(settings.database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        try:
+            results = scan_repository_mirror_refs(
+                storage,
+                settings=settings,
+                repository_full_name=repository,
+                scanner_name=scanner,
+                refs=list(ref),
+                resync=resync,
+            )
+        except MirrorError as exc:
+            typer.echo(f"Mirror scan failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        session.commit()
+    payload = {
+        "repository": repository,
+        "scanner": scanner,
+        "refs": list(ref),
+        "resync": resync,
+        "results": [
+            {
+                "target": result.target,
+                "scan_job_id": result.scan_job_id,
+                "tool_run_id": result.tool_run_id,
+                "findings": result.findings,
+                "finding_ids": result.finding_ids,
+            }
+            for result in results
+        ],
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        typer.echo(f"Completed {len(results)} mirror scan(s) for {repository}.")
+
+
 @app.command("queue-status")
 def queue_status_command(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
@@ -923,8 +1264,27 @@ def queue_status_command(
     else:
         typer.echo(
             f"backend={payload['backend']} queue={payload['queue_name']} pending={payload['pending_jobs']} "
-            f"started={payload['started_jobs']} failed={payload['failed_jobs']}"
+            f"started={payload['started_jobs']} failed={payload['failed_jobs']} "
+            f"retry_max={payload['retry_max']} retry_intervals={payload['retry_intervals']}"
+            + (f" completed={payload['completed_jobs']}" if 'completed_jobs' in payload else "")
         )
+
+
+@app.command("rate-limit-status")
+def rate_limit_status_command(
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
+) -> None:
+    settings = _settings()
+    payload = {
+        "backend": settings.rate_limit_backend,
+        "default_requests_per_minute": settings.outbound_requests_per_minute,
+        "default_min_interval_seconds": settings.outbound_min_interval_seconds,
+        "states": list_rate_limit_states(settings),
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, default=str))
+    else:
+        typer.echo(f"backend={payload['backend']} scopes={len(payload['states'])}")
 
 
 @app.command("run-worker")
@@ -955,12 +1315,16 @@ def jobs(
         scan_jobs = storage.list_scan_jobs()
         tool_runs = storage.list_tool_runs()
         scheduled_scans = storage.list_scheduled_scans()
+        scheduled_reports = storage.list_scheduled_reports()
+        queue_tasks = storage.list_queue_tasks(limit=50)
     payload = {
         "scan_jobs": [
             {
                 "id": job.id,
+                "target_type": job.target_type,
                 "scanner_name": job.scanner_name,
                 "target_id": job.target_id,
+                "target_ref": job.target_ref,
                 "status": job.status,
             }
             for job in scan_jobs
@@ -977,14 +1341,47 @@ def jobs(
         "scheduled_scans": [
             {
                 "id": scan.id,
+                "target_type": scan.target_type,
                 "scanner_name": scan.scanner_name,
                 "target_value": scan.target_value,
+                "refs": (scan.metadata_json or {}).get("refs", []),
                 "cadence": scan.cadence,
                 "enabled": scan.enabled,
+                "queue_backend": (scan.metadata_json or {}).get("queue_backend"),
                 "queue_status": (scan.metadata_json or {}).get("queue_status"),
                 "queue_job_id": (scan.metadata_json or {}).get("queue_job_id"),
+                "queue_task_id": (scan.metadata_json or {}).get("queue_task_id"),
             }
             for scan in scheduled_scans
+        ],
+        "scheduled_reports": [
+            {
+                "id": report.id,
+                "target_type": report.target_type,
+                "target_value": report.target_value,
+                "output_format": report.output_format,
+                "cadence": report.cadence,
+                "enabled": report.enabled,
+                "delivery": "webhook" if report.webhook_url else "filesystem",
+                "last_output_path": (report.metadata_json or {}).get("last_output_path"),
+            }
+            for report in scheduled_reports
+        ],
+        "queue_tasks": [
+            {
+                "id": task.id,
+                "scheduled_scan_id": task.scheduled_scan_id,
+                "backend": task.backend,
+                "queue_name": task.queue_name,
+                "status": task.status,
+                "attempt_count": task.attempt_count,
+                "max_attempts": task.max_attempts,
+                "available_at": task.available_at.isoformat(),
+                "lease_owner": task.lease_owner,
+                "result_scan_job_id": task.result_scan_job_id,
+                "result_tool_run_id": task.result_tool_run_id,
+            }
+            for task in queue_tasks
         ],
     }
     if json_output:
@@ -992,7 +1389,9 @@ def jobs(
     else:
         typer.echo(
             f"scan_jobs={len(payload['scan_jobs'])} tool_runs={len(payload['tool_runs'])} "
-            f"scheduled_scans={len(payload['scheduled_scans'])}"
+            f"scheduled_scans={len(payload['scheduled_scans'])} "
+            f"scheduled_reports={len(payload['scheduled_reports'])} "
+            f"queue_tasks={len(payload['queue_tasks'])}"
         )
 
 
