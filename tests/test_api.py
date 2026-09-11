@@ -1,5 +1,4 @@
 import io
-import tarfile
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -358,11 +357,42 @@ def test_fastapi_dashboard_and_json_routes(tmp_path: Path) -> None:
     assert root.headers["location"] == "/dashboard"
     assert dashboard.status_code == 200
     assert "Live filters" in dashboard.text
+    assert "Artifact upload analysis" in dashboard.text
     assert "Live dashboard finding" in dashboard.text
     assert findings.status_code == 200
     assert findings.json()["findings"][0]["title"] == "Live dashboard finding"
     assert summary.status_code == 200
     assert summary.json()["counts"]["findings"] == 1
+
+
+def test_dashboard_artifact_upload_returns_html_result(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'dashboard-artifact.db'}"
+    client = TestClient(create_app(database_url))
+
+    response = client.post(
+        "/dashboard/artifact-scans",
+        data={"organization": "example-org", "repository": "example-org/app"},
+        files={"artifact": ("credentials.env", b'token = "prod-super-secret-1234567890"\n', "text/plain")},
+    )
+
+    assert response.status_code == 200
+    assert "Artifact scan completed." in response.text
+    assert "credentials.env" in response.text
+    assert "Recent scan activity" in response.text
+
+
+def test_dashboard_artifact_upload_returns_html_error(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'dashboard-artifact-error.db'}"
+    client = TestClient(create_app(database_url))
+
+    response = client.post(
+        "/dashboard/artifact-scans",
+        files={"artifact": ("bundle.zip", b"not-a-valid-zip", "application/zip")},
+    )
+
+    assert response.status_code == 400
+    assert "Artifact scan failed." in response.text
+    assert "Invalid uploaded archive" in response.text
 
 
 def test_api_artifact_upload_scans_text_file(tmp_path: Path) -> None:

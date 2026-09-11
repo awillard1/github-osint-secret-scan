@@ -813,6 +813,8 @@ class OrgscanApiService:
         severity: str | None = None,
         category: str | None = None,
         confidence: str | None = None,
+        artifact_scan_result: dict[str, object] | None = None,
+        artifact_scan_error: str | None = None,
     ) -> str:
         with self.session_factory() as session:
             storage = Storage(session)
@@ -859,6 +861,8 @@ class OrgscanApiService:
                     "confidence": confidence or "",
                 },
                 live=True,
+                artifact_scan_result=artifact_scan_result,
+                artifact_scan_error=artifact_scan_error,
             )
 
     def handle(self, path: str) -> tuple[int, dict[str, object]]:
@@ -1214,6 +1218,25 @@ def create_app(database_url: str) -> FastAPI:
                 confidence=confidence,
             )
         )
+
+    @app.post("/dashboard/artifact-scans", response_class=HTMLResponse)
+    async def dashboard_artifact_scans(
+        artifact: UploadFile = File(...),
+        organization: str | None = Form(None),
+        repository: str | None = Form(None),
+        provider: str = Form("github"),
+    ) -> HTMLResponse:
+        try:
+            result = service._scan_uploaded_artifact(
+                filename=artifact.filename,
+                content=await artifact.read(),
+                organization=organization,
+                repository=repository,
+                provider=provider,
+            )
+            return HTMLResponse(service._dashboard_html(artifact_scan_result=result))
+        except HTTPException as exc:
+            return HTMLResponse(service._dashboard_html(artifact_scan_error=str(exc.detail)), status_code=exc.status_code)
 
     return app
 

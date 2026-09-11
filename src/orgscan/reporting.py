@@ -200,6 +200,8 @@ def render_dashboard_html(
     graph: dict[str, Any] | None = None,
     filters: dict[str, Any] | None = None,
     live: bool = False,
+    artifact_scan_result: dict[str, Any] | None = None,
+    artifact_scan_error: str | None = None,
 ) -> str:
     def items(mapping: dict[str, Any]) -> str:
         return "".join(f"<li><strong>{html.escape(str(key))}</strong>: {html.escape(str(value))}</li>" for key, value in mapping.items())
@@ -209,6 +211,14 @@ def render_dashboard_html(
 
     def severity_items(values: dict[str, Any]) -> str:
         return ", ".join(f"{html.escape(str(key))}={html.escape(str(value))}" for key, value in values.items()) or "none"
+
+    def metric_card(title: str, value: Any, tone: str = "default") -> str:
+        return (
+            f"<div class='card metric {html.escape(tone)}'>"
+            f"<h3>{html.escape(title)}</h3>"
+            f"<p>{html.escape(str(value))}</p>"
+            "</div>"
+        )
 
     rows = "".join(
         "<tr>"
@@ -255,15 +265,49 @@ def render_dashboard_html(
         "</tr>"
         for edge in (graph or {}).get("edges", [])
     ) or "<tr><td colspan='4'>No relationships</td></tr>"
+    scan_job_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(job['id']))}</td>"
+        f"<td>{html.escape(str(job['scanner_name']))}</td>"
+        f"<td>{html.escape(str(job['target_type']))}</td>"
+        f"<td>{html.escape(str(job['target_id']))}</td>"
+        f"<td>{html.escape(str(job['status']))}</td>"
+        "</tr>"
+        for job in summary["recent_scan_jobs"][:10]
+    ) or "<tr><td colspan='5'>No scan activity yet</td></tr>"
+    artifact_result_banner = ""
+    if artifact_scan_result is not None:
+        artifact_result_banner = (
+            "<div class='banner success'>"
+            f"<strong>Artifact scan completed.</strong> {html.escape(str(artifact_scan_result.get('artifact_name', 'artifact')))} "
+            f"produced {html.escape(str(artifact_scan_result.get('findings', 0)))} finding(s) "
+            f"in scan job #{html.escape(str(artifact_scan_result.get('scan_job_id', 'n/a')))}."
+            "</div>"
+        )
+    elif artifact_scan_error:
+        artifact_result_banner = (
+            "<div class='banner error'>"
+            f"<strong>Artifact scan failed.</strong> {html.escape(artifact_scan_error)}"
+            "</div>"
+        )
     graph_nodes = len((graph or {}).get("nodes", []))
     graph_edges = len((graph or {}).get("edges", []))
     identity_labels = [
         f"{item['username'] or 'unknown'} / {item['email'] or 'unknown'} ({item['relation_type']})"
         for item in summary["identity_correlations"]
     ]
+    open_findings = summary["workflow_breakdown"].get("open", 0)
+    high_risk_findings = sum(1 for row in summary["top_risky_findings"] if float(row.get("risk_score", 0) or 0) >= 70)
+    critical_findings = summary["severity_breakdown"].get("critical", 0)
     live_header = """
     <section>
-      <h2>Live filters</h2>
+      <div class="section-header">
+        <div>
+          <h2>Live filters</h2>
+          <p class="subtle">Refresh the dashboard view or jump to raw API outputs for automation.</p>
+        </div>
+        <div class="quick-links"><a href="/summary">summary json</a><a href="/findings?limit={limit}">findings json</a><a href="/relationships/graph">graph json</a><a href="/trends/findings?days={days}">trends json</a></div>
+      </div>
       <form method="get" action="/dashboard" class="filters">
         <label>Status <input type="text" name="status" value="{status}"></label>
         <label>Severity <input type="text" name="severity" value="{severity}"></label>
@@ -273,7 +317,21 @@ def render_dashboard_html(
         <label>Trend days <input type="number" min="1" max="365" name="days" value="{days}"></label>
         <button type="submit">Refresh</button>
       </form>
-      <p><a href="/summary">summary json</a> · <a href="/findings?limit={limit}">findings json</a> · <a href="/relationships/graph">graph json</a> · <a href="/trends/findings?days={days}">trends json</a></p>
+    </section>
+    <section>
+      <div class="section-header">
+        <div>
+          <h2>Artifact upload analysis</h2>
+          <p class="subtle">Upload a file or supported archive for immediate secret-pattern analysis.</p>
+        </div>
+      </div>
+      <form method="post" action="/dashboard/artifact-scans" enctype="multipart/form-data" class="upload-form">
+        <label>Artifact file <input type="file" name="artifact" required></label>
+        <label>Organization <input type="text" name="organization" placeholder="example-org"></label>
+        <label>Repository <input type="text" name="repository" placeholder="example-org/app"></label>
+        <label>Provider <input type="text" name="provider" value="github"></label>
+        <button type="submit">Upload and scan</button>
+      </form>
     </section>
     """.format(
         status=html.escape(str((filters or {}).get("status", ""))),
@@ -289,28 +347,47 @@ def render_dashboard_html(
     <meta charset=\"utf-8\">
     <title>orgscan dashboard</title>
     <style>
-      body {{ font-family: sans-serif; margin: 2rem; background: #f8fafc; color: #0f172a; }}
+      body {{ font-family: Inter, system-ui, sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }}
+      main {{ max-width: 1400px; margin: 0 auto; padding: 2rem; }}
       .grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem; }}
-      .hero {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }}
-      .card, section {{ background: white; border: 1px solid #dbe3ef; border-radius: 12px; padding: 1rem; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06); }}
+      .hero {{ display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }}
+      .card, section {{ background: white; border: 1px solid #dbe3ef; border-radius: 16px; padding: 1rem; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06); }}
       table {{ border-collapse: collapse; width: 100%; }}
-      th, td {{ border: 1px solid #dbe3ef; padding: 0.5rem; text-align: left; }}
+      th, td {{ border: 1px solid #dbe3ef; padding: 0.65rem; text-align: left; vertical-align: top; }}
       th {{ background: #eff6ff; }}
+      tbody tr:nth-child(even) {{ background: #f8fbff; }}
       h1, h2, h3 {{ margin-top: 0; }}
-      .filters {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; align-items: end; }}
+      .filters, .upload-form {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.75rem; align-items: end; }}
       label {{ display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.95rem; }}
-      input {{ padding: 0.45rem; border: 1px solid #cbd5e1; border-radius: 8px; }}
-      button {{ padding: 0.6rem 1rem; border: 0; border-radius: 8px; background: #2563eb; color: white; cursor: pointer; }}
+      input {{ padding: 0.55rem; border: 1px solid #cbd5e1; border-radius: 10px; }}
+      button {{ padding: 0.7rem 1rem; border: 0; border-radius: 10px; background: #2563eb; color: white; cursor: pointer; font-weight: 600; }}
+      .subtle {{ color: #475569; margin: 0; }}
+      .section-header {{ display: flex; justify-content: space-between; gap: 1rem; align-items: center; margin-bottom: 1rem; }}
+      .quick-links {{ display: flex; flex-wrap: wrap; gap: 0.75rem; }}
+      .quick-links a {{ text-decoration: none; color: #2563eb; font-weight: 600; }}
+      .metric p {{ font-size: 2rem; font-weight: 700; margin: 0; }}
+      .metric.critical {{ background: linear-gradient(180deg, #fff1f2 0%, #ffffff 100%); }}
+      .metric.warning {{ background: linear-gradient(180deg, #fffbeb 0%, #ffffff 100%); }}
+      .metric.info {{ background: linear-gradient(180deg, #eff6ff 0%, #ffffff 100%); }}
+      .banner {{ margin: 0 0 1rem 0; padding: 0.9rem 1rem; border-radius: 12px; border: 1px solid; }}
+      .banner.success {{ background: #ecfdf5; border-color: #86efac; color: #166534; }}
+      .banner.error {{ background: #fef2f2; border-color: #fca5a5; color: #991b1b; }}
+      @media (max-width: 1024px) {{ .hero, .grid, .filters, .upload-form {{ grid-template-columns: 1fr 1fr; }} }}
+      @media (max-width: 640px) {{ main {{ padding: 1rem; }} .hero, .grid, .filters, .upload-form {{ grid-template-columns: 1fr; }} .section-header {{ flex-direction: column; align-items: flex-start; }} }}
     </style>
   </head>
   <body>
+    <main>
     <h1>orgscan dashboard</h1>
+    <p class="subtle">Analyst workspace for findings, entity risk, upload-driven artifact triage, and recent scan activity.</p>
+    {artifact_result_banner}
     {live_header}
     <div class=\"hero\">
-      <div class=\"card\"><h3>Findings</h3><p>{html.escape(str(summary['counts'].get('findings', 0)))}</p></div>
-      <div class=\"card\"><h3>Repositories</h3><p>{html.escape(str(summary['counts'].get('repositories', 0)))}</p></div>
-      <div class=\"card\"><h3>Domains</h3><p>{html.escape(str(summary['counts'].get('domains', 0)))}</p></div>
-      <div class=\"card\"><h3>Scheduled scans</h3><p>{html.escape(str(summary['counts'].get('scheduled_scans', 0)))}</p></div>
+      {metric_card("Findings", summary['counts'].get('findings', 0), "critical")}
+      {metric_card("Open findings", open_findings, "warning")}
+      {metric_card("Critical findings", critical_findings, "critical")}
+      {metric_card("High risk findings", high_risk_findings, "info")}
+      {metric_card("Scheduled scans", summary['counts'].get('scheduled_scans', 0), "info")}
     </div>
     <div class=\"grid\">
       <section>
@@ -376,6 +453,15 @@ def render_dashboard_html(
       </table>
     </section>
     <section>
+      <h2>Recent scan activity</h2>
+      <table>
+        <thead>
+          <tr><th>ID</th><th>Scanner</th><th>Target type</th><th>Target</th><th>Status</th></tr>
+        </thead>
+        <tbody>{scan_job_rows}</tbody>
+      </table>
+    </section>
+    <section>
       <h2>Recent findings</h2>
       <table>
         <thead>
@@ -394,6 +480,7 @@ def render_dashboard_html(
         <ul>{list_items(identity_labels)}</ul>
       </section>
     </div>
+    </main>
   </body>
 </html>
 """

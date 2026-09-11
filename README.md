@@ -201,6 +201,8 @@ Key routes:
 - `/relationships/graph` relationship graph JSON
 - `/trends/findings` findings trend JSON
 
+The live `/dashboard` view now also includes an artifact upload form so analysts can submit files and archives from the browser and immediately review the resulting scan activity.
+
 Artifact upload example:
 
 ```bash
