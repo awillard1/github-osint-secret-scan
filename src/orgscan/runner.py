@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from orgscan.config import Settings
 from orgscan.repositories import Storage
@@ -29,22 +30,41 @@ def execute_scan(
     settings: Settings | None = None,
     organization_id: int | None = None,
     repository_id: int | None = None,
+    target_type: str = "path",
+    target_label: str | None = None,
+    parameters_json: dict[str, Any] | None = None,
+    target_id: str | None = None,
+    target_ref: str | None = "workspace",
+    scope_json: dict[str, object] | None = None,
+    command_line: str | None = None,
+    tool_target: str | None = None,
 ) -> ScanExecutionResult:
     scanner_impl = get_scanner(scanner_name, settings=settings) if settings is not None else get_scanner(scanner_name)
     resolved_target = target_path.resolve()
+    effective_target_id = target_id or target_label or str(resolved_target)
+    effective_scope = scope_json or {"mode": target_type}
+    effective_command_line = command_line or f"orgscan scan path {resolved_target} --scanner {scanner_impl.name}"
+    effective_tool_target = tool_target or target_label or str(resolved_target)
 
     scan_job = storage.create_scan_job(
-        target_type="path",
-        target_id=str(resolved_target),
+        target_type=target_type,
+        target_id=effective_target_id,
+        target_ref=target_ref,
         scanner_name=scanner_impl.name,
         status="pending",
-        parameters_json={"path": str(resolved_target)},
+        parameters_json={
+            "path": str(resolved_target),
+            "target_ref": target_ref,
+            "target_type": target_type,
+            **(parameters_json or {}),
+        },
+        scope_json=effective_scope,
     )
     tool_run = storage.create_tool_run(
         tool_name=scanner_impl.name,
-        target=str(resolved_target),
+        target=effective_tool_target,
         scan_job_id=scan_job.id,
-        command_line=f"orgscan scan path {resolved_target} --scanner {scanner_impl.name}",
+        command_line=effective_command_line,
         status="pending",
     )
     storage.mark_scan_job_running(scan_job)
@@ -52,7 +72,7 @@ def execute_scan(
     storage.session.commit()
 
     try:
-        matches = scanner_impl.scan_path(resolved_target)
+        matches = _scan_matches(scanner_impl, resolved_target, target_ref=target_ref, scope_json=effective_scope)
         source_class = getattr(scanner_impl, "source_class", "internal")
         finding_ids = _persist_matches(
             storage,
@@ -75,7 +95,7 @@ def execute_scan(
     return ScanExecutionResult(
         scan_job_id=scan_job.id,
         scanner=scanner_impl.name,
-        target=str(resolved_target),
+        target=effective_tool_target,
         findings=len(matches),
         finding_ids=finding_ids,
         tool_run_id=tool_run.id,
@@ -180,6 +200,8 @@ def _persist_matches(
             finding_id=finding.id,
             source=scanner_name,
             repository_path=str(match.path),
+            commit_sha=match.metadata.get("commit_sha"),
+            ref_name=match.metadata.get("ref_name"),
             line_start=match.line_start,
             line_end=match.line_end,
             snippet=match.snippet,
@@ -198,3 +220,10 @@ def _persist_matches(
         )
         finding_ids.append(finding.id)
     return finding_ids
+
+
+def _scan_matches(scanner_impl: object, target_path: Path, *, target_ref: str | None, scope_json: dict[str, object]) -> list[ScanMatch]:
+    contextual_scan = getattr(scanner_impl, "scan_path_with_context", None)
+    if callable(contextual_scan):
+        return contextual_scan(target_path, target_ref=target_ref, scope_json=scope_json)
+    return scanner_impl.scan_path(target_path)

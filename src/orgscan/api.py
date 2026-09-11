@@ -1,14 +1,248 @@
 from __future__ import annotations
 
+import shutil
+import tarfile
+import tempfile
+import zipfile
+from collections.abc import Sequence
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import uvicorn
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import BaseModel, Field
 
+from orgscan.bootstrap import optional_tool_inventory
+from orgscan.config import Settings, get_settings
 from orgscan.db import create_session_factory, init_db
-from orgscan.reporting import build_summary, finding_rows, finding_trends, relationship_graph, render_dashboard_html
+from orgscan.models import ScanJob, ToolRun
+from orgscan.runner import execute_scan
+from orgscan.reporting import (
+    build_summary,
+    finding_rows,
+    finding_trends,
+    relationship_graph,
+    render_dashboard_html,
+    render_finding_detail_html,
+    render_graph_html,
+    render_scan_job_detail_html,
+)
 from orgscan.repositories import Storage
+from orgscan.scanners import available_scanner_names
+from orgscan.scanners.external import ScannerExecutionError
+
+MAX_ARTIFACT_UPLOAD_BYTES = 10_000_000
+MAX_ARTIFACT_EXTRACTED_BYTES = 25_000_000
+MAX_ARTIFACT_EXTRACTED_FILES = 2_000
+
+
+def _serialize_finding(finding, *, include_detail: bool = False) -> dict[str, Any]:
+    payload = {
+        "id": finding.id,
+        "title": finding.title,
+        "description": finding.description,
+        "category": finding.category,
+        "severity": finding.severity,
+        "confidence": finding.confidence,
+        "status": finding.status,
+        "triage_state": finding.triage_state,
+        "triage_owner": finding.triage_owner,
+        "triage_notes": finding.triage_notes,
+        "source_tool": finding.source_tool,
+        "source_name": finding.source_name,
+        "organization_id": finding.organization_id,
+        "domain_id": finding.domain_id,
+        "repository_id": finding.repository_id,
+        "account_id": finding.account_id,
+        "scan_job_id": finding.scan_job_id,
+        "risk_score": finding.risk_score,
+        "detected_at": finding.detected_at.isoformat(),
+        "fingerprint": finding.fingerprint,
+    }
+    if include_detail:
+        payload.update(
+            {
+                "source_class": finding.source_class,
+                "normalized_hash": finding.normalized_hash,
+                "remediation_hint": finding.remediation_hint,
+                "first_seen_at": finding.first_seen_at.isoformat(),
+                "last_seen_at": finding.last_seen_at.isoformat(),
+                "raw_payload": finding.raw_payload,
+                "metadata": finding.metadata_json,
+            }
+        )
+    return payload
+
+
+def _serialize_evidence(evidence) -> dict[str, Any]:
+    return {
+        "id": evidence.id,
+        "finding_id": evidence.finding_id,
+        "source": evidence.source,
+        "source_url": evidence.source_url,
+        "repository_path": evidence.repository_path,
+        "commit_sha": evidence.commit_sha,
+        "line_start": evidence.line_start,
+        "line_end": evidence.line_end,
+        "snippet": evidence.snippet,
+        "extracted_indicator": evidence.extracted_indicator,
+        "confidence": evidence.confidence,
+        "observed_at": evidence.observed_at.isoformat(),
+        "related_entity_type": evidence.related_entity_type,
+        "related_entity_id": evidence.related_entity_id,
+        "source_class": evidence.source_class,
+        "query_used": evidence.query_used,
+    }
+
+
+def _serialize_relationship(relationship) -> dict[str, Any]:
+    return {
+        "id": relationship.id,
+        "from_entity_type": relationship.from_entity_type,
+        "from_entity_id": relationship.from_entity_id,
+        "to_entity_type": relationship.to_entity_type,
+        "to_entity_id": relationship.to_entity_id,
+        "relation_type": relationship.relation_type,
+        "confidence": relationship.confidence,
+        "source": relationship.source,
+        "evidence_summary": relationship.evidence_summary,
+    }
+
+
+def _serialize_risk_score(risk_score) -> dict[str, Any]:
+    return {
+        "id": risk_score.id,
+        "finding_id": risk_score.finding_id,
+        "entity_type": risk_score.entity_type,
+        "entity_id": risk_score.entity_id,
+        "score": risk_score.score,
+        "severity": risk_score.severity,
+        "confidence": risk_score.confidence,
+        "rationale": risk_score.rationale,
+        "calculated_at": risk_score.calculated_at.isoformat(),
+    }
+
+
+def _serialize_scan_job(scan_job: ScanJob) -> dict[str, Any]:
+    return {
+        "id": scan_job.id,
+        "target_type": scan_job.target_type,
+        "target_id": scan_job.target_id,
+        "scanner_name": scan_job.scanner_name,
+        "status": scan_job.status,
+        "parameters_json": scan_job.parameters_json,
+        "error_message": scan_job.error_message,
+        "started_at": scan_job.started_at.isoformat() if scan_job.started_at else None,
+        "completed_at": scan_job.completed_at.isoformat() if scan_job.completed_at else None,
+    }
+
+
+def _serialize_tool_run(tool_run: ToolRun) -> dict[str, Any]:
+    return {
+        "id": tool_run.id,
+        "scan_job_id": tool_run.scan_job_id,
+        "tool_name": tool_run.tool_name,
+        "target": tool_run.target,
+        "command_line": tool_run.command_line,
+        "status": tool_run.status,
+        "stdout_log": tool_run.stdout_log,
+        "stderr_log": tool_run.stderr_log,
+        "started_at": tool_run.started_at.isoformat() if tool_run.started_at else None,
+        "completed_at": tool_run.completed_at.isoformat() if tool_run.completed_at else None,
+    }
+
+
+class FindingUpdateRequest(BaseModel):
+    status: str | None = None
+    triage_state: str | None = None
+    triage_owner: str | None = None
+    triage_notes: str | None = None
+    remediation_due_date: date | None = None
+
+
+class FindingDecisionRequest(BaseModel):
+    reason: str = Field(min_length=1)
+    owner: str | None = None
+    note: str | None = None
+    due_date: date | None = None
+
+
+class FindingReopenRequest(BaseModel):
+    note: str | None = None
+
+
+class DashboardFindingWorkflowRequest(BaseModel):
+    action: str
+    owner: str | None = None
+    note: str | None = None
+    triage_state: str | None = None
+
+
+def _safe_artifact_name(filename: str | None) -> str:
+    return (Path(filename or "artifact.txt").name or "artifact.txt").replace("\x00", "")
+
+
+def _archive_type(path: Path) -> str | None:
+    name = path.name.lower()
+    if name.endswith(".zip"):
+        return "zip"
+    if name.endswith(".tar") or name.endswith(".tar.gz") or name.endswith(".tgz"):
+        return "tar"
+    return None
+
+
+def _safe_extract_destination(root: Path, member_name: str) -> Path:
+    normalized = Path(member_name.lstrip("/"))
+    destination = (root / normalized).resolve()
+    if destination != root and root not in destination.parents:
+        raise ValueError(f"Unsafe archive entry: {member_name}")
+    return destination
+
+
+def _extract_zip_artifact(artifact_path: Path, destination_root: Path) -> int:
+    file_count = 0
+    total_bytes = 0
+    with zipfile.ZipFile(artifact_path) as archive:
+        for member in archive.infolist():
+            if member.is_dir():
+                continue
+            file_count += 1
+            if file_count > MAX_ARTIFACT_EXTRACTED_FILES:
+                raise ValueError("Uploaded archive contains too many files.")
+            total_bytes += member.file_size
+            if total_bytes > MAX_ARTIFACT_EXTRACTED_BYTES:
+                raise ValueError("Uploaded archive expands beyond the allowed size limit.")
+            destination = _safe_extract_destination(destination_root, member.filename)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(archive.read(member))
+    return file_count
+
+
+def _extract_tar_artifact(artifact_path: Path, destination_root: Path) -> int:
+    file_count = 0
+    total_bytes = 0
+    with tarfile.open(artifact_path) as archive:
+        for member in archive.getmembers():
+            if member.isdir():
+                continue
+            if not member.isfile():
+                raise ValueError("Uploaded archive contains unsupported special entries.")
+            file_count += 1
+            if file_count > MAX_ARTIFACT_EXTRACTED_FILES:
+                raise ValueError("Uploaded archive contains too many files.")
+            total_bytes += member.size
+            if total_bytes > MAX_ARTIFACT_EXTRACTED_BYTES:
+                raise ValueError("Uploaded archive expands beyond the allowed size limit.")
+            extracted = archive.extractfile(member)
+            if extracted is None:
+                continue
+            destination = _safe_extract_destination(destination_root, member.name)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(extracted.read())
+    return file_count
 
 
 class OrgscanApiService:
@@ -16,6 +250,44 @@ class OrgscanApiService:
         self.database_url = database_url
         init_db(self.database_url)
         self.session_factory = create_session_factory(self.database_url)
+        self.settings = get_settings()
+
+    def _access_context_note(self) -> str:
+        return (
+            "The HTML dashboard is currently local-first and does not yet enforce tenant-scoped authentication. "
+            "Use API token controls separately until a dedicated tenant-aware dashboard session flow is added."
+        )
+
+    def _artifact_scanner_options(self, *, selected: str = "custom-patterns") -> list[dict[str, Any]]:
+        supported = {"custom-patterns", "gitleaks", "detect-secrets", "semgrep", "trufflehog"}
+        external_binaries = {
+            "gitleaks": self.settings.gitleaks_binary,
+            "detect-secrets": self.settings.detect_secrets_binary,
+            "semgrep": self.settings.semgrep_binary,
+            "trufflehog": self.settings.trufflehog_binary,
+        }
+        options: list[dict[str, Any]] = []
+        for scanner_name in available_scanner_names():
+            if scanner_name not in supported:
+                continue
+            available = scanner_name == "custom-patterns" or bool(shutil.which(external_binaries[scanner_name]))
+            options.append(
+                {
+                    "name": scanner_name,
+                    "available": available,
+                    "selected": scanner_name == selected,
+                }
+            )
+        return options
+
+    def _tooling_payload(self) -> dict[str, object]:
+        tools = optional_tool_inventory(self.settings)
+        return {
+            "scanners": self._artifact_scanner_options(),
+            "optional_tools": tools,
+            "installed_optional_tools": [item["name"] for item in tools if item["installed"]],
+            "missing_optional_tools": [item["name"] for item in tools if not item["installed"]],
+        }
 
     def _summary_payload(self) -> dict[str, object]:
         with self.session_factory() as session:
@@ -29,38 +301,593 @@ class OrgscanApiService:
         severity: str | None = None,
         category: str | None = None,
         confidence: str | None = None,
+        source_tool: str | None = None,
+        triage_state: str | None = None,
+        organization_id: int | None = None,
+        domain_id: int | None = None,
+        repository_id: int | None = None,
+        account_id: int | None = None,
+        scan_job_id: int | None = None,
+        risk_score_min: float | None = None,
+        risk_score_max: float | None = None,
+        detected_after: datetime | None = None,
+        detected_before: datetime | None = None,
+        high_signal_only: bool = False,
+        min_confidence: str = "likely",
     ) -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
             findings = storage.list_findings(
-                limit=limit,
+                limit=max(limit * 4, limit) if high_signal_only else limit,
                 status=status,
                 severity=severity,
                 category=category,
                 confidence=confidence,
+                source_tool=source_tool,
+                triage_state=triage_state,
+                organization_id=organization_id,
+                domain_id=domain_id,
+                repository_id=repository_id,
+                account_id=account_id,
+                scan_job_id=scan_job_id,
+                risk_score_min=risk_score_min,
+                risk_score_max=risk_score_max,
+                detected_after=detected_after,
+                detected_before=detected_before,
+            )
+            if high_signal_only:
+                findings = self._high_signal_findings(findings, min_confidence=min_confidence, limit=limit)
+            return {
+                "findings": [_serialize_finding(finding) for finding in findings]
+            }
+
+    @staticmethod
+    def _parse_datetime_param(value: str | None) -> datetime | None:
+        if value in (None, ""):
+            return None
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+    def _high_signal_findings(
+        self,
+        findings: Sequence[Any],
+        *,
+        min_confidence: str = "likely",
+        limit: int = 10,
+    ) -> list[Any]:
+        allowed = set(Storage._allowed_confidences(min_confidence))
+        return [
+            finding
+            for finding in findings
+            if finding.confidence in allowed and finding.status not in {"suppressed"}
+        ][:limit]
+
+    def _update_finding_triage(
+        self,
+        finding_id: int,
+        payload: FindingUpdateRequest,
+    ) -> dict[str, object] | None:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            finding = storage.get_finding(finding_id)
+            if finding is None:
+                return None
+            updated = storage.update_finding_triage(
+                finding_id,
+                status=payload.status,
+                triage_state=payload.triage_state,
+                triage_owner=payload.triage_owner,
+                triage_notes=payload.triage_notes,
+                remediation_due_date=payload.remediation_due_date,
+            )
+            session.commit()
+            return {"finding": _serialize_finding(updated, include_detail=True)}
+
+    def _apply_finding_decision(
+        self,
+        finding_id: int,
+        payload: FindingDecisionRequest,
+        *,
+        status: str,
+    ) -> dict[str, object] | None:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            finding = storage.get_finding(finding_id)
+            if finding is None:
+                return None
+            updated = storage.suppress_finding(
+                finding_id,
+                reason=payload.reason,
+                owner=payload.owner,
+                deadline=payload.due_date,
+                notes=payload.note,
+                status=status,
+            )
+            session.commit()
+            return {"finding": _serialize_finding(updated, include_detail=True)}
+
+    def _reopen_finding(
+        self,
+        finding_id: int,
+        payload: FindingReopenRequest,
+    ) -> dict[str, object] | None:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            finding = storage.get_finding(finding_id)
+            if finding is None:
+                return None
+            updated = storage.update_finding_triage(
+                finding_id,
+                status="open",
+                triage_state="reopened",
+                triage_notes=payload.note,
+            )
+            session.commit()
+            return {"finding": _serialize_finding(updated, include_detail=True)}
+
+    def _resolve_asset_context(
+        self,
+        storage: Storage,
+        *,
+        organization: str | None,
+        repository: str | None,
+        provider: str,
+    ) -> tuple[int | None, int | None]:
+        organization_id = None
+        repository_id = None
+        if organization:
+            organization_record, _ = storage.get_or_create_organization(organization)
+            organization_id = organization_record.id
+        if repository:
+            repository_record, _ = storage.get_or_create_repository(
+                repository,
+                organization_id=organization_id,
+                provider=provider,
+            )
+            repository_id = repository_record.id
+        return organization_id, repository_id
+
+    def _scan_uploaded_artifact(
+        self,
+        *,
+        filename: str | None,
+        content: bytes,
+        scanner_name: str = "custom-patterns",
+        organization: str | None,
+        repository: str | None,
+        provider: str,
+    ) -> dict[str, object]:
+        artifact_name = _safe_artifact_name(filename)
+        if not content:
+            raise HTTPException(status_code=400, detail="Uploaded artifact is empty.")
+        if len(content) > MAX_ARTIFACT_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Uploaded artifact exceeds the allowed size limit.")
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="orgscan-artifact-") as temp_dir:
+                workspace = Path(temp_dir)
+                artifact_path = workspace / artifact_name
+                artifact_path.write_bytes(content)
+                archive_type = _archive_type(artifact_path)
+                scan_target = artifact_path
+                extracted = False
+
+                if archive_type is not None:
+                    extracted_root = workspace / "extracted"
+                    extracted_root.mkdir()
+                    try:
+                        extracted_files = (
+                            _extract_zip_artifact(artifact_path, extracted_root)
+                            if archive_type == "zip"
+                            else _extract_tar_artifact(artifact_path, extracted_root)
+                        )
+                    except (tarfile.TarError, zipfile.BadZipFile, ValueError) as exc:
+                        raise HTTPException(status_code=400, detail=f"Invalid uploaded archive: {exc}") from exc
+                    if extracted_files == 0:
+                        raise HTTPException(status_code=400, detail="Uploaded archive does not contain any regular files.")
+                    scan_target = extracted_root
+                    extracted = True
+
+                with self.session_factory() as session:
+                    storage = Storage(session)
+                    organization_id, repository_id = self._resolve_asset_context(
+                        storage,
+                        organization=organization,
+                        repository=repository,
+                        provider=provider,
+                    )
+                    result = execute_scan(
+                        storage,
+                        target_path=scan_target,
+                        scanner_name=scanner_name,
+                        settings=self.settings,
+                        organization_id=organization_id,
+                        repository_id=repository_id,
+                        target_type="artifact",
+                        target_label=artifact_name,
+                        command_line=f"api artifact scan {artifact_name} --scanner {scanner_name}",
+                        parameters_json={
+                            "artifact_name": artifact_name,
+                            "artifact_kind": archive_type or "file",
+                            "extracted": extracted,
+                            "scanner": scanner_name,
+                        },
+                    )
+        except ScannerExecutionError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return {
+            "artifact_name": artifact_name,
+            "scanner": result.scanner,
+            "scan_job_id": result.scan_job_id,
+            "tool_run_id": result.tool_run_id,
+            "findings": result.findings,
+            "finding_ids": result.finding_ids,
+            "target": result.target,
+            "extracted": extracted,
+        }
+
+    def _finding_html_payload(self, finding_id: int) -> dict[str, object] | None:
+        return self._finding_payload(finding_id)
+
+    def _scan_job_payload(self, scan_job_id: int) -> dict[str, object] | None:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            scan_job = storage.get_scan_job(scan_job_id)
+            if scan_job is None:
+                return None
+            return {
+                "scan_job": _serialize_scan_job(scan_job),
+                "tool_runs": [_serialize_tool_run(run) for run in storage.list_tool_runs(limit=25, scan_job_id=scan_job_id)],
+                "findings": [_serialize_finding(finding) for finding in storage.list_findings(limit=100, scan_job_id=scan_job_id)],
+            }
+
+    def _entity_risk_profile(
+        self,
+        storage: Storage,
+        *,
+        entity_type: str,
+        entity_id: int,
+        min_confidence: str = "likely",
+    ) -> dict[str, Any]:
+        profiles = storage.list_entity_risk_profiles(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            min_confidence=min_confidence,
+            limit=1,
+        )
+        if profiles:
+            return profiles[0]
+        return {
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "entity_name": f"{entity_type}:{entity_id}",
+            "finding_count": 0,
+            "active_finding_count": 0,
+            "suppressed_count": 0,
+            "verified_count": 0,
+            "likely_count": 0,
+            "heuristic_count": 0,
+            "max_risk_score": 0.0,
+            "average_risk_score": 0.0,
+        }
+
+    def _organizations_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            organizations = list(storage.list_organizations())[:limit]
+            profiles = {
+                item["entity_id"]: item
+                for item in storage.list_entity_risk_profiles(
+                    entity_type="organization",
+                    min_confidence=min_confidence,
+                    limit=max(limit, 1),
+                )
+            }
+            return {
+                "organizations": [
+                    {
+                        "id": organization.id,
+                        "name": organization.name,
+                        "display_name": organization.display_name,
+                        "github_handle": organization.github_handle,
+                        "description": organization.description,
+                        "risk_summary": profiles.get(organization.id),
+                    }
+                    for organization in organizations
+                ]
+            }
+
+    def _organization_payload(
+        self,
+        organization_id: int,
+        *,
+        finding_limit: int = 10,
+        relationship_limit: int = 25,
+        min_confidence: str = "likely",
+    ) -> dict[str, object] | None:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            organization = storage.get_organization(organization_id)
+            if organization is None:
+                return None
+            findings = self._high_signal_findings(
+                storage.list_findings(limit=max(finding_limit * 4, finding_limit), organization_id=organization_id),
+                min_confidence=min_confidence,
+                limit=finding_limit,
             )
             return {
-                "findings": [
+                "organization": {
+                    "id": organization.id,
+                    "name": organization.name,
+                    "display_name": organization.display_name,
+                    "github_handle": organization.github_handle,
+                    "description": organization.description,
+                    "metadata": organization.metadata_json,
+                },
+                "risk_summary": self._entity_risk_profile(
+                    storage, entity_type="organization", entity_id=organization_id, min_confidence=min_confidence
+                ),
+                "domains": [{"id": domain.id, "name": domain.name} for domain in organization.domains],
+                "repositories": [{"id": repository.id, "full_name": repository.full_name} for repository in organization.repositories],
+                "accounts": [{"id": account.id, "username": account.username} for account in organization.accounts],
+                "relationships": [
+                    _serialize_relationship(relationship)
+                    for relationship in storage.list_relationships_for_entity("organization", str(organization_id), limit=relationship_limit)
+                ],
+                "top_findings": [_serialize_finding(finding) for finding in findings],
+            }
+
+    def _repositories_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            repositories = list(storage.list_repositories())[:limit]
+            profiles = {
+                item["entity_id"]: item
+                for item in storage.list_entity_risk_profiles(
+                    entity_type="repository",
+                    min_confidence=min_confidence,
+                    limit=max(limit, 1),
+                )
+            }
+            return {
+                "repositories": [
                     {
-                        "id": finding.id,
-                        "title": finding.title,
-                        "description": finding.description,
-                        "category": finding.category,
-                        "severity": finding.severity,
-                        "confidence": finding.confidence,
-                        "status": finding.status,
-                        "triage_state": finding.triage_state,
-                        "triage_owner": finding.triage_owner,
-                        "triage_notes": finding.triage_notes,
-                        "source_tool": finding.source_tool,
-                        "source_name": finding.source_name,
-                        "repository_id": finding.repository_id,
-                        "scan_job_id": finding.scan_job_id,
-                        "detected_at": finding.detected_at.isoformat(),
-                        "fingerprint": finding.fingerprint,
+                        "id": repository.id,
+                        "full_name": repository.full_name,
+                        "provider": repository.provider,
+                        "url": repository.url,
+                        "default_branch": repository.default_branch,
+                        "organization_id": repository.organization_id,
+                        "owner_account_id": repository.owner_account_id,
+                        "risk_summary": profiles.get(repository.id),
                     }
-                    for finding in findings
+                    for repository in repositories
                 ]
+            }
+
+    def _repository_payload(
+        self,
+        repository_id: int,
+        *,
+        finding_limit: int = 10,
+        relationship_limit: int = 25,
+        min_confidence: str = "likely",
+    ) -> dict[str, object] | None:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            repository = storage.get_repository(repository_id)
+            if repository is None:
+                return None
+            findings = self._high_signal_findings(
+                storage.list_findings(limit=max(finding_limit * 4, finding_limit), repository_id=repository_id),
+                min_confidence=min_confidence,
+                limit=finding_limit,
+            )
+            return {
+                "repository": {
+                    "id": repository.id,
+                    "full_name": repository.full_name,
+                    "provider": repository.provider,
+                    "url": repository.url,
+                    "default_branch": repository.default_branch,
+                    "organization_id": repository.organization_id,
+                    "owner_account_id": repository.owner_account_id,
+                    "metadata": repository.metadata_json,
+                },
+                "risk_summary": self._entity_risk_profile(
+                    storage, entity_type="repository", entity_id=repository_id, min_confidence=min_confidence
+                ),
+                "relationships": [
+                    _serialize_relationship(relationship)
+                    for relationship in storage.list_relationships_for_entity("repository", str(repository_id), limit=relationship_limit)
+                ],
+                "top_findings": [_serialize_finding(finding) for finding in findings],
+            }
+
+    def _domains_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            domains = list(storage.list_domains())[:limit]
+            profiles = {
+                item["entity_id"]: item
+                for item in storage.list_entity_risk_profiles(
+                    entity_type="domain",
+                    min_confidence=min_confidence,
+                    limit=max(limit, 1),
+                )
+            }
+            return {
+                "domains": [
+                    {
+                        "id": domain.id,
+                        "name": domain.name,
+                        "organization_id": domain.organization_id,
+                        "ownership_confidence": domain.ownership_confidence,
+                        "verification_status": domain.verification_status,
+                        "risk_summary": profiles.get(domain.id),
+                    }
+                    for domain in domains
+                ]
+            }
+
+    def _domain_payload(
+        self,
+        domain_id: int,
+        *,
+        finding_limit: int = 10,
+        relationship_limit: int = 25,
+        min_confidence: str = "likely",
+    ) -> dict[str, object] | None:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            domain = storage.get_domain(domain_id)
+            if domain is None:
+                return None
+            findings = self._high_signal_findings(
+                storage.list_findings(limit=max(finding_limit * 4, finding_limit), domain_id=domain_id),
+                min_confidence=min_confidence,
+                limit=finding_limit,
+            )
+            return {
+                "domain": {
+                    "id": domain.id,
+                    "name": domain.name,
+                    "organization_id": domain.organization_id,
+                    "ownership_confidence": domain.ownership_confidence,
+                    "verification_status": domain.verification_status,
+                    "discovered_emails": domain.discovered_emails,
+                    "discovered_subdomains": domain.discovered_subdomains,
+                    "discovery_sources": domain.discovery_sources,
+                    "risk_score": domain.risk_score,
+                },
+                "risk_summary": self._entity_risk_profile(
+                    storage, entity_type="domain", entity_id=domain_id, min_confidence=min_confidence
+                ),
+                "exposures": [
+                    {
+                        "id": exposure.id,
+                        "source": exposure.source,
+                        "source_name": exposure.source_name,
+                        "result_summary": exposure.result_summary,
+                        "last_seen": exposure.last_seen.isoformat(),
+                    }
+                    for exposure in storage.list_domain_exposures(domain_id=domain_id)
+                ],
+                "identity_correlations": [
+                    {
+                        "id": correlation.id,
+                        "email": correlation.email,
+                        "username": correlation.username,
+                        "relation_type": correlation.relation_type,
+                        "confidence": correlation.confidence,
+                    }
+                    for correlation in storage.list_identity_correlations(domain_id=domain_id)
+                ],
+                "relationships": [
+                    _serialize_relationship(relationship)
+                    for relationship in storage.list_relationships_for_entity("domain", str(domain_id), limit=relationship_limit)
+                ],
+                "top_findings": [_serialize_finding(finding) for finding in findings],
+            }
+
+    def _accounts_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            accounts = list(storage.list_accounts())[:limit]
+            profiles = {
+                item["entity_id"]: item
+                for item in storage.list_entity_risk_profiles(
+                    entity_type="account",
+                    min_confidence=min_confidence,
+                    limit=max(limit, 1),
+                )
+            }
+            return {
+                "accounts": [
+                    {
+                        "id": account.id,
+                        "username": account.username,
+                        "provider": account.provider,
+                        "account_type": account.account_type,
+                        "display_name": account.display_name,
+                        "email": account.email,
+                        "organization_id": account.organization_id,
+                        "risk_summary": profiles.get(account.id),
+                    }
+                    for account in accounts
+                ]
+            }
+
+    def _account_payload(
+        self,
+        account_id: int,
+        *,
+        finding_limit: int = 10,
+        relationship_limit: int = 25,
+        min_confidence: str = "likely",
+    ) -> dict[str, object] | None:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            account = storage.get_account(account_id)
+            if account is None:
+                return None
+            findings = self._high_signal_findings(
+                storage.list_findings(limit=max(finding_limit * 4, finding_limit), account_id=account_id),
+                min_confidence=min_confidence,
+                limit=finding_limit,
+            )
+            return {
+                "account": {
+                    "id": account.id,
+                    "username": account.username,
+                    "provider": account.provider,
+                    "account_type": account.account_type,
+                    "display_name": account.display_name,
+                    "email": account.email,
+                    "organization_id": account.organization_id,
+                    "metadata": account.metadata_json,
+                },
+                "risk_summary": self._entity_risk_profile(
+                    storage, entity_type="account", entity_id=account_id, min_confidence=min_confidence
+                ),
+                "repositories": [{"id": repository.id, "full_name": repository.full_name} for repository in account.repositories],
+                "relationships": [
+                    _serialize_relationship(relationship)
+                    for relationship in storage.list_relationships_for_entity("account", str(account_id), limit=relationship_limit)
+                ],
+                "top_findings": [_serialize_finding(finding) for finding in findings],
+            }
+
+    def _finding_payload(self, finding_id: int) -> dict[str, object] | None:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            finding = storage.get_finding(finding_id)
+            if finding is None:
+                return None
+            return {
+                "finding": _serialize_finding(finding, include_detail=True),
+                "evidence": [_serialize_evidence(evidence) for evidence in storage.list_finding_evidence(finding_id)],
+                "risk_scores": [_serialize_risk_score(score) for score in storage.list_risk_scores(finding_id=finding_id)],
+            }
+
+    def _risk_summary_payload(
+        self,
+        *,
+        entity_type: str | None = None,
+        min_confidence: str = "likely",
+        limit: int = 50,
+    ) -> dict[str, object]:
+        with self.session_factory() as session:
+            storage = Storage(session)
+            return {
+                "min_confidence": min_confidence,
+                "risk_profiles": storage.list_entity_risk_profiles(
+                    entity_type=entity_type,
+                    min_confidence=min_confidence,
+                    limit=limit,
+                ),
             }
 
     def _scheduled_scans_payload(self) -> dict[str, object]:
@@ -98,10 +925,25 @@ class OrgscanApiService:
         severity: str | None = None,
         category: str | None = None,
         confidence: str | None = None,
+        high_signal_only: bool = False,
+        min_confidence: str = "likely",
+        artifact_scan_result: dict[str, object] | None = None,
+        artifact_scan_error: str | None = None,
+        finding_action_result: dict[str, object] | None = None,
+        finding_action_error: str | None = None,
     ) -> str:
         with self.session_factory() as session:
             storage = Storage(session)
             summary = build_summary(storage)
+            findings = storage.list_findings(
+                limit=max(limit * 4, limit) if high_signal_only else limit,
+                status=status,
+                severity=severity,
+                category=category,
+                confidence=confidence,
+            )
+            if high_signal_only:
+                findings = self._high_signal_findings(findings, min_confidence=min_confidence, limit=limit)
             filtered_rows = [
                 {
                     "id": finding.id,
@@ -119,16 +961,11 @@ class OrgscanApiService:
                     "source_name": finding.source_name,
                     "repository_id": finding.repository_id,
                     "scan_job_id": finding.scan_job_id,
+                    "risk_score": finding.risk_score or 0,
                     "detected_at": finding.detected_at.isoformat(),
                     "fingerprint": finding.fingerprint,
                 }
-                for finding in storage.list_findings(
-                    limit=limit,
-                    status=status,
-                    severity=severity,
-                    category=category,
-                    confidence=confidence,
-                )
+                for finding in findings
             ]
             return render_dashboard_html(
                 summary,
@@ -142,9 +979,60 @@ class OrgscanApiService:
                     "severity": severity or "",
                     "category": category or "",
                     "confidence": confidence or "",
+                    "high_signal_only": high_signal_only,
+                    "min_confidence": min_confidence,
                 },
                 live=True,
+                artifact_scan_result=artifact_scan_result,
+                artifact_scan_error=artifact_scan_error,
+                finding_action_result=finding_action_result,
+                finding_action_error=finding_action_error,
+                scanner_options=self._artifact_scanner_options(
+                    selected=str((artifact_scan_result or {}).get("scanner") or "custom-patterns")
+                ),
+                access_context_note=self._access_context_note(),
+                tooling=self._tooling_payload(),
             )
+
+    def _dashboard_finding_workflow(
+        self,
+        finding_id: int,
+        payload: DashboardFindingWorkflowRequest,
+    ) -> dict[str, object] | None:
+        action = payload.action.strip().lower()
+        if action == "triage":
+            return self._update_finding_triage(
+                finding_id,
+                FindingUpdateRequest(
+                    status="triaged",
+                    triage_state=payload.triage_state or "reviewing",
+                    triage_owner=payload.owner,
+                    triage_notes=payload.note,
+                ),
+            )
+        if action == "suppress":
+            return self._apply_finding_decision(
+                finding_id,
+                FindingDecisionRequest(
+                    reason=payload.note or "Updated from dashboard",
+                    owner=payload.owner,
+                    note=payload.note,
+                ),
+                status="suppressed",
+            )
+        if action == "accept-risk":
+            return self._apply_finding_decision(
+                finding_id,
+                FindingDecisionRequest(
+                    reason=payload.note or "Updated from dashboard",
+                    owner=payload.owner,
+                    note=payload.note,
+                ),
+                status="accepted_risk",
+            )
+        if action == "reopen":
+            return self._reopen_finding(finding_id, FindingReopenRequest(note=payload.note))
+        raise HTTPException(status_code=400, detail=f"Unsupported dashboard finding action: {payload.action}")
 
     def handle(self, path: str) -> tuple[int, dict[str, object]]:
         parsed = urlparse(path)
@@ -154,6 +1042,8 @@ class OrgscanApiService:
             return 200, {"status": "ok"}
         if route == "/summary":
             return 200, self._summary_payload()
+        if route == "/scanners":
+            return 200, self._tooling_payload()
         if route == "/findings":
             return 200, self._findings_payload(
                 limit=int(params.get("limit", ["50"])[0]),
@@ -161,7 +1051,85 @@ class OrgscanApiService:
                 severity=params.get("severity", [None])[0],
                 category=params.get("category", [None])[0],
                 confidence=params.get("confidence", [None])[0],
+                source_tool=params.get("source_tool", [None])[0],
+                triage_state=params.get("triage_state", [None])[0],
+                organization_id=int(params["organization_id"][0]) if params.get("organization_id") else None,
+                domain_id=int(params["domain_id"][0]) if params.get("domain_id") else None,
+                repository_id=int(params["repository_id"][0]) if params.get("repository_id") else None,
+                account_id=int(params["account_id"][0]) if params.get("account_id") else None,
+                scan_job_id=int(params["scan_job_id"][0]) if params.get("scan_job_id") else None,
+                risk_score_min=float(params["risk_score_min"][0]) if params.get("risk_score_min") else None,
+                risk_score_max=float(params["risk_score_max"][0]) if params.get("risk_score_max") else None,
+                detected_after=self._parse_datetime_param(params.get("detected_after", [None])[0]),
+                detected_before=self._parse_datetime_param(params.get("detected_before", [None])[0]),
+                high_signal_only=params.get("high_signal_only", ["false"])[0].lower() == "true",
+                min_confidence=params.get("min_confidence", ["likely"])[0],
             )
+        if route == "/organizations":
+            return 200, self._organizations_payload(
+                limit=int(params.get("limit", ["100"])[0]),
+                min_confidence=params.get("min_confidence", ["likely"])[0],
+            )
+        if route.startswith("/organizations/"):
+            payload = self._organization_payload(
+                int(route.rsplit("/", 1)[1]),
+                finding_limit=int(params.get("finding_limit", ["10"])[0]),
+                relationship_limit=int(params.get("relationship_limit", ["25"])[0]),
+                min_confidence=params.get("min_confidence", ["likely"])[0],
+            )
+            return (200, payload) if payload is not None else (404, {"error": "Organization not found"})
+        if route == "/repositories":
+            return 200, self._repositories_payload(
+                limit=int(params.get("limit", ["100"])[0]),
+                min_confidence=params.get("min_confidence", ["likely"])[0],
+            )
+        if route.startswith("/repositories/"):
+            payload = self._repository_payload(
+                int(route.rsplit("/", 1)[1]),
+                finding_limit=int(params.get("finding_limit", ["10"])[0]),
+                relationship_limit=int(params.get("relationship_limit", ["25"])[0]),
+                min_confidence=params.get("min_confidence", ["likely"])[0],
+            )
+            return (200, payload) if payload is not None else (404, {"error": "Repository not found"})
+        if route == "/domains":
+            return 200, self._domains_payload(
+                limit=int(params.get("limit", ["100"])[0]),
+                min_confidence=params.get("min_confidence", ["likely"])[0],
+            )
+        if route.startswith("/domains/"):
+            payload = self._domain_payload(
+                int(route.rsplit("/", 1)[1]),
+                finding_limit=int(params.get("finding_limit", ["10"])[0]),
+                relationship_limit=int(params.get("relationship_limit", ["25"])[0]),
+                min_confidence=params.get("min_confidence", ["likely"])[0],
+            )
+            return (200, payload) if payload is not None else (404, {"error": "Domain not found"})
+        if route == "/accounts":
+            return 200, self._accounts_payload(
+                limit=int(params.get("limit", ["100"])[0]),
+                min_confidence=params.get("min_confidence", ["likely"])[0],
+            )
+        if route.startswith("/accounts/"):
+            payload = self._account_payload(
+                int(route.rsplit("/", 1)[1]),
+                finding_limit=int(params.get("finding_limit", ["10"])[0]),
+                relationship_limit=int(params.get("relationship_limit", ["25"])[0]),
+                min_confidence=params.get("min_confidence", ["likely"])[0],
+            )
+            return (200, payload) if payload is not None else (404, {"error": "Account not found"})
+        if route == "/risk-summary":
+            return 200, self._risk_summary_payload(
+                entity_type=params.get("entity_type", [None])[0],
+                min_confidence=params.get("min_confidence", ["likely"])[0],
+                limit=int(params.get("limit", ["50"])[0]),
+            )
+        if route.startswith("/findings/") and route.endswith("/evidence"):
+            finding_id = int(route.removeprefix("/findings/").removesuffix("/evidence").rstrip("/"))
+            payload = self._finding_payload(finding_id)
+            return (200, {"finding_id": finding_id, "evidence": payload["evidence"]}) if payload is not None else (404, {"error": "Finding not found"})
+        if route.startswith("/findings/"):
+            payload = self._finding_payload(int(route.rsplit("/", 1)[1]))
+            return (200, payload) if payload is not None else (404, {"error": "Finding not found"})
         if route == "/scheduled-scans":
             return 200, self._scheduled_scans_payload()
         if route == "/relationships/graph":
@@ -187,6 +1155,10 @@ def create_app(database_url: str) -> FastAPI:
     def summary() -> dict[str, object]:
         return service._summary_payload()
 
+    @app.get("/scanners")
+    def scanners() -> dict[str, object]:
+        return service._tooling_payload()
+
     @app.get("/findings")
     def findings(
         limit: int = Query(50, ge=1, le=500),
@@ -194,6 +1166,19 @@ def create_app(database_url: str) -> FastAPI:
         severity: str | None = None,
         category: str | None = None,
         confidence: str | None = None,
+        source_tool: str | None = None,
+        triage_state: str | None = None,
+        organization_id: int | None = None,
+        domain_id: int | None = None,
+        repository_id: int | None = None,
+        account_id: int | None = None,
+        scan_job_id: int | None = None,
+        risk_score_min: float | None = None,
+        risk_score_max: float | None = None,
+        detected_after: datetime | None = None,
+        detected_before: datetime | None = None,
+        high_signal_only: bool = False,
+        min_confidence: str = Query("likely", pattern="^(verified|likely|heuristic|unverified)$"),
     ) -> dict[str, object]:
         return service._findings_payload(
             limit=limit,
@@ -201,6 +1186,182 @@ def create_app(database_url: str) -> FastAPI:
             severity=severity,
             category=category,
             confidence=confidence,
+            source_tool=source_tool,
+            triage_state=triage_state,
+            organization_id=organization_id,
+            domain_id=domain_id,
+            repository_id=repository_id,
+            account_id=account_id,
+            scan_job_id=scan_job_id,
+            risk_score_min=risk_score_min,
+            risk_score_max=risk_score_max,
+            detected_after=detected_after,
+            detected_before=detected_before,
+            high_signal_only=high_signal_only,
+            min_confidence=min_confidence,
+        )
+
+    @app.get("/findings/{finding_id}")
+    def finding_detail(finding_id: int) -> dict[str, object]:
+        payload = service._finding_payload(finding_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Finding not found")
+        return payload
+
+    @app.patch("/findings/{finding_id}")
+    def update_finding(finding_id: int, payload: FindingUpdateRequest) -> dict[str, object]:
+        result = service._update_finding_triage(finding_id, payload)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Finding not found")
+        return result
+
+    @app.post("/findings/{finding_id}/suppress")
+    def suppress_finding(finding_id: int, payload: FindingDecisionRequest) -> dict[str, object]:
+        result = service._apply_finding_decision(finding_id, payload, status="suppressed")
+        if result is None:
+            raise HTTPException(status_code=404, detail="Finding not found")
+        return result
+
+    @app.post("/findings/{finding_id}/accept-risk")
+    def accept_risk_finding(finding_id: int, payload: FindingDecisionRequest) -> dict[str, object]:
+        result = service._apply_finding_decision(finding_id, payload, status="accepted_risk")
+        if result is None:
+            raise HTTPException(status_code=404, detail="Finding not found")
+        return result
+
+    @app.post("/findings/{finding_id}/reopen")
+    def reopen_finding(finding_id: int, payload: FindingReopenRequest) -> dict[str, object]:
+        result = service._reopen_finding(finding_id, payload)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Finding not found")
+        return result
+
+    @app.get("/findings/{finding_id}/evidence")
+    def finding_evidence(finding_id: int) -> dict[str, object]:
+        payload = service._finding_payload(finding_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Finding not found")
+        return {"finding_id": finding_id, "evidence": payload["evidence"]}
+
+    @app.get("/organizations")
+    def organizations(
+        limit: int = Query(100, ge=1, le=500),
+        min_confidence: str = Query("likely", pattern="^(verified|likely|heuristic|unverified)$"),
+    ) -> dict[str, object]:
+        return service._organizations_payload(limit=limit, min_confidence=min_confidence)
+
+    @app.get("/organizations/{organization_id}")
+    def organization_detail(
+        organization_id: int,
+        finding_limit: int = Query(10, ge=1, le=100),
+        relationship_limit: int = Query(25, ge=1, le=200),
+        min_confidence: str = Query("likely", pattern="^(verified|likely|heuristic|unverified)$"),
+    ) -> dict[str, object]:
+        payload = service._organization_payload(
+            organization_id,
+            finding_limit=finding_limit,
+            relationship_limit=relationship_limit,
+            min_confidence=min_confidence,
+        )
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Organization not found")
+        return payload
+
+    @app.get("/repositories")
+    def repositories(
+        limit: int = Query(100, ge=1, le=500),
+        min_confidence: str = Query("likely", pattern="^(verified|likely|heuristic|unverified)$"),
+    ) -> dict[str, object]:
+        return service._repositories_payload(limit=limit, min_confidence=min_confidence)
+
+    @app.get("/repositories/{repository_id}")
+    def repository_detail(
+        repository_id: int,
+        finding_limit: int = Query(10, ge=1, le=100),
+        relationship_limit: int = Query(25, ge=1, le=200),
+        min_confidence: str = Query("likely", pattern="^(verified|likely|heuristic|unverified)$"),
+    ) -> dict[str, object]:
+        payload = service._repository_payload(
+            repository_id,
+            finding_limit=finding_limit,
+            relationship_limit=relationship_limit,
+            min_confidence=min_confidence,
+        )
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Repository not found")
+        return payload
+
+    @app.get("/domains")
+    def domains(
+        limit: int = Query(100, ge=1, le=500),
+        min_confidence: str = Query("likely", pattern="^(verified|likely|heuristic|unverified)$"),
+    ) -> dict[str, object]:
+        return service._domains_payload(limit=limit, min_confidence=min_confidence)
+
+    @app.get("/domains/{domain_id}")
+    def domain_detail(
+        domain_id: int,
+        finding_limit: int = Query(10, ge=1, le=100),
+        relationship_limit: int = Query(25, ge=1, le=200),
+        min_confidence: str = Query("likely", pattern="^(verified|likely|heuristic|unverified)$"),
+    ) -> dict[str, object]:
+        payload = service._domain_payload(
+            domain_id,
+            finding_limit=finding_limit,
+            relationship_limit=relationship_limit,
+            min_confidence=min_confidence,
+        )
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Domain not found")
+        return payload
+
+    @app.get("/accounts")
+    def accounts(
+        limit: int = Query(100, ge=1, le=500),
+        min_confidence: str = Query("likely", pattern="^(verified|likely|heuristic|unverified)$"),
+    ) -> dict[str, object]:
+        return service._accounts_payload(limit=limit, min_confidence=min_confidence)
+
+    @app.get("/accounts/{account_id}")
+    def account_detail(
+        account_id: int,
+        finding_limit: int = Query(10, ge=1, le=100),
+        relationship_limit: int = Query(25, ge=1, le=200),
+        min_confidence: str = Query("likely", pattern="^(verified|likely|heuristic|unverified)$"),
+    ) -> dict[str, object]:
+        payload = service._account_payload(
+            account_id,
+            finding_limit=finding_limit,
+            relationship_limit=relationship_limit,
+            min_confidence=min_confidence,
+        )
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        return payload
+
+    @app.get("/risk-summary")
+    def risk_summary(
+        entity_type: str | None = Query(None, pattern="^(organization|domain|repository|account)$|^$"),
+        min_confidence: str = Query("likely", pattern="^(verified|likely|heuristic|unverified)$"),
+        limit: int = Query(50, ge=1, le=500),
+    ) -> dict[str, object]:
+        return service._risk_summary_payload(entity_type=entity_type or None, min_confidence=min_confidence, limit=limit)
+
+    @app.post("/artifact-scans")
+    async def artifact_scans(
+        artifact: UploadFile = File(...),
+        scanner: str = Form("custom-patterns"),
+        organization: str | None = Form(None),
+        repository: str | None = Form(None),
+        provider: str = Form("github"),
+    ) -> dict[str, object]:
+        return service._scan_uploaded_artifact(
+            filename=artifact.filename,
+            content=await artifact.read(),
+            scanner_name=scanner,
+            organization=organization,
+            repository=repository,
+            provider=provider,
         )
 
     @app.get("/scheduled-scans")
@@ -223,6 +1384,8 @@ def create_app(database_url: str) -> FastAPI:
         severity: str | None = None,
         category: str | None = None,
         confidence: str | None = None,
+        high_signal_only: bool = False,
+        min_confidence: str = Query("likely", pattern="^(verified|likely|heuristic|unverified)$"),
     ) -> HTMLResponse:
         return HTMLResponse(
             service._dashboard_html(
@@ -232,8 +1395,115 @@ def create_app(database_url: str) -> FastAPI:
                 severity=severity,
                 category=category,
                 confidence=confidence,
+                high_signal_only=high_signal_only,
+                min_confidence=min_confidence,
             )
         )
+
+    @app.get("/dashboard/findings/{finding_id}", response_class=HTMLResponse)
+    def dashboard_finding_detail(finding_id: int) -> HTMLResponse:
+        payload = service._finding_html_payload(finding_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Finding not found")
+        return HTMLResponse(render_finding_detail_html(payload))
+
+    @app.get("/dashboard/scan-jobs/{scan_job_id}", response_class=HTMLResponse)
+    def dashboard_scan_job_detail(scan_job_id: int) -> HTMLResponse:
+        payload = service._scan_job_payload(scan_job_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Scan job not found")
+        return HTMLResponse(render_scan_job_detail_html(payload))
+
+    @app.get("/dashboard/graph", response_class=HTMLResponse)
+    def dashboard_graph(limit: int = Query(200, ge=1, le=1000)) -> HTMLResponse:
+        return HTMLResponse(render_graph_html(service._relationship_graph_payload(limit=limit)))
+
+    @app.post("/dashboard/artifact-scans", response_class=HTMLResponse)
+    async def dashboard_artifact_scans(
+        artifact: UploadFile = File(...),
+        scanner: str = Form("custom-patterns"),
+        organization: str | None = Form(None),
+        repository: str | None = Form(None),
+        provider: str = Form("github"),
+    ) -> HTMLResponse:
+        try:
+            result = service._scan_uploaded_artifact(
+                filename=artifact.filename,
+                content=await artifact.read(),
+                scanner_name=scanner,
+                organization=organization,
+                repository=repository,
+                provider=provider,
+            )
+            return HTMLResponse(
+                service._dashboard_html(
+                    artifact_scan_result=result,
+                    high_signal_only=False,
+                    min_confidence="likely",
+                )
+            )
+        except HTTPException as exc:
+            return HTMLResponse(
+                service._dashboard_html(artifact_scan_error=str(exc.detail), high_signal_only=False, min_confidence="likely"),
+                status_code=exc.status_code,
+            )
+
+    @app.post("/dashboard/findings/{finding_id}/workflow", response_class=HTMLResponse)
+    async def dashboard_finding_workflow(
+        finding_id: int,
+        action: str = Form(...),
+        owner: str | None = Form(None),
+        note: str | None = Form(None),
+        triage_state: str | None = Form(None),
+        limit: int = Form(100),
+        days: int = Form(30),
+        status: str | None = Form(None),
+        severity: str | None = Form(None),
+        category: str | None = Form(None),
+        confidence: str | None = Form(None),
+        high_signal_only: bool = Form(False),
+        min_confidence: str = Form("likely"),
+    ) -> HTMLResponse:
+        try:
+            result = service._dashboard_finding_workflow(
+                finding_id,
+                DashboardFindingWorkflowRequest(
+                    action=action,
+                    owner=owner,
+                    note=note,
+                    triage_state=triage_state,
+                ),
+            )
+            if result is None:
+                raise HTTPException(status_code=404, detail="Finding not found")
+            return HTMLResponse(
+                service._dashboard_html(
+                    limit=limit,
+                    days=days,
+                    status=status,
+                    severity=severity,
+                    category=category,
+                    confidence=confidence,
+                    high_signal_only=high_signal_only,
+                    min_confidence=min_confidence,
+                    finding_action_result=result["finding"],
+                )
+            )
+        except HTTPException as exc:
+            return HTMLResponse(
+                service._dashboard_html(
+                    limit=limit,
+                    days=days,
+                    status=status,
+                    severity=severity,
+                    category=category,
+                    confidence=confidence,
+                    high_signal_only=high_signal_only,
+                    min_confidence=min_confidence,
+                    finding_action_error=str(exc.detail),
+                ),
+                status_code=exc.status_code,
+            )
 
     return app
 

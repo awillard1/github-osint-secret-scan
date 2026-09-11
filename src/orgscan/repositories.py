@@ -4,10 +4,12 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from orgscan.models import (
+    QueueTask,
+    RateLimitState,
     Account,
     Domain,
     DomainExposure,
@@ -18,15 +20,26 @@ from orgscan.models import (
     Relationship,
     Repository,
     RiskScore,
+    ScheduledReport,
     ScheduledScan,
     ScanJob,
     Suppression,
     ToolRun,
+    User,
+    UserSession,
+    UserTenantMembership,
 )
 from orgscan.schemas import CanonicalFinding
 
 
 class Storage:
+    CONFIDENCE_ORDER = (
+        "unverified",
+        "heuristic",
+        "likely",
+        "verified",
+    )
+
     def __init__(self, session: Session) -> None:
         self.session = session
 
@@ -76,6 +89,90 @@ class Storage:
 
     def get_repository_by_full_name(self, full_name: str) -> Repository | None:
         return self.session.scalar(select(Repository).where(Repository.full_name == full_name))
+
+    def get_organization(self, organization_id: int) -> Organization | None:
+        return self.session.get(Organization, organization_id)
+
+    def get_domain(self, domain_id: int) -> Domain | None:
+        return self.session.get(Domain, domain_id)
+
+    def get_repository(self, repository_id: int) -> Repository | None:
+        return self.session.get(Repository, repository_id)
+
+    def get_account(self, account_id: int) -> Account | None:
+        return self.session.get(Account, account_id)
+
+    def create_user(self, username: str, **kwargs: Any) -> User:
+        user = User(username=username, **kwargs)
+        self.session.add(user)
+        self.session.flush()
+        return user
+
+    def get_user_by_username(self, username: str) -> User | None:
+        return self.session.scalar(select(User).where(User.username == username))
+
+    def get_or_create_user(self, username: str, **kwargs: Any) -> tuple[User, bool]:
+        existing = self.get_user_by_username(username)
+        if existing:
+            for key, value in kwargs.items():
+                if value is not None:
+                    setattr(existing, key, value)
+            self.session.flush()
+            return existing, False
+        return self.create_user(username, **kwargs), True
+
+    def grant_tenant_membership(self, user_id: int, tenant_key: str, role: str, **kwargs: Any) -> UserTenantMembership:
+        existing = self.session.scalar(
+            select(UserTenantMembership).where(
+                UserTenantMembership.user_id == user_id,
+                UserTenantMembership.tenant_key == tenant_key,
+            )
+        )
+        if existing is not None:
+            existing.role = role
+            for key, value in kwargs.items():
+                if value is not None:
+                    setattr(existing, key, value)
+            self.session.flush()
+            return existing
+        membership = UserTenantMembership(user_id=user_id, tenant_key=tenant_key, role=role, **kwargs)
+        self.session.add(membership)
+        self.session.flush()
+        return membership
+
+    def list_user_tenant_memberships(self, user_id: int | None = None) -> Sequence[UserTenantMembership]:
+        query = select(UserTenantMembership).order_by(UserTenantMembership.tenant_key.asc(), UserTenantMembership.id.asc())
+        if user_id is not None:
+            query = query.where(UserTenantMembership.user_id == user_id)
+        return list(self.session.scalars(query))
+
+    def create_user_session(self, user_id: int, token_hash: str, **kwargs: Any) -> UserSession:
+        session_row = UserSession(user_id=user_id, token_hash=token_hash, **kwargs)
+        self.session.add(session_row)
+        self.session.flush()
+        return session_row
+
+    def get_user_session_by_hash(self, token_hash: str) -> UserSession | None:
+        return self.session.scalar(select(UserSession).where(UserSession.token_hash == token_hash))
+
+    def list_user_sessions(self, user_id: int | None = None) -> Sequence[UserSession]:
+        query = select(UserSession).order_by(UserSession.created_at.desc(), UserSession.id.desc())
+        if user_id is not None:
+            query = query.where(UserSession.user_id == user_id)
+        return list(self.session.scalars(query))
+
+    def revoke_user_session(self, session_id: int) -> UserSession:
+        session_row = self.session.get(UserSession, session_id)
+        if session_row is None:
+            raise ValueError(f"User session {session_id} does not exist")
+        session_row.revoked_at = datetime.now(UTC)
+        self.session.flush()
+        return session_row
+
+    def touch_user_session(self, session_row: UserSession) -> UserSession:
+        session_row.last_used_at = datetime.now(UTC)
+        self.session.flush()
+        return session_row
 
     def get_or_create_repository(self, full_name: str, **kwargs: Any) -> tuple[Repository, bool]:
         existing = self.get_repository_by_full_name(full_name)
@@ -332,15 +429,185 @@ class Storage:
         self.session.flush()
         return scheduled_scan
 
+    def create_scheduled_report(
+        self,
+        target_type: str,
+        next_run_at: datetime,
+        **kwargs: Any,
+    ) -> ScheduledReport:
+        scheduled_report = ScheduledReport(
+            target_type=target_type,
+            next_run_at=next_run_at,
+            **kwargs,
+        )
+        self.session.add(scheduled_report)
+        self.session.flush()
+        return scheduled_report
+
+    def create_queue_task(
+        self,
+        scheduled_scan_id: int,
+        *,
+        backend: str,
+        queue_name: str,
+        status: str,
+        max_attempts: int,
+        available_at: datetime,
+        metadata_json: dict[str, Any] | None = None,
+    ) -> QueueTask:
+        task = QueueTask(
+            scheduled_scan_id=scheduled_scan_id,
+            backend=backend,
+            queue_name=queue_name,
+            status=status,
+            max_attempts=max_attempts,
+            available_at=available_at,
+            metadata_json=metadata_json or {},
+        )
+        self.session.add(task)
+        self.session.flush()
+        return task
+
+    def get_queue_task(self, queue_task_id: int) -> QueueTask | None:
+        return self.session.get(QueueTask, queue_task_id)
+
+    def list_queue_tasks(
+        self,
+        backend: str | None = None,
+        status: str | None = None,
+        queue_name: str | None = None,
+        limit: int | None = 100,
+    ) -> Sequence[QueueTask]:
+        query = select(QueueTask).order_by(QueueTask.created_at.desc(), QueueTask.id.desc())
+        if backend is not None:
+            query = query.where(QueueTask.backend == backend)
+        if status is not None:
+            query = query.where(QueueTask.status == status)
+        if queue_name is not None:
+            query = query.where(QueueTask.queue_name == queue_name)
+        if limit is not None:
+            query = query.limit(limit)
+        return list(self.session.scalars(query))
+
+    def find_active_queue_task(self, scheduled_scan_id: int, *, backend: str) -> QueueTask | None:
+        return self.session.scalar(
+            select(QueueTask)
+            .where(
+                QueueTask.scheduled_scan_id == scheduled_scan_id,
+                QueueTask.backend == backend,
+                QueueTask.status.in_(("queued", "running")),
+            )
+            .order_by(QueueTask.id.desc())
+            .limit(1)
+        )
+
+    def claim_queue_task(
+        self,
+        *,
+        backend: str,
+        queue_name: str,
+        worker_id: str,
+        lease_until: datetime,
+        now: datetime | None = None,
+    ) -> QueueTask | None:
+        current = now or datetime.now(UTC)
+        candidates = list(
+            self.session.scalars(
+                select(QueueTask)
+                .where(
+                    QueueTask.backend == backend,
+                    QueueTask.queue_name == queue_name,
+                    QueueTask.status == "queued",
+                    QueueTask.available_at <= current,
+                )
+                .order_by(QueueTask.available_at.asc(), QueueTask.id.asc())
+            )
+        )
+        for task in candidates:
+            if task.lease_expires_at is not None and task.lease_expires_at > current:
+                continue
+            task.status = "running"
+            task.lease_owner = worker_id
+            task.lease_expires_at = lease_until
+            task.started_at = current
+            task.attempt_count += 1
+            self.session.flush()
+            return task
+        return None
+
+    def mark_queue_task_completed(self, task: QueueTask, *, scan_job_id: int | None = None, tool_run_id: int | None = None) -> QueueTask:
+        task.status = "completed"
+        task.completed_at = datetime.now(UTC)
+        task.lease_owner = None
+        task.lease_expires_at = None
+        task.result_scan_job_id = scan_job_id
+        task.result_tool_run_id = tool_run_id
+        task.last_error = None
+        self.session.flush()
+        return task
+
+    def mark_queue_task_retry(self, task: QueueTask, *, available_at: datetime, error_message: str) -> QueueTask:
+        task.status = "queued"
+        task.available_at = available_at
+        task.lease_owner = None
+        task.lease_expires_at = None
+        task.last_error = error_message
+        self.session.flush()
+        return task
+
+    def mark_queue_task_failed(self, task: QueueTask, *, error_message: str) -> QueueTask:
+        task.status = "failed"
+        task.completed_at = datetime.now(UTC)
+        task.lease_owner = None
+        task.lease_expires_at = None
+        task.last_error = error_message
+        self.session.flush()
+        return task
+
+    def get_rate_limit_state(self, scope: str) -> RateLimitState | None:
+        return self.session.scalar(select(RateLimitState).where(RateLimitState.scope == scope))
+
+    def get_or_create_rate_limit_state(self, scope: str, **kwargs: Any) -> tuple[RateLimitState, bool]:
+        existing = self.get_rate_limit_state(scope)
+        if existing is not None:
+            for key, value in kwargs.items():
+                if value is not None:
+                    setattr(existing, key, value)
+            self.session.flush()
+            return existing, False
+        state = RateLimitState(scope=scope, **kwargs)
+        self.session.add(state)
+        self.session.flush()
+        return state, True
+
+    def list_rate_limit_states(self, backend: str | None = None, limit: int | None = 100) -> Sequence[RateLimitState]:
+        query = select(RateLimitState).order_by(RateLimitState.scope.asc())
+        if backend is not None:
+            query = query.where(RateLimitState.backend == backend)
+        if limit is not None:
+            query = query.limit(limit)
+        return list(self.session.scalars(query))
+
     def list_findings(
         self,
-        limit: int = 50,
+        limit: int | None = 50,
         status: str | None = None,
         category: str | None = None,
         severity: str | None = None,
         confidence: str | None = None,
+        source_tool: str | None = None,
+        triage_state: str | None = None,
+        organization_id: int | None = None,
+        domain_id: int | None = None,
+        repository_id: int | None = None,
+        account_id: int | None = None,
+        scan_job_id: int | None = None,
+        risk_score_min: float | None = None,
+        risk_score_max: float | None = None,
+        detected_after: datetime | None = None,
+        detected_before: datetime | None = None,
     ) -> Sequence[Finding]:
-        query = select(Finding).order_by(Finding.detected_at.desc(), Finding.id.desc()).limit(limit)
+        query = select(Finding).order_by(Finding.detected_at.desc(), Finding.id.desc())
         if status:
             query = query.where(Finding.status == status)
         if category:
@@ -349,10 +616,68 @@ class Storage:
             query = query.where(Finding.severity == severity)
         if confidence:
             query = query.where(Finding.confidence == confidence)
+        if source_tool:
+            query = query.where(Finding.source_tool == source_tool)
+        if triage_state:
+            query = query.where(Finding.triage_state == triage_state)
+        if organization_id is not None:
+            query = query.where(Finding.organization_id == organization_id)
+        if domain_id is not None:
+            query = query.where(Finding.domain_id == domain_id)
+        if repository_id is not None:
+            query = query.where(Finding.repository_id == repository_id)
+        if account_id is not None:
+            query = query.where(Finding.account_id == account_id)
+        if scan_job_id is not None:
+            query = query.where(Finding.scan_job_id == scan_job_id)
+        if risk_score_min is not None:
+            query = query.where(Finding.risk_score >= risk_score_min)
+        if risk_score_max is not None:
+            query = query.where(Finding.risk_score <= risk_score_max)
+        if detected_after is not None:
+            query = query.where(Finding.detected_at >= self._normalize_datetime_filter(detected_after))
+        if detected_before is not None:
+            query = query.where(Finding.detected_at <= self._normalize_datetime_filter(detected_before))
+        if limit is not None:
+            query = query.limit(limit)
         return list(self.session.scalars(query))
+
+    @staticmethod
+    def _normalize_datetime_filter(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(UTC).replace(tzinfo=None)
 
     def get_finding(self, finding_id: int) -> Finding | None:
         return self.session.get(Finding, finding_id)
+
+    def get_scan_job(self, scan_job_id: int) -> ScanJob | None:
+        return self.session.get(ScanJob, scan_job_id)
+
+    def get_tool_run(self, tool_run_id: int) -> ToolRun | None:
+        return self.session.get(ToolRun, tool_run_id)
+
+    def list_finding_evidence(self, finding_id: int) -> Sequence[Evidence]:
+        query = select(Evidence).where(Evidence.finding_id == finding_id).order_by(Evidence.observed_at.desc(), Evidence.id.desc())
+        return list(self.session.scalars(query))
+
+    def list_risk_scores(
+        self,
+        *,
+        finding_id: int | None = None,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
+        limit: int = 50,
+    ) -> Sequence[RiskScore]:
+        query = select(RiskScore)
+        if finding_id is not None:
+            query = query.where(RiskScore.finding_id == finding_id)
+        if entity_type is not None:
+            query = query.where(RiskScore.entity_type == entity_type)
+        if entity_id is not None:
+            query = query.where(RiskScore.entity_id == entity_id)
+        query = query.order_by(RiskScore.calculated_at.desc(), RiskScore.id.desc()).limit(limit)
+        return list(self.session.scalars(query))
 
     def update_finding_triage(
         self,
@@ -420,10 +745,26 @@ class Storage:
     def list_accounts(self) -> Sequence[Account]:
         return list(self.session.scalars(select(Account).order_by(Account.username.asc())))
 
-    def list_domain_exposures(self, domain_id: int | None = None) -> Sequence[DomainExposure]:
+    def list_domain_exposures(
+        self,
+        domain_id: int | None = None,
+        *,
+        source_name: str | None = None,
+        source_class: str | None = None,
+        confidence: str | None = None,
+        limit: int | None = None,
+    ) -> Sequence[DomainExposure]:
         query = select(DomainExposure).order_by(DomainExposure.last_seen.desc(), DomainExposure.id.desc())
         if domain_id is not None:
             query = query.where(DomainExposure.domain_id == domain_id)
+        if source_name:
+            query = query.where(DomainExposure.source_name == source_name)
+        if source_class:
+            query = query.where(DomainExposure.source_class == source_class)
+        if confidence:
+            query = query.where(DomainExposure.confidence == confidence)
+        if limit is not None:
+            query = query.limit(limit)
         return list(self.session.scalars(query))
 
     def list_identity_correlations(self, domain_id: int | None = None) -> Sequence[IdentityCorrelation]:
@@ -432,12 +773,18 @@ class Storage:
             query = query.where(IdentityCorrelation.domain_id == domain_id)
         return list(self.session.scalars(query))
 
-    def list_scan_jobs(self, limit: int = 25) -> Sequence[ScanJob]:
-        query = select(ScanJob).order_by(ScanJob.created_at.desc(), ScanJob.id.desc()).limit(limit)
+    def list_scan_jobs(self, limit: int | None = 25) -> Sequence[ScanJob]:
+        query = select(ScanJob).order_by(ScanJob.created_at.desc(), ScanJob.id.desc())
+        if limit is not None:
+            query = query.limit(limit)
         return list(self.session.scalars(query))
 
-    def list_tool_runs(self, limit: int = 25) -> Sequence[ToolRun]:
-        query = select(ToolRun).order_by(ToolRun.created_at.desc(), ToolRun.id.desc()).limit(limit)
+    def list_tool_runs(self, limit: int = 25, scan_job_id: int | None = None) -> Sequence[ToolRun]:
+        query = select(ToolRun).order_by(ToolRun.created_at.desc(), ToolRun.id.desc())
+        if scan_job_id is not None:
+            query = query.where(ToolRun.scan_job_id == scan_job_id)
+        if limit is not None:
+            query = query.limit(limit)
         return list(self.session.scalars(query))
 
     def list_scheduled_scans(self, enabled_only: bool = False) -> Sequence[ScheduledScan]:
@@ -446,8 +793,30 @@ class Storage:
             query = query.where(ScheduledScan.enabled.is_(True))
         return list(self.session.scalars(query))
 
-    def list_relationships(self, limit: int = 250) -> Sequence[Relationship]:
-        query = select(Relationship).order_by(Relationship.created_at.desc(), Relationship.id.desc()).limit(limit)
+    def list_scheduled_reports(self, enabled_only: bool = False) -> Sequence[ScheduledReport]:
+        query = select(ScheduledReport).order_by(ScheduledReport.next_run_at.asc(), ScheduledReport.id.asc())
+        if enabled_only:
+            query = query.where(ScheduledReport.enabled.is_(True))
+        return list(self.session.scalars(query))
+
+    def list_relationships(self, limit: int | None = 250) -> Sequence[Relationship]:
+        query = select(Relationship).order_by(Relationship.created_at.desc(), Relationship.id.desc())
+        if limit is not None:
+            query = query.limit(limit)
+        return list(self.session.scalars(query))
+
+    def list_relationships_for_entity(self, entity_type: str, entity_id: str, limit: int = 100) -> Sequence[Relationship]:
+        query = (
+            select(Relationship)
+            .where(
+                or_(
+                    (Relationship.from_entity_type == entity_type) & (Relationship.from_entity_id == entity_id),
+                    (Relationship.to_entity_type == entity_type) & (Relationship.to_entity_id == entity_id),
+                )
+            )
+            .order_by(Relationship.created_at.desc(), Relationship.id.desc())
+            .limit(limit)
+        )
         return list(self.session.scalars(query))
 
     def list_due_scheduled_scans(self, now: datetime | None = None) -> Sequence[ScheduledScan]:
@@ -456,6 +825,15 @@ class Storage:
             select(ScheduledScan)
             .where(ScheduledScan.enabled.is_(True), ScheduledScan.next_run_at <= current)
             .order_by(ScheduledScan.next_run_at.asc(), ScheduledScan.id.asc())
+        )
+        return list(self.session.scalars(query))
+
+    def list_due_scheduled_reports(self, now: datetime | None = None) -> Sequence[ScheduledReport]:
+        current = now or datetime.now(UTC)
+        query = (
+            select(ScheduledReport)
+            .where(ScheduledReport.enabled.is_(True), ScheduledReport.next_run_at <= current)
+            .order_by(ScheduledReport.next_run_at.asc(), ScheduledReport.id.asc())
         )
         return list(self.session.scalars(query))
 
@@ -475,6 +853,23 @@ class Storage:
 
     def get_scheduled_scan(self, scheduled_scan_id: int) -> ScheduledScan | None:
         return self.session.get(ScheduledScan, scheduled_scan_id)
+
+    def mark_scheduled_report_run(
+        self,
+        scheduled_report: ScheduledReport,
+        next_run_at: datetime,
+        *,
+        enabled: bool | None = None,
+    ) -> ScheduledReport:
+        scheduled_report.last_run_at = datetime.now(UTC)
+        scheduled_report.next_run_at = next_run_at
+        if enabled is not None:
+            scheduled_report.enabled = enabled
+        self.session.flush()
+        return scheduled_report
+
+    def get_scheduled_report(self, scheduled_report_id: int) -> ScheduledReport | None:
+        return self.session.get(ScheduledReport, scheduled_report_id)
 
     def finding_counts_by_severity(self) -> Mapping[str, int]:
         rows = self.session.execute(
@@ -507,6 +902,79 @@ class Storage:
             .limit(limit)
         )
         return list(self.session.scalars(query))
+
+    def list_entity_risk_profiles(
+        self,
+        *,
+        entity_type: str | None = None,
+        entity_id: int | None = None,
+        min_confidence: str = "likely",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        entity_mappings = {
+            "organization": (Finding.organization_id, Organization, Organization.name),
+            "domain": (Finding.domain_id, Domain, Domain.name),
+            "repository": (Finding.repository_id, Repository, Repository.full_name),
+            "account": (Finding.account_id, Account, Account.username),
+        }
+        if entity_type is not None and entity_type not in entity_mappings:
+            raise ValueError(f"Unsupported entity type: {entity_type}")
+
+        selected_types = [entity_type] if entity_type is not None else list(entity_mappings)
+        profiles: list[dict[str, Any]] = []
+        allowed_confidences = self._allowed_confidences(min_confidence)
+
+        for current_type in selected_types:
+            entity_column, model, label_column = entity_mappings[current_type]
+            query = (
+                select(
+                    entity_column.label("entity_id"),
+                    label_column.label("entity_name"),
+                    func.count(Finding.id).label("finding_count"),
+                    func.sum(case((Finding.status.not_in(("resolved", "suppressed")), 1), else_=0)).label("active_finding_count"),
+                    func.sum(case((Finding.status == "suppressed", 1), else_=0)).label("suppressed_count"),
+                    func.sum(case((Finding.confidence == "verified", 1), else_=0)).label("verified_count"),
+                    func.sum(case((Finding.confidence == "likely", 1), else_=0)).label("likely_count"),
+                    func.sum(case((Finding.confidence == "heuristic", 1), else_=0)).label("heuristic_count"),
+                    func.max(Finding.risk_score).label("max_risk_score"),
+                    func.avg(Finding.risk_score).label("average_risk_score"),
+                )
+                .select_from(Finding)
+                .join(model, model.id == entity_column, isouter=True)
+                .where(entity_column.is_not(None), Finding.confidence.in_(allowed_confidences))
+                .group_by(entity_column, label_column)
+                .order_by(func.max(Finding.risk_score).desc().nullslast(), func.count(Finding.id).desc(), label_column.asc())
+            )
+            if entity_id is not None:
+                query = query.where(entity_column == entity_id)
+            rows = self.session.execute(query.limit(limit))
+            for row in rows:
+                profiles.append(
+                    {
+                        "entity_type": current_type,
+                        "entity_id": row.entity_id,
+                        "entity_name": row.entity_name or f"{current_type}:{row.entity_id}",
+                        "finding_count": int(row.finding_count or 0),
+                        "active_finding_count": int(row.active_finding_count or 0),
+                        "suppressed_count": int(row.suppressed_count or 0),
+                        "verified_count": int(row.verified_count or 0),
+                        "likely_count": int(row.likely_count or 0),
+                        "heuristic_count": int(row.heuristic_count or 0),
+                        "max_risk_score": float(row.max_risk_score or 0),
+                        "average_risk_score": float(row.average_risk_score or 0),
+                    }
+                )
+
+        profiles.sort(
+            key=lambda item: (
+                item["max_risk_score"],
+                item["finding_count"],
+                item["entity_type"],
+                str(item["entity_name"]),
+            ),
+            reverse=True,
+        )
+        return profiles[:limit]
 
     def finding_counts_by_repository(self, limit: int = 10) -> list[tuple[str, int]]:
         rows = self.session.execute(
@@ -543,10 +1011,24 @@ class Storage:
             "relationships": Relationship,
             "risk_scores": RiskScore,
             "scheduled_scans": ScheduledScan,
+            "scheduled_reports": ScheduledReport,
+            "queue_tasks": QueueTask,
+            "rate_limit_states": RateLimitState,
             "suppressions": Suppression,
             "tool_runs": ToolRun,
+            "users": User,
+            "user_tenant_memberships": UserTenantMembership,
+            "user_sessions": UserSession,
         }
         return {
             name: self.session.scalar(select(func.count()).select_from(model)) or 0
             for name, model in tables.items()
         }
+
+    @classmethod
+    def _allowed_confidences(cls, min_confidence: str) -> tuple[str, ...]:
+        try:
+            start_index = cls.CONFIDENCE_ORDER.index(min_confidence)
+        except ValueError as exc:
+            raise ValueError(f"Unsupported confidence level: {min_confidence}") from exc
+        return cls.CONFIDENCE_ORDER[start_index:]

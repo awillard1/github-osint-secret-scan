@@ -4,6 +4,7 @@ This document summarizes what the current repository can accomplish directly and
 
 ## Already integrated or supported
 - Built-in custom pattern scanning for local files and directories
+- Built-in git-history pattern scanning for historical added and removed diff content in Git repositories
 - Built-in repository governance scanning for missing CODEOWNERS, missing SECURITY.md, and unpinned GitHub Actions references
 - Optional `gitleaks` integration for generic secret scanning
 - Optional `detect-secrets` integration for complementary baseline-style secret detection
@@ -13,11 +14,13 @@ This document summarizes what the current repository can accomplish directly and
 - Optional `crt.sh` integration for certificate-transparency host discovery
 - Optional `whois` integration for registrar and nameserver enrichment
 - Optional `dnspython` integration for DNS record enrichment
+- Optional paid-provider integrations for Have I Been Pwned, DeHashed, and Intelligence X
 - GitHub REST API discovery for public repository and organization metadata
 - Local correlation of domains against stored repository metadata and account emails
 - SQLite-backed persistence, exports, reports, and local API responses
-- FastAPI-served live dashboard and JSON API for local interactive use
+- FastAPI-served live dashboard and JSON API for local interactive use, including finding drill-downs, scan-job drill-downs, graph view, and artifact upload workflows
 - Optional Redis/RQ-backed scheduled scan queue workers
+- tooling readiness surfaced in CLI/API/dashboard with configured binary paths and install guidance for optional OSS integrations
 
 ## High-value OSS tools to add next
 
@@ -32,7 +35,6 @@ This document summarizes what the current repository can accomplish directly and
 
 ### Execution and scale
 - **Dramatiq** or **Celery** with **Redis**: richer worker orchestration, retries, and scaling beyond the current initial RQ queue backend
-- **Alembic**: formal schema migrations instead of lightweight SQLite evolution
 - richer client-side visualization stack for graph exploration and advanced dashboard UX beyond the current server-rendered FastAPI dashboard
 
 ## Gaps that cannot be fully solved by simple library swaps alone
@@ -44,8 +46,8 @@ This document summarizes what the current repository can accomplish directly and
 
 ## Current recommendation
 Use the current repository as the local-first control plane, then layer in:
-1. Semgrep + crt.sh enrichment
-2. DNS/WHOIS tooling
+1. YARA and ripgrep-style heuristics to close the biggest remaining open-source scanner gaps
+2. Semgrep + crt.sh + ProjectDiscovery enrichment with clear local install guidance
 3. deeper retries/rate-aware scaling on top of the initial Redis/RQ queue workers
-4. richer graph/trend visualization on top of the current FastAPI dashboard
-5. Optional paid providers after the free-first path is solid
+4. stronger tenant-aware auth around the current FastAPI dashboard before shared beta usage
+5. Optional paid providers such as Have I Been Pwned, DeHashed, and Intelligence X after the free-first path is solid

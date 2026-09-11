@@ -1,4 +1,6 @@
 import json
+import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -14,6 +16,11 @@ from orgscan.schemas import CanonicalFinding
 runner = CliRunner()
 
 
+def _git(*args: str, cwd: Path) -> None:
+    completed = subprocess.run(["git", *args], cwd=cwd, check=False, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_cli_init_db_and_status(monkeypatch, tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'cli.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
@@ -23,10 +30,12 @@ def test_cli_init_db_and_status(monkeypatch, tmp_path: Path) -> None:
     init_result = runner.invoke(app, ["init-db"])
     assert init_result.exit_code == 0
     assert "Initialized database" in init_result.stdout
+    assert "schema_revision: 20260909_0005" in init_result.stdout
 
     status_result = runner.invoke(app, ["status"])
     assert status_result.exit_code == 0
     assert f"database_url: {database_url}" in status_result.stdout
+    assert "schema_revision: 20260909_0005" in status_result.stdout
     assert "organizations: 0" in status_result.stdout
 
     setup_result = runner.invoke(app, ["setup", "--verify-only"])
@@ -46,9 +55,12 @@ def test_cli_add_target_and_findings(monkeypatch, tmp_path: Path) -> None:
     assert add_org_result.exit_code == 0
     assert "Created organization" in add_org_result.stdout
 
+    add_tenant_org_result = runner.invoke(app, ["add-target", "organization", "tenant-org", "--tenant-key", "tenant-a"])
+    assert add_tenant_org_result.exit_code == 0
+
     add_domain_result = runner.invoke(
         app,
-        ["add-target", "domain", "example.com", "--organization", "example-org"],
+        ["add-target", "domain", "example.com", "--organization", "example-org", "--tenant-key", "tenant-a"],
     )
     assert add_domain_result.exit_code == 0
     assert "Created domain" in add_domain_result.stdout
@@ -57,7 +69,9 @@ def test_cli_add_target_and_findings(monkeypatch, tmp_path: Path) -> None:
     with session_factory() as session:
         storage = Storage(session)
         org = storage.get_organization_by_name("example-org")
+        tenant_org = storage.get_organization_by_name("tenant-org")
         domain = storage.get_domain_by_name("example.com")
+        tenant_key = tenant_org.tenant_key if tenant_org else None
         storage.create_finding(
             CanonicalFinding(
                 source_tool="custom-regex",
@@ -71,6 +85,7 @@ def test_cli_add_target_and_findings(monkeypatch, tmp_path: Path) -> None:
             )
         )
         session.commit()
+    assert tenant_key == "tenant-a"
 
     findings_result = runner.invoke(app, ["findings"])
     assert findings_result.exit_code == 0
@@ -110,6 +125,30 @@ def test_cli_verify_deps_json(monkeypatch, tmp_path: Path) -> None:
     result = runner.invoke(app, ["verify-deps", "--json"])
     assert result.exit_code == 0
     assert '"ok": true' in result.stdout
+    assert '"optional_tools"' in result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_cli_user_and_session_management(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'users.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+
+    create_user_result = runner.invoke(app, ["create-user", "alice", "--email", "alice@example.com"])
+    assert create_user_result.exit_code == 0
+
+    grant_role_result = runner.invoke(app, ["grant-tenant-role", "alice", "tenant-a", "--role", "analyst"])
+    assert grant_role_result.exit_code == 0
+
+    create_session_result = runner.invoke(app, ["create-session", "alice", "--tenant", "tenant-a", "--json"])
+    assert create_session_result.exit_code == 0
+    assert '"token":' in create_session_result.stdout
+
+    session_payload = json.loads(create_session_result.stdout)
+    revoke_result = runner.invoke(app, ["revoke-session", str(session_payload["session_id"])])
+    assert revoke_result.exit_code == 0
 
     get_settings.cache_clear()
 
@@ -119,20 +158,46 @@ def test_cli_config_and_init_config(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
     monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ORGSCAN_GITHUB_TOKEN", "example-token")
+    monkeypatch.setenv("ORGSCAN_API_TOKENS_JSON", '[{"name":"viewer","token":"secret-token","role":"reader","tenants":["tenant-a"]}]')
     get_settings.cache_clear()
 
     config_result = runner.invoke(app, ["config", "--json"])
     assert config_result.exit_code == 0
     assert '"github_token": "<redacted>"' in config_result.stdout
+    assert '"api_tokens_json": "<redacted>"' in config_result.stdout
+    assert '"hibp_api_key": "<redacted>"' not in config_result.stdout
     assert '"projectdiscovery"' in config_result.stdout
+    assert '"securitytxt"' in config_result.stdout
+    assert '"github-search"' in config_result.stdout
+    assert '"hibp"' in config_result.stdout
+    assert '"dehashed"' in config_result.stdout
+    assert '"intelligencex"' in config_result.stdout
+    assert '"all-enriched"' in config_result.stdout
     assert '"whois"' in config_result.stdout
     assert '"detect-secrets"' in config_result.stdout
+    assert '"optional_tools"' in config_result.stdout
+    assert '"yara"' in config_result.stdout
+    assert '"ripgrep-heuristics"' in config_result.stdout
 
     env_path = tmp_path / ".env.generated"
     init_result = runner.invoke(app, ["init-config", str(env_path)])
     assert init_result.exit_code == 0
     assert env_path.exists()
     assert "ORGSCAN_DETECT_SECRETS_BINARY=detect-secrets" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_HIBP_API_KEY=" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_DEHASHED_API_KEY=" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_INTELLIGENCEX_API_KEY=" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE=0" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_RATE_LIMIT_BACKEND=db" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_RATE_LIMIT_SCOPE_OVERRIDES_JSON=" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_RATE_LIMIT_POLL_INTERVAL_SECONDS=1" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_SCAN_QUEUE_BACKEND=rq" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_SCAN_QUEUE_RETRY_INTERVALS=30,120" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_SCAN_QUEUE_LEASE_SECONDS=300" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_SCAN_QUEUE_POLL_INTERVAL_SECONDS=5" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_API_TOKENS_JSON=" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_YARA_BINARY=yara" in env_path.read_text(encoding="utf-8")
+    assert "ORGSCAN_RG_BINARY=rg" in env_path.read_text(encoding="utf-8")
     assert "ORGSCAN_SUBFINDER_BINARY=subfinder" in env_path.read_text(encoding="utf-8")
 
     get_settings.cache_clear()
@@ -145,7 +210,7 @@ def test_cli_scan_persists_findings(monkeypatch, tmp_path: Path) -> None:
     get_settings.cache_clear()
 
     sample = tmp_path / "config.py"
-    sample.write_text('api_key = "example-not-real-123456789"\n', encoding="utf-8")
+    sample.write_text('api_key = "prod-token-1234567890abcdef"\n', encoding="utf-8")
 
     result = runner.invoke(
         app,
@@ -171,6 +236,126 @@ def test_cli_scan_persists_findings(monkeypatch, tmp_path: Path) -> None:
     assert "scan_jobs: 1" in status_result.stdout
     assert "findings: 1" in status_result.stdout
     assert "evidence: 1" in status_result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_cli_scan_with_git_history_scanner_persists_historical_findings(monkeypatch, tmp_path: Path) -> None:
+    import subprocess
+
+    database_url = f"sqlite:///{tmp_path / 'history.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    sample = tmp_path / "config.py"
+    sample.write_text('api_key = "prod-token-1234567890abcdef"\n', encoding="utf-8")
+    subprocess.run(["git", "add", "config.py"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "add secret"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    sample.write_text("print('clean')\n", encoding="utf-8")
+    subprocess.run(["git", "add", "config.py"], cwd=tmp_path, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "remove secret"], cwd=tmp_path, check=True, capture_output=True, text=True)
+
+    result = runner.invoke(app, ["scan", "path", str(sample), "--scanner", "git-history-patterns"])
+
+    assert result.exit_code == 0
+    assert "Completed scan job" in result.stdout
+
+    findings_result = runner.invoke(app, ["findings", "--json"])
+    assert findings_result.exit_code == 0
+    assert "git-history-patterns" in findings_result.stdout
+    assert "git history" in findings_result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_cli_findings_supports_extended_filters(monkeypatch, tmp_path: Path) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    database_url = f"sqlite:///{tmp_path / 'findings-filters.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+
+    now = datetime.now(UTC)
+    session_factory = create_session_factory(database_url)
+    init_db(database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        org, _ = storage.get_or_create_organization("example-org")
+        domain, _ = storage.get_or_create_domain("example.com", organization_id=org.id)
+        repo, _ = storage.get_or_create_repository("example-org/app", organization_id=org.id)
+        scan_job = storage.create_scan_job("repository", repo.full_name, "gitleaks", status="completed")
+        organization_id = org.id
+        domain_id = domain.id
+        repository_id = repo.id
+        scan_job_id = scan_job.id
+        matching = storage.create_finding(
+            CanonicalFinding(
+                source_tool="gitleaks",
+                source_name="gitleaks",
+                category="secret",
+                title="CLI matching finding",
+                description="Should match extended CLI filters",
+                status="triaged",
+                organization_id=organization_id,
+                domain_id=domain_id,
+                repository_id=repository_id,
+                scan_job_id=scan_job_id,
+                risk_score=82,
+                detected_at=now - timedelta(hours=2),
+            )
+        )
+        storage.update_finding_triage(matching.id, triage_state="reviewing")
+        storage.create_finding(
+            CanonicalFinding(
+                source_tool="semgrep",
+                source_name="semgrep",
+                category="governance",
+                title="CLI other finding",
+                description="Should not match extended CLI filters",
+                risk_score=15,
+                detected_at=now - timedelta(days=2),
+            )
+        )
+        session.commit()
+
+    result = runner.invoke(
+        app,
+        [
+            "findings",
+            "--json",
+            "--source-tool",
+            "gitleaks",
+            "--triage-state",
+            "reviewing",
+            "--organization-id",
+            str(organization_id),
+            "--domain-id",
+            str(domain_id),
+            "--repository-id",
+            str(repository_id),
+            "--scan-job-id",
+            str(scan_job_id),
+            "--risk-score-min",
+            "80",
+            "--risk-score-max",
+            "90",
+            "--detected-after",
+            (now - timedelta(days=1)).isoformat(),
+            "--detected-before",
+            now.isoformat(),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "CLI matching finding" in result.stdout
+    assert "CLI other finding" not in result.stdout
+    assert '"risk_score": 82' in result.stdout
 
     get_settings.cache_clear()
 
@@ -229,6 +414,13 @@ def test_cli_discover_report_export_and_dashboard(monkeypatch, tmp_path: Path) -
     assert dashboard_result.exit_code == 0
     assert dashboard_path.exists()
     assert "orgscan dashboard" in dashboard_path.read_text(encoding="utf-8")
+    assert "Client-side trend chart" in dashboard_path.read_text(encoding="utf-8")
+
+    pdf_export = tmp_path / "findings.pdf"
+    pdf_result = runner.invoke(app, ["export", str(pdf_export), "--format", "pdf"])
+    assert pdf_result.exit_code == 0
+    assert pdf_export.exists()
+    assert pdf_export.read_bytes().startswith(b"%PDF")
 
     domain_result = runner.invoke(app, ["discover", "domain", "example.org", "--json"])
     assert domain_result.exit_code == 0
@@ -438,12 +630,138 @@ def test_cli_aggregate_domain_discovery_collects_warnings(monkeypatch, tmp_path:
     get_settings.cache_clear()
 
 
+def test_cli_paid_domain_discovery_and_enriched_aggregate(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'paid-providers.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ORGSCAN_HIBP_API_KEY", "test-hibp")
+    monkeypatch.setenv("ORGSCAN_DEHASHED_EMAIL", "user@example.org")
+    monkeypatch.setenv("ORGSCAN_DEHASHED_API_KEY", "test-dehashed")
+    monkeypatch.setenv("ORGSCAN_INTELLIGENCEX_API_KEY", "test-intelx")
+    get_settings.cache_clear()
+
+    monkeypatch.setattr(
+        "orgscan.providers.SecurityTxtDomainProvider._fetch_securitytxt",
+        lambda self, domain_name: (
+            "Contact: mailto:security@example.org\nPolicy: https://example.org/policy",
+            f"https://{domain_name}/.well-known/security.txt",
+        ),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.GitHubSearchDomainProvider._search_repositories",
+        lambda self, domain_name: [
+            {
+                "full_name": "example/repo",
+                "description": f"tracking {domain_name}",
+                "html_url": "https://github.com/example/repo",
+                "owner": {"login": "example"},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.GitHubSearchDomainProvider._search_code",
+        lambda self, domain_name: [
+            {
+                "path": "docs/ops.md",
+                "html_url": "https://github.com/example/repo/blob/main/docs/ops.md",
+                "repository": {"full_name": "example/repo", "owner": {"login": "example"}},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.GitHubSearchDomainProvider._search_issues",
+        lambda self, domain_name: [
+            {
+                "title": f"Rotate secrets for {domain_name}",
+                "state": "open",
+                "html_url": "https://github.com/example/repo/issues/1",
+                "user": {"login": "analyst"},
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.HaveIBeenPwnedDomainProvider._fetch_breaches",
+        lambda self: [{"Name": "ExampleBreach", "Title": "Example Breach", "Domain": "example.org", "BreachDate": "2024-01-01"}],
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.DeHashedDomainProvider._fetch_records",
+        lambda self, domain_name: [{"email": f"alice@{domain_name}", "username": "alice", "database_name": "breach-set"}],
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.IntelligenceXDomainProvider._search_results",
+        lambda self, domain_name: [{"type": "paste", "name": "public-paste", "selectorvalue": f"ops@{domain_name}"}],
+    )
+
+    securitytxt_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "securitytxt", "--json"])
+    assert securitytxt_result.exit_code == 0
+    assert "security.txt contact for example.org: mailto:security@example.org" in securitytxt_result.stdout
+
+    github_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "github-search", "--json"])
+    assert github_result.exit_code == 0
+    assert "GitHub repository mentions example.org: example/repo" in github_result.stdout
+    assert "GitHub code search match for example.org: example/repo:docs/ops.md" in github_result.stdout
+    assert "GitHub issue mentions example.org: Rotate secrets for example.org state=open" in github_result.stdout
+
+    hibp_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "hibp", "--json"])
+    assert hibp_result.exit_code == 0
+    assert "HIBP breach linked to example.org: Example Breach" in hibp_result.stdout
+
+    dehashed_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "dehashed", "--json"])
+    assert dehashed_result.exit_code == 0
+    assert "DeHashed exposure for example.org: email=alice@example.org" in dehashed_result.stdout
+
+    intelx_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "intelligencex", "--json"])
+    assert intelx_result.exit_code == 0
+    assert "Intelligence X exposure for example.org: type=paste name=public-paste" in intelx_result.stdout
+
+    monkeypatch.setattr(
+        "orgscan.providers.LocalMetadataDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(exposures=[f"local {domain_name}"], identity_correlations=[], warnings=[]),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.CrtShDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(exposures=[f"crtsh {domain_name}"], identity_correlations=[], warnings=[]),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.ProjectDiscoveryDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(exposures=[f"pd {domain_name}"], identity_correlations=[], warnings=[]),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.WhoisDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(exposures=[f"whois {domain_name}"], identity_correlations=[], warnings=[]),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.DnsDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(exposures=[f"dns {domain_name}"], identity_correlations=[], warnings=[]),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.SecurityTxtDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(exposures=[f"securitytxt {domain_name}"], identity_correlations=[], warnings=[]),
+    )
+    monkeypatch.setattr(
+        "orgscan.providers.GitHubSearchDomainProvider.discover",
+        lambda self, storage, domain_name: DomainProviderResult(exposures=[f"github-search {domain_name}"], identity_correlations=[], warnings=[]),
+    )
+
+    aggregate_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "all-enriched", "--json"])
+    assert aggregate_result.exit_code == 0
+    aggregate_payload = json.loads(aggregate_result.stdout)
+    assert "local example.org" in aggregate_payload["domain_exposures"]
+    assert "securitytxt example.org" in aggregate_payload["domain_exposures"]
+    assert "github-search example.org" in aggregate_payload["domain_exposures"]
+    assert any("HIBP breach linked to example.org" in item for item in aggregate_payload["domain_exposures"])
+    assert any("DeHashed exposure for example.org" in item for item in aggregate_payload["domain_exposures"])
+    assert any("Intelligence X exposure for example.org" in item for item in aggregate_payload["domain_exposures"])
+
+    get_settings.cache_clear()
+
+
 def test_cli_expand_schedule_and_jobs(monkeypatch, tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'ops.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
     monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
     sample = tmp_path / "sample.py"
-    sample.write_text('api_key = "example-not-real-123456789"\n', encoding="utf-8")
+    sample.write_text('api_key = "prod-token-1234567890abcdef"\n', encoding="utf-8")
     monkeypatch.setattr(
         "orgscan.cli.GitHubDiscoveryClient.fetch_repository_contributors",
         lambda self, full_name, limit=20: [
@@ -485,6 +803,74 @@ def test_cli_expand_schedule_and_jobs(monkeypatch, tmp_path: Path) -> None:
     assert jobs_result.exit_code == 0
     assert "tool_runs" in jobs_result.stdout
     assert "scheduled_scans" in jobs_result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_cli_mirror_scan_and_schedule_with_refs(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'mirror-cli.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+
+    source = tmp_path / "source"
+    source.mkdir()
+    _git("init", cwd=source)
+    _git("config", "user.email", "test@example.com", cwd=source)
+    _git("config", "user.name", "Test User", cwd=source)
+    (source / "app.py").write_text("print('main')\n", encoding="utf-8")
+    _git("add", "app.py", cwd=source)
+    _git("commit", "-m", "main", cwd=source)
+    _git("checkout", "-b", "release/test", cwd=source)
+    (source / "release.env").write_text('api_key = "prod-token-1234567890abcdef"\n', encoding="utf-8")
+    _git("add", "release.env", cwd=source)
+    _git("commit", "-m", "release", cwd=source)
+
+    remote = tmp_path / "remote.git"
+    completed = subprocess.run(["git", "clone", "--bare", str(source), str(remote)], check=False, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+
+    sync_result = runner.invoke(
+        app,
+        ["sync-mirror", "example-org/app", "--clone-url", str(remote), "--ref", "master", "--ref", "release/test", "--json"],
+    )
+    assert sync_result.exit_code == 0
+    assert '"release/test"' in sync_result.stdout
+
+    scan_result = runner.invoke(
+        app,
+        ["scan-mirror", "example-org/app", "--scanner", "custom-patterns", "--ref", "release/test", "--json"],
+    )
+    assert scan_result.exit_code == 0
+    assert '"results"' in scan_result.stdout
+    assert '"findings": 1' in scan_result.stdout
+
+    schedule_result = runner.invoke(
+        app,
+        [
+            "schedule-mirror-scan",
+            "example-org/app",
+            "--scanner",
+            "custom-patterns",
+            "--cadence",
+            "manual",
+            "--clone-url",
+            str(remote),
+            "--ref",
+            "release/test",
+        ],
+    )
+    assert schedule_result.exit_code == 0
+    assert "Scheduled mirror scan" in schedule_result.stdout
+
+    run_result = runner.invoke(app, ["run-scheduled", "--json"])
+    assert run_result.exit_code == 0
+    assert '"target": "example-org/app@release/test"' in run_result.stdout
+
+    jobs_result = runner.invoke(app, ["jobs", "--json"])
+    assert jobs_result.exit_code == 0
+    assert '"target_type": "mirror"' in jobs_result.stdout
+    assert '"refs": [' in jobs_result.stdout
 
     get_settings.cache_clear()
 
@@ -557,13 +943,18 @@ def test_cli_repo_governance_scanner_finds_governance_issues(monkeypatch, tmp_pa
 
     result = runner.invoke(app, ["scan", "path", str(tmp_path), "--scanner", "repo-governance", "--json"])
     assert result.exit_code == 0
-    assert '"findings": 3' in result.stdout
+    assert '"findings": 8' in result.stdout
 
     findings_result = runner.invoke(app, ["findings", "--json"])
     assert findings_result.exit_code == 0
     assert "Missing CODEOWNERS file" in findings_result.stdout
     assert "Missing SECURITY.md policy" in findings_result.stdout
+    assert "Missing Dependabot configuration" in findings_result.stdout
+    assert "Missing CONTRIBUTING.md guidance" in findings_result.stdout
+    assert "Missing GitHub issue templates" in findings_result.stdout
+    assert "Missing pull request template" in findings_result.stdout
     assert "Unpinned GitHub Action reference" in findings_result.stdout
+    assert "Workflow omits explicit token permissions" in findings_result.stdout
 
     get_settings.cache_clear()
 
@@ -579,7 +970,7 @@ def test_cli_queue_commands(monkeypatch, tmp_path: Path) -> None:
     )
     monkeypatch.setattr(
         "orgscan.cli.queue_status",
-        lambda settings: {"backend": "rq", "queue_name": "orgscan:scans", "pending_jobs": 1, "started_jobs": 0, "failed_jobs": 0},
+        lambda settings: {"backend": "rq", "queue_name": "orgscan:scans", "pending_jobs": 1, "started_jobs": 0, "failed_jobs": 0, "retry_max": 2, "retry_intervals": [30, 120]},
     )
     monkeypatch.setattr("orgscan.cli.run_worker", lambda settings, burst=False, max_jobs=None: True)
 
@@ -595,6 +986,58 @@ def test_cli_queue_commands(monkeypatch, tmp_path: Path) -> None:
     worker_result = runner.invoke(app, ["run-worker", "--burst", "--max-jobs", "1"])
     assert worker_result.exit_code == 0
     assert "processed at least one job" in worker_result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_cli_db_queue_backend_commands(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'db-queue-cli.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ORGSCAN_SCAN_QUEUE_BACKEND", "db")
+    get_settings.cache_clear()
+    init_db(database_url)
+
+    sample = tmp_path / "sample.py"
+    sample.write_text('api_key = "example-not-real-123456789"\n', encoding="utf-8")
+    session_factory = create_session_factory(database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        storage.create_scheduled_scan("path", str(sample), "custom-patterns", datetime(2026, 1, 1, tzinfo=UTC), cadence="manual")
+        session.commit()
+
+    enqueue_result = runner.invoke(app, ["enqueue-scheduled", "--json"])
+    assert enqueue_result.exit_code == 0
+    assert '"queue_task_id":' in enqueue_result.stdout
+    assert '"backend": "db"' in enqueue_result.stdout
+
+    status_result = runner.invoke(app, ["queue-status", "--json"])
+    assert status_result.exit_code == 0
+    assert '"backend": "db"' in status_result.stdout
+
+    worker_result = runner.invoke(app, ["run-worker", "--burst", "--max-jobs", "1"])
+    assert worker_result.exit_code == 0
+    assert "processed at least one job" in worker_result.stdout
+
+    jobs_result = runner.invoke(app, ["jobs", "--json"])
+    assert jobs_result.exit_code == 0
+    assert '"queue_tasks"' in jobs_result.stdout
+
+    get_settings.cache_clear()
+
+
+def test_cli_rate_limit_status(monkeypatch, tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'rate-limit-cli.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ORGSCAN_OUTBOUND_MIN_INTERVAL_SECONDS", "0.01")
+    monkeypatch.setenv("ORGSCAN_RATE_LIMIT_BACKEND", "db")
+    get_settings.cache_clear()
+
+    result = runner.invoke(app, ["rate-limit-status", "--json"])
+    assert result.exit_code == 0
+    assert '"backend": "db"' in result.stdout
+    assert '"states": []' in result.stdout
 
     get_settings.cache_clear()
 

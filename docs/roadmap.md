@@ -24,6 +24,8 @@ This roadmap maps the current repository implementation to the phased goals from
 - target intake via `orgscan add-target`
 - stored finding inspection via `orgscan findings`
 - dependency verification via `orgscan verify-deps`
+- generated configuration template via `orgscan init-config`
+- optional tool readiness reporting with configured binary paths and install guidance in CLI/API/dashboard
 - finding triage, suppress, accept-risk, and unsuppress workflows
 
 ### Phase 3 — Initial scanning pipeline
@@ -62,6 +64,9 @@ This roadmap maps the current repository implementation to the phased goals from
 ### Phase 8 — API surface
 - FastAPI service with health, summary, filtered findings, scheduled-scan, relationship graph, and trend endpoints
 - live HTML dashboard served from the same app with interactive filter controls
+- finding and scan-job drill-down HTML pages plus a graph-focused HTML view
+- artifact upload and analysis via API and dashboard, including optional installed external scanners
+- scanner/tooling readiness JSON for easier OSS integration setup
 - `orgscan serve-api` for local web/API serving
 
 ### Phase 9 — Execution telemetry
@@ -75,10 +80,16 @@ This roadmap maps the current repository implementation to the phased goals from
 - saved output from supported external scanners can be ingested and normalized through the common finding model
 
 ## Remaining gaps versus the full project spec
-- no YARA or deeper repo-history/governance coverage beyond current detect-secrets, repo-governance, DNS, WHOIS, crt.sh, ProjectDiscovery, and local metadata support yet
-- no advanced distributed orchestration beyond the initial Redis/RQ worker backend, and no graph visualization UI, multi-tenant auth, or PDF reporting
+- no YARA or ripgrep-heuristic coverage yet; repo history coverage now includes built-in git-history pattern scanning alongside current detect-secrets, repo-governance, DNS, WHOIS, crt.sh, ProjectDiscovery, and local metadata support
+- no advanced distributed orchestration beyond the initial Redis/RQ worker backend, and no tenant-aware HTML auth/session layer or PDF reporting
 - no paid provider implementations; only the abstraction and free/local correlation path exist
 - no large-scale branch/history orchestration or incremental repo mirror management
+
+## Beta-readiness priorities
+- add YARA and ripgrep-style heuristics to close the most obvious OSS integration gaps
+- harden dashboard auth and tenant-aware filtering before any shared deployment
+- add richer interactive graph exploration and scan-log navigation polish on top of the current HTML views
+- package repeatable local/container setup so external scanners are easier to enable in beta environments
 
 ## Current implementation stance
 The repository now covers the requested Phase 0/1 foundation and extends into practical slices for phases 2-10. The remaining gaps are primarily integrations, web UX, distributed execution, and enrichment breadth rather than missing core application structure.

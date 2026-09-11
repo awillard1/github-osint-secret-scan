@@ -11,10 +11,14 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "awillard1" }]
 dependencies = [
+  "alembic>=1.19.2,<2",
   "dnspython>=2.7,<3",
   "fastapi>=0.116,<1",
   "pydantic>=2.8,<3",
   "pydantic-settings>=2.4,<3",
+  "python-multipart>=0.0.32,<1",
+  "reportlab>=5.0.1,<6",
+  "python-multipart>=0.0.32,<1",
   "redis>=6.4,<7",
   "rq>=2.6,<3",
   "SQLAlchemy>=2.0.34,<3",

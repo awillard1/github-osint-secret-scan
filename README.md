@@ -8,7 +8,7 @@
 - normalized core storage models for organizations, domains, repositories, accounts, scan jobs, findings, evidence, relationships, and risk scores
 - a SQLite-first persistence layer built on SQLAlchemy for future PostgreSQL support
 - target intake commands for organizations, domains, repositories, and accounts
-- finding inspection, GitHub metadata discovery, local scanning, governance scanning, reporting, export, dashboard generation, and dependency verification commands
+- finding inspection, GitHub metadata discovery, local scanning, git-history scanning, governance scanning, reporting, export, dashboard generation, and dependency verification commands
 - repository expansion, scheduled scanning, execution telemetry, intuitive configuration helpers, and a live FastAPI dashboard/API
 - tests for config, validation, storage, and CLI flows
 
@@ -107,9 +107,12 @@ Run the built-in custom pattern scanner against a file or directory:
 orgscan scan path ./path/to/scan --organization example-org --repository example-org/app
 ```
 
-If `repo-governance`, `gitleaks`, `detect-secrets`, `semgrep`, or `trufflehog` are available, you can run them through the same workflow:
+The built-in custom pattern heuristics redact matched values and skip obvious placeholder assignments such as example, sample, dummy, fake, or change-me style values to reduce false positives.
+
+If `git-history-patterns`, `repo-governance`, `gitleaks`, `detect-secrets`, `semgrep`, or `trufflehog` are available, you can run them through the same workflow:
 
 ```bash
+orgscan scan path ./path/to/repository --scanner git-history-patterns
 orgscan scan path ./path/to/repository --scanner repo-governance
 orgscan scan path ./path/to/scan --scanner gitleaks
 orgscan scan path ./path/to/scan --scanner detect-secrets
@@ -117,7 +120,7 @@ orgscan scan path ./path/to/scan --scanner semgrep
 orgscan scan path ./path/to/scan --scanner trufflehog
 ```
 
-The built-in `repo-governance` scanner checks for missing `CODEOWNERS`, missing `SECURITY.md`, and unpinned GitHub Actions references in workflow files.
+The built-in `git-history-patterns` scanner uses `git log --patch` to look for secrets in added and removed historical diffs, and the built-in `repo-governance` scanner checks for missing `CODEOWNERS`, missing `SECURITY.md`, and unpinned GitHub Actions references in workflow files.
 
 External scanner wrappers honor the configured `ORGSCAN_*_BINARY` settings, and additional scanners can be registered through Python entry points in the `orgscan.scanners` group.
 
@@ -186,9 +189,36 @@ Key routes:
 
 - `/dashboard` live HTML dashboard with filter controls
 - `/summary` summary JSON
+- `/scanners` scanner and optional-tool readiness JSON
 - `/findings` filtered findings JSON
+- `/findings/{id}` detailed finding JSON with evidence and risk scores
+- `/findings/{id}/evidence` evidence-only JSON for a finding
+- `/findings/{id}` `PATCH` to update triage state, owner, notes, and due date
+- `/findings/{id}/suppress`, `/findings/{id}/accept-risk`, `/findings/{id}/reopen` to manage false positives and analyst workflow state
+- `/artifact-scans` `POST` multipart upload route that scans uploaded files or zip/tar/tar.gz/tgz artifacts with `custom-patterns` or optionally installed external scanners such as `gitleaks`, `detect-secrets`, `semgrep`, and `trufflehog`
+- `/dashboard/findings/{id}` finding drill-down HTML view with evidence and risk details
+- `/dashboard/scan-jobs/{id}` scan job drill-down HTML view with related findings and tool logs
+- `/dashboard/graph` richer relationship graph HTML view
+- `/organizations`, `/repositories`, `/domains`, `/accounts` entity inventory JSON with high-signal risk summaries
+- `/organizations/{id}`, `/repositories/{id}`, `/domains/{id}`, `/accounts/{id}` entity detail JSON with related findings and relationships
+- `/risk-summary` aggregated entity risk profiles filtered by minimum confidence
 - `/relationships/graph` relationship graph JSON
 - `/trends/findings` findings trend JSON
+
+The live `/dashboard` view now also includes an artifact upload form so analysts can submit files and archives from the browser, choose an available scanner, and immediately review the resulting scan activity.
+The dashboard also supports inline finding workflow actions for triage, suppress, accept-risk, and reopen operations without leaving the web UI, plus drill-down links for findings, scan jobs, and relationships.
+The dashboard and CLI now surface open-source tool readiness, including configured binary paths, install status, and configuration environment variables, to make external integrations easier to enable.
+The current dashboard remains local-first and does not yet enforce tenant-aware authentication on the HTML routes; use the JSON API behind your own access controls until a dedicated authenticated dashboard session flow is added.
+
+Artifact upload example:
+
+```bash
+curl -X POST http://127.0.0.1:8000/artifact-scans \
+  -F artifact=@./artifact.zip \
+  -F scanner=gitleaks \
+  -F organization=example-org \
+  -F repository=example-org/app
+```
 
 Verify required local dependencies:
 
@@ -212,6 +242,7 @@ pytest
 - The optional crt.sh integration adds certificate-transparency-based host discovery for tracked domains.
 - The optional WHOIS integration adds registrar and nameserver enrichment for tracked domains.
 - The optional DNS integration adds record-level enrichment for tracked domains and previously discovered subdomains.
+- The built-in git-history-patterns scanner searches git diff history for added or removed content that matches the same core secret patterns used by the local file scanner.
 - The built-in repo-governance scanner checks for missing ownership/security policy files and unpinned GitHub Actions references.
 - The initial `scan` command uses the built-in `custom-patterns` scanner and stores scan jobs, findings, and evidence in SQLite for later reporting.
 - The `discover` command uses the public GitHub REST API and can use `ORGSCAN_GITHUB_TOKEN` when configured for higher rate limits.
