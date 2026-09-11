@@ -243,6 +243,86 @@ def test_api_entity_and_risk_endpoints_return_high_signal_views(tmp_path: Path) 
     assert risk_summary["risk_profiles"][0]["finding_count"] == 1
 
 
+def test_api_finding_management_endpoints_and_high_signal_filter(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'finding-management.db'}"
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        repo, _ = storage.get_or_create_repository("example-org/app")
+        heuristic = storage.create_finding(
+            CanonicalFinding(
+                source_tool="custom-patterns",
+                source_name="custom-patterns",
+                category="secret",
+                title="Heuristic finding",
+                description="Lower signal",
+                confidence="heuristic",
+                repository_id=repo.id,
+                risk_score=35,
+            )
+        )
+        likely = storage.create_finding(
+            CanonicalFinding(
+                source_tool="gitleaks",
+                source_name="gitleaks",
+                category="secret",
+                title="Likely finding",
+                description="Higher signal",
+                confidence="likely",
+                repository_id=repo.id,
+                risk_score=88,
+            )
+        )
+        session.commit()
+
+    client = TestClient(create_app(database_url))
+
+    high_signal = client.get("/findings?high_signal_only=true&min_confidence=likely")
+    assert high_signal.status_code == 200
+    payload = high_signal.json()["findings"]
+    assert len(payload) == 1
+    assert payload[0]["title"] == "Likely finding"
+
+    triage = client.patch(
+        f"/findings/{likely.id}",
+        json={
+            "status": "triaged",
+            "triage_state": "reviewing",
+            "triage_owner": "alice",
+            "triage_notes": "validated",
+        },
+    )
+    assert triage.status_code == 200
+    assert triage.json()["finding"]["triage_owner"] == "alice"
+
+    suppress = client.post(
+        f"/findings/{heuristic.id}/suppress",
+        json={"reason": "false positive", "owner": "alice", "note": "demo value"},
+    )
+    assert suppress.status_code == 200
+    assert suppress.json()["finding"]["status"] == "suppressed"
+
+    accepted = client.post(
+        f"/findings/{likely.id}/accept-risk",
+        json={"reason": "known exposure", "owner": "bob", "note": "tracked externally"},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["finding"]["status"] == "accepted_risk"
+
+    reopened = client.post(
+        f"/findings/{likely.id}/reopen",
+        json={"note": "needs another review"},
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["finding"]["status"] == "open"
+    assert reopened.json()["finding"]["triage_state"] == "reopened"
+
+    high_signal_after = client.get("/findings?high_signal_only=true&min_confidence=likely").json()["findings"]
+    assert len(high_signal_after) == 1
+    assert high_signal_after[0]["title"] == "Likely finding"
+
+
 def test_fastapi_dashboard_and_json_routes(tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'fastapi.db'}"
     init_db(database_url)

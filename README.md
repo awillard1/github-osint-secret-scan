@@ -192,6 +192,8 @@ Key routes:
 - `/findings` filtered findings JSON
 - `/findings/{id}` detailed finding JSON with evidence and risk scores
 - `/findings/{id}/evidence` evidence-only JSON for a finding
+- `/findings/{id}` `PATCH` to update triage state, owner, notes, and due date
+- `/findings/{id}/suppress`, `/findings/{id}/accept-risk`, `/findings/{id}/reopen` to manage false positives and analyst workflow state
 - `/organizations`, `/repositories`, `/domains`, `/accounts` entity inventory JSON with high-signal risk summaries
 - `/organizations/{id}`, `/repositories/{id}`, `/domains/{id}`, `/accounts/{id}` entity detail JSON with related findings and relationships
 - `/risk-summary` aggregated entity risk profiles filtered by minimum confidence
