@@ -142,6 +142,107 @@ def test_api_findings_supports_extended_filters(tmp_path: Path) -> None:
     assert findings[0]["organization_id"] == organization_id
 
 
+def test_api_entity_and_risk_endpoints_return_high_signal_views(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'entity-api.db'}"
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        org = storage.create_organization("example-org", display_name="Example Org")
+        account = storage.create_account("alice", organization_id=org.id, email="alice@example.com")
+        repo = storage.create_repository("example-org/app", organization_id=org.id, owner_account_id=account.id)
+        domain = storage.create_domain("example.com", organization_id=org.id)
+        finding = storage.create_finding(
+            CanonicalFinding(
+                source_tool="gitleaks",
+                source_name="gitleaks",
+                category="secret",
+                title="Verified repo finding",
+                description="High signal finding",
+                confidence="verified",
+                organization_id=org.id,
+                repository_id=repo.id,
+                domain_id=domain.id,
+                account_id=account.id,
+                risk_score=96,
+            )
+        )
+        storage.create_finding(
+            CanonicalFinding(
+                source_tool="custom-patterns",
+                source_name="custom-patterns",
+                category="secret",
+                title="Heuristic repo finding",
+                description="Lower signal finding",
+                confidence="heuristic",
+                organization_id=org.id,
+                repository_id=repo.id,
+                risk_score=41,
+            )
+        )
+        storage.create_evidence(
+            finding.id,
+            "gitleaks",
+            repository_path="config.py",
+            line_start=7,
+            line_end=7,
+            snippet="<redacted:gitleaks>",
+            extracted_indicator="prod...cdef",
+        )
+        storage.create_risk_score("finding", str(finding.id), 96, finding_id=finding.id, severity="critical", confidence="verified")
+        storage.create_domain_exposure(
+            domain.id,
+            source="crtsh",
+            source_name="crtsh",
+            result_summary="cert for example.com",
+            normalized_hash="domain-exposure-1",
+        )
+        storage.create_identity_correlation(
+            domain.id,
+            source="github-metadata",
+            relation_type="email-domain-match",
+            email="alice@example.com",
+            username="alice",
+            confidence="verified",
+        )
+        storage.create_relationship("organization", str(org.id), "repository", str(repo.id), "owns", confidence="verified")
+        storage.create_relationship("account", str(account.id), "repository", str(repo.id), "maintains", confidence="verified")
+        storage.create_relationship("organization", str(org.id), "domain", str(domain.id), "owns", confidence="verified")
+        session.commit()
+
+    client = TestClient(create_app(database_url))
+
+    organizations = client.get("/organizations").json()["organizations"]
+    repositories = client.get("/repositories").json()["repositories"]
+    domains = client.get("/domains").json()["domains"]
+    accounts = client.get("/accounts").json()["accounts"]
+    org_detail = client.get(f"/organizations/{org.id}").json()
+    repo_detail = client.get(f"/repositories/{repo.id}").json()
+    domain_detail = client.get(f"/domains/{domain.id}").json()
+    account_detail = client.get(f"/accounts/{account.id}").json()
+    finding_detail = client.get(f"/findings/{finding.id}").json()
+    finding_evidence = client.get(f"/findings/{finding.id}/evidence").json()
+    risk_summary = client.get("/risk-summary?entity_type=repository&min_confidence=likely").json()
+
+    assert organizations[0]["risk_summary"]["finding_count"] == 1
+    assert repositories[0]["risk_summary"]["max_risk_score"] == 96.0
+    assert domains[0]["name"] == "example.com"
+    assert accounts[0]["username"] == "alice"
+    assert org_detail["organization"]["name"] == "example-org"
+    assert len(org_detail["top_findings"]) == 1
+    assert org_detail["top_findings"][0]["title"] == "Verified repo finding"
+    assert repo_detail["repository"]["full_name"] == "example-org/app"
+    assert repo_detail["risk_summary"]["verified_count"] == 1
+    assert domain_detail["exposures"][0]["source"] == "crtsh"
+    assert domain_detail["identity_correlations"][0]["username"] == "alice"
+    assert account_detail["repositories"][0]["full_name"] == "example-org/app"
+    assert finding_detail["finding"]["title"] == "Verified repo finding"
+    assert finding_detail["evidence"][0]["repository_path"] == "config.py"
+    assert finding_evidence["evidence"][0]["line_start"] == 7
+    assert risk_summary["risk_profiles"][0]["entity_name"] == "example-org/app"
+    assert risk_summary["risk_profiles"][0]["finding_count"] == 1
+
+
 def test_fastapi_dashboard_and_json_routes(tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'fastapi.db'}"
     init_db(database_url)

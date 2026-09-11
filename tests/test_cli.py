@@ -145,7 +145,7 @@ def test_cli_scan_persists_findings(monkeypatch, tmp_path: Path) -> None:
     get_settings.cache_clear()
 
     sample = tmp_path / "config.py"
-    sample.write_text('api_key = "example-not-real-123456789"\n', encoding="utf-8")
+    sample.write_text('api_key = "prod-token-1234567890abcdef"\n', encoding="utf-8")
 
     result = runner.invoke(
         app,
@@ -188,7 +188,7 @@ def test_cli_scan_with_git_history_scanner_persists_historical_findings(monkeypa
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True, capture_output=True, text=True)
 
     sample = tmp_path / "config.py"
-    sample.write_text('api_key = "example-not-real-123456789"\n', encoding="utf-8")
+    sample.write_text('api_key = "prod-token-1234567890abcdef"\n', encoding="utf-8")
     subprocess.run(["git", "add", "config.py"], cwd=tmp_path, check=True, capture_output=True, text=True)
     subprocess.run(["git", "commit", "-m", "add secret"], cwd=tmp_path, check=True, capture_output=True, text=True)
     sample.write_text("print('clean')\n", encoding="utf-8")
@@ -563,7 +563,7 @@ def test_cli_expand_schedule_and_jobs(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
     monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
     sample = tmp_path / "sample.py"
-    sample.write_text('api_key = "example-not-real-123456789"\n', encoding="utf-8")
+    sample.write_text('api_key = "prod-token-1234567890abcdef"\n', encoding="utf-8")
     monkeypatch.setattr(
         "orgscan.cli.GitHubDiscoveryClient.fetch_repository_contributors",
         lambda self, full_name, limit=20: [

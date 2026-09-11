@@ -107,6 +107,8 @@ Run the built-in custom pattern scanner against a file or directory:
 orgscan scan path ./path/to/scan --organization example-org --repository example-org/app
 ```
 
+The built-in custom pattern heuristics redact matched values and skip obvious placeholder assignments such as example, sample, dummy, fake, or change-me style values to reduce false positives.
+
 If `git-history-patterns`, `repo-governance`, `gitleaks`, `detect-secrets`, `semgrep`, or `trufflehog` are available, you can run them through the same workflow:
 
 ```bash
@@ -188,6 +190,11 @@ Key routes:
 - `/dashboard` live HTML dashboard with filter controls
 - `/summary` summary JSON
 - `/findings` filtered findings JSON
+- `/findings/{id}` detailed finding JSON with evidence and risk scores
+- `/findings/{id}/evidence` evidence-only JSON for a finding
+- `/organizations`, `/repositories`, `/domains`, `/accounts` entity inventory JSON with high-signal risk summaries
+- `/organizations/{id}`, `/repositories/{id}`, `/domains/{id}`, `/accounts/{id}` entity detail JSON with related findings and relationships
+- `/risk-summary` aggregated entity risk profiles filtered by minimum confidence
 - `/relationships/graph` relationship graph JSON
 - `/trends/findings` findings trend JSON
 

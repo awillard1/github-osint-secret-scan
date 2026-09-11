@@ -8,6 +8,23 @@ from typing import Any
 from orgscan.models import ConfidenceLevel, SeverityLevel
 from orgscan.scanners.base import ScanMatch
 
+GENERIC_SECRET_ASSIGNMENT_NAME = "generic-secret-assignment"
+ASSIGNED_SECRET_VALUE = re.compile(r"[:=]\s*['\"]([^'\"]{8,})['\"]")
+PLACEHOLDER_SECRET_MARKERS = (
+    "example",
+    "sample",
+    "dummy",
+    "placeholder",
+    "not-real",
+    "changeme",
+    "replace-me",
+    "replace_me",
+    "replace-this",
+    "replace_this",
+    "fake",
+    "mock",
+)
+
 
 @dataclass(frozen=True)
 class PatternDefinition:
@@ -99,6 +116,8 @@ class CustomPatternScanner:
             for pattern, compiled in self._patterns:
                 for matched in compiled.finditer(line):
                     value = matched.group(0)
+                    if should_skip_pattern_match(pattern.name, value):
+                        continue
                     results.append(
                         ScanMatch(
                             path=file_path,
@@ -133,3 +152,23 @@ class CustomPatternScanner:
     @classmethod
     def _redact_in_line(cls, line: str, value: str, pattern_name: str) -> str:
         return line.replace(value, f"<redacted:{pattern_name}>")
+
+
+def should_skip_pattern_match(pattern_name: str, matched_value: str) -> bool:
+    if pattern_name != GENERIC_SECRET_ASSIGNMENT_NAME:
+        return False
+    extracted = _extract_assigned_secret(matched_value)
+    if extracted is None:
+        return False
+    normalized = extracted.strip().lower()
+    condensed = re.sub(r"[\s._-]+", "", normalized)
+    if condensed in {"example", "sample", "dummy", "placeholder", "changeme", "replaceme", "fake", "mock"}:
+        return True
+    return any(marker in normalized for marker in PLACEHOLDER_SECRET_MARKERS)
+
+
+def _extract_assigned_secret(matched_value: str) -> str | None:
+    matched = ASSIGNED_SECRET_VALUE.search(matched_value)
+    if matched is None:
+        return None
+    return matched.group(1)

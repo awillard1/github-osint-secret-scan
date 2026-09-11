@@ -230,6 +230,56 @@ def test_storage_list_findings_supports_extended_filters(tmp_path: Path) -> None
     assert [finding.id for finding in findings] == [matching_id]
 
 
+def test_storage_entity_risk_profiles_filter_low_confidence_findings(tmp_path: Path) -> None:
+    db_path = tmp_path / "risk-profiles.db"
+    database_url = f"sqlite:///{db_path}"
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+
+    with session_factory() as session:
+        storage = Storage(session)
+        org = storage.create_organization("example-org")
+        repo = storage.create_repository("example-org/app", organization_id=org.id)
+        likely = storage.create_finding(
+            CanonicalFinding(
+                source_tool="gitleaks",
+                source_name="gitleaks",
+                category="secret",
+                title="Likely finding",
+                description="High-signal repo finding",
+                confidence="likely",
+                repository_id=repo.id,
+                risk_score=85,
+            )
+        )
+        heuristic = storage.create_finding(
+            CanonicalFinding(
+                source_tool="custom-patterns",
+                source_name="custom-patterns",
+                category="secret",
+                title="Heuristic finding",
+                description="Lower-signal repo finding",
+                confidence="heuristic",
+                repository_id=repo.id,
+                risk_score=45,
+            )
+        )
+        storage.create_risk_score("finding", str(likely.id), 85, finding_id=likely.id, severity="high", confidence="likely")
+        storage.create_risk_score("finding", str(heuristic.id), 45, finding_id=heuristic.id, severity="medium", confidence="heuristic")
+        session.commit()
+
+    with session_factory() as session:
+        storage = Storage(session)
+        high_signal = storage.list_entity_risk_profiles(entity_type="repository", min_confidence="likely")
+        all_signal = storage.list_entity_risk_profiles(entity_type="repository", min_confidence="heuristic")
+
+    assert high_signal[0]["entity_name"] == "example-org/app"
+    assert high_signal[0]["finding_count"] == 1
+    assert high_signal[0]["likely_count"] == 1
+    assert all_signal[0]["finding_count"] == 2
+    assert all_signal[0]["heuristic_count"] == 1
+
+
 def test_get_or_create_updates_existing_repository_metadata(tmp_path: Path) -> None:
     db_path = tmp_path / "update.db"
     database_url = f"sqlite:///{db_path}"

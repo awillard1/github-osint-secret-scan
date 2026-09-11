@@ -6,7 +6,7 @@ from pathlib import Path
 
 from orgscan.models import ConfidenceLevel, SeverityLevel
 from orgscan.scanners.base import ScanMatch
-from orgscan.scanners.custom_patterns import DEFAULT_PATTERNS, PatternDefinition
+from orgscan.scanners.custom_patterns import DEFAULT_PATTERNS, PatternDefinition, should_skip_pattern_match
 from orgscan.scanners.external import ScannerExecutionError
 
 HUNK_HEADER = re.compile(r"^@@ -(?P<old>\d+)(?:,\d+)? \+(?P<new>\d+)(?:,\d+)? @@")
@@ -126,6 +126,8 @@ class GitHistoryPatternScanner:
         for pattern, compiled in self._patterns:
             for matched in compiled.finditer(line):
                 value = matched.group(0)
+                if should_skip_pattern_match(pattern.name, value):
+                    continue
                 results.append(
                     ScanMatch(
                         path=path,

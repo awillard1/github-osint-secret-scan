@@ -15,14 +15,23 @@ from orgscan.scanners.base import ScanMatch
 
 def test_custom_pattern_scanner_redacts_detected_values(tmp_path: Path) -> None:
     sample = tmp_path / "sample.env"
-    sample.write_text('api_key = "example-not-real-123456789"\n', encoding="utf-8")
+    sample.write_text('api_key = "prod-token-1234567890abcdef"\n', encoding="utf-8")
 
     matches = CustomPatternScanner().scan_path(sample)
 
     assert len(matches) == 1
-    assert matches[0].indicator != 'api_key = "example-not-real-123456789"'
+    assert matches[0].indicator != 'api_key = "prod-token-1234567890abcdef"'
     assert "<redacted:generic-secret-assignment>" in matches[0].snippet
-    assert "example-not-real-123456789" not in matches[0].snippet
+    assert "prod-token-1234567890abcdef" not in matches[0].snippet
+
+
+def test_custom_pattern_scanner_skips_placeholder_secret_assignments(tmp_path: Path) -> None:
+    sample = tmp_path / "sample.env"
+    sample.write_text('api_key = "example-not-real-123456789"\n', encoding="utf-8")
+
+    matches = CustomPatternScanner().scan_path(sample)
+
+    assert matches == []
 
 
 def test_repository_governance_scanner_detects_missing_controls_and_unpinned_actions(tmp_path: Path) -> None:
@@ -47,7 +56,7 @@ def test_git_history_pattern_scanner_detects_historical_secrets(tmp_path: Path) 
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True, capture_output=True, text=True)
 
     tracked = tmp_path / "tracked.env"
-    tracked.write_text('api_key = "example-not-real-123456789"\n', encoding="utf-8")
+    tracked.write_text('api_key = "prod-token-1234567890abcdef"\n', encoding="utf-8")
     subprocess.run(["git", "add", "tracked.env"], cwd=tmp_path, check=True, capture_output=True, text=True)
     subprocess.run(["git", "commit", "-m", "add secret"], cwd=tmp_path, check=True, capture_output=True, text=True)
 
@@ -61,7 +70,7 @@ def test_git_history_pattern_scanner_detects_historical_secrets(tmp_path: Path) 
     assert matches[0].title.endswith("in git history")
     assert matches[0].raw_payload["commit"]
     assert matches[0].metadata["change_type"] in {"added", "removed"}
-    assert "example-not-real-123456789" not in matches[0].snippet
+    assert "prod-token-1234567890abcdef" not in matches[0].snippet
 
 
 class PluginScanner:

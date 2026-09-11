@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from orgscan.models import (
@@ -27,6 +27,13 @@ from orgscan.schemas import CanonicalFinding
 
 
 class Storage:
+    CONFIDENCE_ORDER = (
+        "unverified",
+        "heuristic",
+        "likely",
+        "verified",
+    )
+
     def __init__(self, session: Session) -> None:
         self.session = session
 
@@ -76,6 +83,18 @@ class Storage:
 
     def get_repository_by_full_name(self, full_name: str) -> Repository | None:
         return self.session.scalar(select(Repository).where(Repository.full_name == full_name))
+
+    def get_organization(self, organization_id: int) -> Organization | None:
+        return self.session.get(Organization, organization_id)
+
+    def get_domain(self, domain_id: int) -> Domain | None:
+        return self.session.get(Domain, domain_id)
+
+    def get_repository(self, repository_id: int) -> Repository | None:
+        return self.session.get(Repository, repository_id)
+
+    def get_account(self, account_id: int) -> Account | None:
+        return self.session.get(Account, account_id)
 
     def get_or_create_repository(self, full_name: str, **kwargs: Any) -> tuple[Repository, bool]:
         existing = self.get_repository_by_full_name(full_name)
@@ -344,6 +363,7 @@ class Storage:
         organization_id: int | None = None,
         domain_id: int | None = None,
         repository_id: int | None = None,
+        account_id: int | None = None,
         scan_job_id: int | None = None,
         risk_score_min: float | None = None,
         risk_score_max: float | None = None,
@@ -369,6 +389,8 @@ class Storage:
             query = query.where(Finding.domain_id == domain_id)
         if repository_id is not None:
             query = query.where(Finding.repository_id == repository_id)
+        if account_id is not None:
+            query = query.where(Finding.account_id == account_id)
         if scan_job_id is not None:
             query = query.where(Finding.scan_job_id == scan_job_id)
         if risk_score_min is not None:
@@ -390,6 +412,28 @@ class Storage:
 
     def get_finding(self, finding_id: int) -> Finding | None:
         return self.session.get(Finding, finding_id)
+
+    def list_finding_evidence(self, finding_id: int) -> Sequence[Evidence]:
+        query = select(Evidence).where(Evidence.finding_id == finding_id).order_by(Evidence.observed_at.desc(), Evidence.id.desc())
+        return list(self.session.scalars(query))
+
+    def list_risk_scores(
+        self,
+        *,
+        finding_id: int | None = None,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
+        limit: int = 50,
+    ) -> Sequence[RiskScore]:
+        query = select(RiskScore)
+        if finding_id is not None:
+            query = query.where(RiskScore.finding_id == finding_id)
+        if entity_type is not None:
+            query = query.where(RiskScore.entity_type == entity_type)
+        if entity_id is not None:
+            query = query.where(RiskScore.entity_id == entity_id)
+        query = query.order_by(RiskScore.calculated_at.desc(), RiskScore.id.desc()).limit(limit)
+        return list(self.session.scalars(query))
 
     def update_finding_triage(
         self,
@@ -487,6 +531,20 @@ class Storage:
         query = select(Relationship).order_by(Relationship.created_at.desc(), Relationship.id.desc()).limit(limit)
         return list(self.session.scalars(query))
 
+    def list_relationships_for_entity(self, entity_type: str, entity_id: str, limit: int = 100) -> Sequence[Relationship]:
+        query = (
+            select(Relationship)
+            .where(
+                or_(
+                    (Relationship.from_entity_type == entity_type) & (Relationship.from_entity_id == entity_id),
+                    (Relationship.to_entity_type == entity_type) & (Relationship.to_entity_id == entity_id),
+                )
+            )
+            .order_by(Relationship.created_at.desc(), Relationship.id.desc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(query))
+
     def list_due_scheduled_scans(self, now: datetime | None = None) -> Sequence[ScheduledScan]:
         current = now or datetime.now(UTC)
         query = (
@@ -545,6 +603,79 @@ class Storage:
         )
         return list(self.session.scalars(query))
 
+    def list_entity_risk_profiles(
+        self,
+        *,
+        entity_type: str | None = None,
+        entity_id: int | None = None,
+        min_confidence: str = "likely",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        entity_mappings = {
+            "organization": (Finding.organization_id, Organization, Organization.name),
+            "domain": (Finding.domain_id, Domain, Domain.name),
+            "repository": (Finding.repository_id, Repository, Repository.full_name),
+            "account": (Finding.account_id, Account, Account.username),
+        }
+        if entity_type is not None and entity_type not in entity_mappings:
+            raise ValueError(f"Unsupported entity type: {entity_type}")
+
+        selected_types = [entity_type] if entity_type is not None else list(entity_mappings)
+        profiles: list[dict[str, Any]] = []
+        allowed_confidences = self._allowed_confidences(min_confidence)
+
+        for current_type in selected_types:
+            entity_column, model, label_column = entity_mappings[current_type]
+            query = (
+                select(
+                    entity_column.label("entity_id"),
+                    label_column.label("entity_name"),
+                    func.count(Finding.id).label("finding_count"),
+                    func.sum(case((Finding.status.not_in(("resolved", "suppressed")), 1), else_=0)).label("active_finding_count"),
+                    func.sum(case((Finding.status == "suppressed", 1), else_=0)).label("suppressed_count"),
+                    func.sum(case((Finding.confidence == "verified", 1), else_=0)).label("verified_count"),
+                    func.sum(case((Finding.confidence == "likely", 1), else_=0)).label("likely_count"),
+                    func.sum(case((Finding.confidence == "heuristic", 1), else_=0)).label("heuristic_count"),
+                    func.max(Finding.risk_score).label("max_risk_score"),
+                    func.avg(Finding.risk_score).label("average_risk_score"),
+                )
+                .select_from(Finding)
+                .join(model, model.id == entity_column, isouter=True)
+                .where(entity_column.is_not(None), Finding.confidence.in_(allowed_confidences))
+                .group_by(entity_column, label_column)
+                .order_by(func.max(Finding.risk_score).desc().nullslast(), func.count(Finding.id).desc(), label_column.asc())
+            )
+            if entity_id is not None:
+                query = query.where(entity_column == entity_id)
+            rows = self.session.execute(query.limit(limit))
+            for row in rows:
+                profiles.append(
+                    {
+                        "entity_type": current_type,
+                        "entity_id": row.entity_id,
+                        "entity_name": row.entity_name or f"{current_type}:{row.entity_id}",
+                        "finding_count": int(row.finding_count or 0),
+                        "active_finding_count": int(row.active_finding_count or 0),
+                        "suppressed_count": int(row.suppressed_count or 0),
+                        "verified_count": int(row.verified_count or 0),
+                        "likely_count": int(row.likely_count or 0),
+                        "heuristic_count": int(row.heuristic_count or 0),
+                        "max_risk_score": float(row.max_risk_score or 0),
+                        "average_risk_score": float(row.average_risk_score or 0),
+                    }
+                )
+
+        profiles.sort(
+            key=lambda item: (
+                item["max_risk_score"],
+                item["finding_count"],
+                item["entity_type"],
+                str(item["entity_name"]),
+            ),
+            reverse=True,
+        )
+        return profiles[:limit]
+
     def finding_counts_by_repository(self, limit: int = 10) -> list[tuple[str, int]]:
         rows = self.session.execute(
             select(func.coalesce(Repository.full_name, "unassigned"), func.count())
@@ -587,3 +718,11 @@ class Storage:
             name: self.session.scalar(select(func.count()).select_from(model)) or 0
             for name, model in tables.items()
         }
+
+    @classmethod
+    def _allowed_confidences(cls, min_confidence: str) -> tuple[str, ...]:
+        try:
+            start_index = cls.CONFIDENCE_ORDER.index(min_confidence)
+        except ValueError as exc:
+            raise ValueError(f"Unsupported confidence level: {min_confidence}") from exc
+        return cls.CONFIDENCE_ORDER[start_index:]

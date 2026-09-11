@@ -14,7 +14,7 @@ def test_rq_queue_enqueues_and_processes_scheduled_scan(tmp_path: Path) -> None:
     init_db(database_url)
     session_factory = create_session_factory(database_url)
     sample = tmp_path / "sample.py"
-    sample.write_text('api_key = "example-not-real-123456789"\n', encoding="utf-8")
+    sample.write_text('api_key = "prod-token-1234567890abcdef"\n', encoding="utf-8")
 
     with session_factory() as session:
         storage = Storage(session)
