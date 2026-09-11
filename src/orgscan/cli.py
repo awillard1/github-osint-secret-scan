@@ -9,7 +9,7 @@ from enum import StrEnum
 import typer
 from sqlalchemy import text
 
-from orgscan.bootstrap import bootstrap
+from orgscan.bootstrap import bootstrap, optional_tool_inventory
 from orgscan.api import serve_api
 from orgscan.config import Settings, get_settings, render_env_template
 from orgscan.db import create_session_factory, init_db
@@ -213,12 +213,13 @@ def config(
 ) -> None:
     settings = _settings()
     details = bootstrap(settings, verify_only=True)
+    optional_tools = details.get("optional_tools", optional_tool_inventory(settings))
     payload = {
         "settings": settings.as_dict(include_secrets=show_secrets),
         "available_scanners": available_scanner_names(),
         "available_domain_providers": ["local-metadata", "crtsh", "projectdiscovery", "whois", "dns", "all"],
         "available_execution_backends": ["local", "rq"],
-        "optional_tools": details["optional_tools"],
+        "optional_tools": optional_tools,
         "dependency_status": {
             "required": details["required"],
             "optional": details["optional"],
@@ -1047,9 +1048,11 @@ def verify_deps(
 ) -> None:
     settings = _settings()
     details = bootstrap(settings, verify_only=True)
+    optional_tools = details.get("optional_tools", optional_tool_inventory(settings))
     missing_required = sorted(command for command, present in details["required"].items() if not present)
     result = {
         **details,
+        "optional_tools": optional_tools,
         "missing_required": missing_required,
         "ok": not missing_required,
     }
@@ -1061,7 +1064,7 @@ def verify_deps(
         for command, present in details["required"].items():
             typer.echo(f"  - {command}: {'ok' if present else 'missing'}")
         typer.echo("Optional integrations")
-        for item in details["optional_tools"]:
+        for item in optional_tools:
             guidance = "" if item["installed"] else f" | configure via {item['env_var'] or 'PATH'} | {item['install_note']}"
             typer.echo(f"  - {item['name']} ({item['category']}): {'ok' if item['installed'] else 'missing'} -> {item['configured_command']}{guidance}")
         if missing_required:
