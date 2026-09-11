@@ -18,7 +18,6 @@ dependencies = [
   "pydantic-settings>=2.4,<3",
   "python-multipart>=0.0.32,<1",
   "reportlab>=5.0.1,<6",
-  "python-multipart>=0.0.32,<1",
   "redis>=6.4,<7",
   "rq>=2.6,<3",
   "SQLAlchemy>=2.0.34,<3",

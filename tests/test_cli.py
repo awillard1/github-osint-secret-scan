@@ -876,6 +876,7 @@ def test_cli_mirror_scan_and_schedule_with_refs(monkeypatch, tmp_path: Path) -> 
 
 
 def test_cli_scan_reports_missing_external_scanner(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("orgscan.scanners.external.shutil.which", lambda command: None)
     database_url = f"sqlite:///{tmp_path / 'missing-scanner.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
     monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
@@ -897,6 +898,7 @@ def test_cli_scan_reports_missing_external_scanner(monkeypatch, tmp_path: Path) 
 
 
 def test_cli_scan_reports_missing_semgrep(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("orgscan.scanners.external.shutil.which", lambda command: None)
     database_url = f"sqlite:///{tmp_path / 'missing-semgrep.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
     monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
@@ -913,6 +915,7 @@ def test_cli_scan_reports_missing_semgrep(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_cli_scan_reports_missing_detect_secrets(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("orgscan.scanners.external.shutil.which", lambda command: None)
     database_url = f"sqlite:///{tmp_path / 'missing-detect-secrets.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
     monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))

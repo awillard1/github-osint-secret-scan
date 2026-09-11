@@ -1,95 +1,54 @@
 # orgscan phased roadmap
 
-This roadmap maps the current repository implementation to the phased goals from `projectspec.md`.
+This is the implementation status, reconciled against source and tests on 2026-09-11. [projectspec.md](../projectspec.md) remains product vision; [development-plan.md](development-plan.md) defines the engineering phase order. The older roadmap's Phase 0–10 labels described historical feature slices, not completion of the new engineering phases. Phase 0 reconciliation does not start Phase 1 decomposition or mark later phases complete.
 
-## Completed or partially completed phases
+## Current architecture/capability baseline
 
-### Phase 0 — Foundation
-- Python package scaffold under `src/orgscan`
-- `pyproject.toml` packaging and CLI entrypoint
-- environment and `.env`-based configuration
-- structured logging setup
-- pytest-based test suite
-- bootstrap script for local development
-- README installation and usage guidance
+The package is still organized around `api.py` (FastAPI, `OrgscanApiService`, artifact handling), `cli.py` (Typer commands), and shared modules: `runner.py`, `repositories.py` (`Storage`), `models.py`, `schemas.py`, `mirroring.py`, `scheduler.py`, `queueing.py`, `providers.py`, `discovery.py`, `expansion.py`, `auth.py`, and `reporting.py`. Only scanners already form a dedicated subpackage. Shared scan execution and persistence exist, but presentation modules still own substantial orchestration. The service/route/command packages in [architecture.md](architecture.md) are targets, not the current layout.
 
-### Phase 1 — Core data model and storage
-- normalized SQLAlchemy models for Organization, Domain, Repository, Account, ScanJob, Finding, Evidence, Relationship, RiskScore, DomainExposure, IdentityCorrelation, Suppression, ToolRun, and ScheduledScan
-- canonical finding normalization via `orgscan.schemas.CanonicalFinding`
-- SQLite-first persistence and repository helpers designed around SQLAlchemy abstractions for future PostgreSQL support
-- lightweight schema evolution for new finding columns on existing SQLite databases
-- CLI database initialization and status commands
+“Implemented” below means present in source with the cited test coverage; it does not imply live external-service certification or completion of every product-vision requirement.
 
-### Phase 2 — Operator workflows
-- target intake via `orgscan add-target`
-- stored finding inspection via `orgscan findings`
-- dependency verification via `orgscan verify-deps`
-- generated configuration template via `orgscan init-config`
-- optional tool readiness reporting with configured binary paths and install guidance in CLI/API/dashboard
-- finding triage, suppress, accept-risk, and unsuppress workflows
+| Area | Implemented capability and evidence | Partial or missing scope |
+| --- | --- | --- |
+| Foundation and storage | Packaging, CLI entry point, environment configuration/redaction, bootstrap/readiness, SQLAlchemy `Storage`, canonical findings, evidence, risk scores, targets, jobs, relationships, suppressions, users/sessions, queue and rate-limit records. `db.py` runs Alembic through `20260909_0005`. Tests: `test_config.py`, `test_bootstrap.py`, `test_db.py`, `test_storage.py`, `test_schemas.py`. | SQLite is exercised; PostgreSQL operation and upgrades from representative old databases are not established by the fresh-database migration test. Bootstrap offers installation guidance, not a complete external-binary installer. |
+| Scanners and plugins | Nine registered scanners: custom-patterns, git-history-patterns, repo-governance, gitleaks, detect-secrets, semgrep, trufflehog, yara, ripgrep-heuristics. Registry factory and `orgscan.scanners` entry-point loading already exist, including report ingestion for supporting scanners. `runner.py` normalizes `ScanMatch` into stored `CanonicalFinding` and records ToolRuns. Tests: `test_scanner.py`, `test_external_scanners.py`, `test_runner.py`, `test_cli.py`. | The proposed metadata/readiness/context/result contract is not implemented uniformly. Binary presence inventory is not version/configuration readiness. Parser tests do not establish all timeout/error paths or live tool compatibility. |
+| YARA and heuristics | YARA ships three token/key rules and accepts a configured rules file; its parser redacts matches. Ripgrep scans configurable internal suffixes and organization keywords. Tests: YARA/ripgrep parser cases in `test_scanner.py`; configuration cases in `test_config.py`. | YARA normalization recognizes only the rule IDs in `RULE_DEFINITIONS`; arbitrary configured rule IDs are ignored. Heuristics are Python definitions/settings, not a validated data-driven rule schema. |
+| Repository acquisition and history | `mirroring.py` clones/reuses a working checkout, fetches tags/remote refs, persists mirror path/time and tracked/available refs, and checks out requested branches/tags. CLI and scheduled scans support multiple refs and record scope/ref on scan jobs. Built-in history scanning reads Git diffs. Tests: `test_mirroring.py`, mirror/history cases in `test_cli.py`, `test_scheduler.py`, `test_scanner.py`. | These “mirrors” are shared working checkouts, not isolated worktrees or bare mirror caches. No persisted commit checkpoints, unchanged-repository skipping, incremental range planner, or locking/cleanup lifecycle. |
+| Discovery and relationships | GitHub repository/organization discovery and bounded contributor/fork/ownership expansion; relationships include source and confidence. Domain providers include local metadata, crt.sh, WHOIS, DNS, ProjectDiscovery subfinder/httpx, security.txt, and GitHub repository/code/issue search. Search stores query/evidence provenance in domain exposures and identity correlations. Tests: `test_discovery.py` and discovery/expansion cases in `test_cli.py`. | Search results do not all become graph entities or canonical findings. Broader relationship intelligence, pagination/recovery policies, and confidence-based expansion remain incomplete. |
+| Paid enrichment | Optional HIBP, DeHashed, Intelligence X and enriched aggregate providers are implemented with configuration checks and persisted exposure/correlation records (`providers.py`). Mocked CLI coverage: `test_cli_paid_domain_discovery_and_enriched_aggregate`. | Not live-provider certification. HIBP currently filters breach-catalog entries by breached domain; it is not a comprehensive employee-account exposure search. |
+| Findings and risk | Stable normalized hashes, repeated-finding updates, first/last seen, severity/confidence/source-weighted scoring, filters and entity risk summaries; triage, owner/notes/deadline, suppression, accepted risk and unsuppression. Reappearing resolved findings get `triage_state="reopened"`. Tests: `test_storage.py`, `test_schemas.py`, `test_runner.py`, finding workflows in `test_cli.py`/`test_api.py`. | Hashes include source tool, so this is not cross-scanner issue correlation. Evidence is appended rather than deduplicated. No explicit transition audit trail or full remediated/regressed lifecycle; reopening behavior is present in source but lacks a dedicated regression test. |
+| API and dashboard | FastAPI JSON health/summary, findings/evidence/workflows, entities/risk, scan jobs, schedules, graph and trends; server-rendered dashboard/detail/graph pages and file/ZIP/TAR artifact scans (TAR extraction is present in source; tests cover files and ZIP). Tests: `test_api.py`. | API/UI do not expose every CLI use case. Extraction has path-containment and size/count checks, TAR special-entry rejection, and temporary-workspace cleanup, but safety coverage is limited; invalid archive tests do not establish traversal/symlink/cleanup guarantees. Operator redesign remains future work. |
+| Authentication and tenancy | `auth.py` defines `AuthContext`, environment tokens, hashed database session tokens, role/tenant resolution, expiry/revocation checks. CLI creates users, grants tenant roles, creates/revokes sessions. Reporting accepts tenant scope. Tests: CLI user/session management and tenant-scoped scheduled reports. | FastAPI routes do **not** wire in `auth_dependency` or tenant authorization. These helpers are not an enforced HTTP security boundary. No browser login/logout, secure cookies or CSRF flow. No dedicated HTTP authorization tests. |
+| Scheduling, queues and rate limits | Scheduled scans use shared execution; manual cadence disables after execution. Both Redis/RQ and database queue backends exist, with duplicate-enqueue guards, configurable retries and DB task leases. Memory/DB outbound pacing supports per-scope overrides; GitHub rate-limit errors include guidance. Tests: `test_scheduler.py`, `test_queueing.py`, `test_rate_limit.py`, `test_discovery.py`, queue CLI cases. | Retries do not classify transient versus permanent errors; DB claims select queued tasks and do not recover expired running leases. Full job recovery, rate-limit deferral and scalable idempotency remain incomplete. |
+| Reports | JSON/CSV/HTML and basic ReportLab PDF export, summary/trends, relationship graph, organization comparison and remediation suggestions in `reporting.py`. Scheduled reports support tenant scope, files and webhook delivery. Tests: export/dashboard cases in `test_cli.py` (including PDF signature), `test_api.py`, `test_scheduled_reports.py`. | No SARIF adapter or distinct executive/technical PDF designs. Comparison/remediation helpers have less direct coverage than exports. Scheduled report delivery is not a general finding-alert system. |
 
-### Phase 3 — Initial scanning pipeline
-- built-in custom pattern scanner
-- built-in repository governance scanner for CODEOWNERS, SECURITY.md, and unpinned workflow checks
-- persisted scan jobs, tool runs, findings, risk scores, and evidence
-- redacted evidence handling for scanner output
-- external scanner wrappers for `gitleaks`, `detect-secrets`, `semgrep`, and `trufflehog` with graceful failure when binaries are unavailable
+## Remaining gaps and engineering phase mapping
 
-### Phase 4 — Discovery and reporting
-- public GitHub repository and organization discovery using the GitHub REST API
-- optional `ORGSCAN_GITHUB_TOKEN` support for authenticated discovery
-- ProjectDiscovery-backed domain enrichment through `subfinder` and `httpx`
-- summary reporting, JSON/CSV/HTML export, and richer static dashboard generation
+Follow [development-plan.md](development-plan.md) in order, extending existing code rather than recreating these capabilities:
 
-### Phase 5 — Domain intelligence providers
-- provider abstraction for domain intelligence
-- local metadata provider for repository-domain and account-email correlation
-- crt.sh certificate transparency provider for public host discovery
-- WHOIS provider for registrar and nameserver enrichment
-- DNS provider for NS, MX, TXT, A, AAAA, and CNAME enrichment across domains and discovered hosts
-- aggregate domain discovery mode that combines installed providers and surfaces provider warnings
-- persisted DomainExposure and IdentityCorrelation records
+- **Phase 1:** decompose existing API/CLI orchestration into shared services, preserving adapters and imports.
+- **Phases 2–3:** formalize the existing scanner registry/contract; add the missing shared ScanPlan and profile resolution.
+- **Phases 4–5:** extend existing mirror/ref/history execution with checkpoints, isolation and incremental decisions.
+- **Phases 6–7:** harden existing YARA and ripgrep adapters and introduce validated rule-driven configuration.
+- **Phases 8–9:** extend existing finding deduplication and graph relationships.
+- **Phase 10:** extend existing GitHub public search and integrate its provenance/results more fully; the provider is already implemented.
+- **Phases 11–14:** integrate authentication into HTTP/browser flows, formalize lifecycle history, improve operator views and job reliability.
+- **Phases 15–16:** extend existing exports/PDF/scheduled reports with SARIF and report variants; add doctor/release hardening beyond existing setup/verify-deps.
 
-### Phase 6 — Expansion and relationship mapping
-- GitHub expansion engine for repository forks and contributors
-- relationship persistence for contributor and fork edges
-- `orgscan expand` CLI for repository and organization expansion
+## Baseline validation and pre-existing limitations
 
-### Phase 7 — Scheduling and re-scan workflow
-- scheduled scan model and CLI commands for scheduling and running due scans
-- queue-like scan job execution using persisted scheduled scans and tool runs
-- optional Redis/RQ queue backend with worker and enqueue commands for scheduled scans
-- manual cadence disables itself after execution to avoid runaway reprocessing
+Before Phase 0 edits, the supplied full-suite result was **86 passed, 2 failed**. A local rerun of `.venv/bin/python -m pytest tests/test_bootstrap.py tests/test_cli.py -q` reproduced both failures (26 passed, 2 failed):
 
-### Phase 8 — API surface
-- FastAPI service with health, summary, filtered findings, scheduled-scan, relationship graph, and trend endpoints
-- live HTML dashboard served from the same app with interactive filter controls
-- finding and scan-job drill-down HTML pages plus a graph-focused HTML view
-- artifact upload and analysis via API and dashboard, including optional installed external scanners
-- scanner/tooling readiness JSON for easier OSS integration setup
-- `orgscan serve-api` for local web/API serving
+- `tests/test_bootstrap.py::test_bootstrap_verify_only_reports_mode` expected `venv_exists=False`, but bootstrap correctly observed the development checkout's `.venv`. The test now redirects bootstrap's module-derived checkout root to a temporary directory and covers both absent and existing venvs, asserting verify-only performs no installation.
+- `tests/test_cli.py::test_cli_scan_reports_missing_semgrep` invoked installed Semgrep rather than the missing-binary path. Its output included `Cannot create auto config when metrics are off`. Missing-scanner CLI tests now fake executable lookup, including the analogous Gitleaks and detect-secrets cases. Production scanner behavior, installed tools and the checkout `.venv` are unchanged.
 
-### Phase 9 — Execution telemetry
-- ToolRun persistence for auditability of scanner invocations
-- `orgscan jobs` for scan job, tool run, and scheduled scan inspection
-- execution state is visible in reports and API summary output
+Phase 0 also removes one duplicate `python-multipart` dependency. No feature, schema, command or endpoint changes are included. Post-change validation:
 
-### Phase 10 — Open-source tooling gap analysis
-- documented OSS capability matrix and remaining gaps in `docs/open-source-tooling-gaps.md`
-- current implementation keeps a free-first approach while identifying where additional OSS systems are needed
-- saved output from supported external scanners can be ingested and normalized through the common finding model
+- `.venv/bin/python -m pytest tests/test_bootstrap.py tests/test_cli.py tests/test_docs.py`: **31 passed**.
+- `.venv/bin/python -m pytest`: **89 passed, 2 warnings** in 42.51 seconds outside the sandbox. The extra test is the existing-venv parameter case. Warnings concern Starlette's httpx TestClient integration and AnyIO's deprecated BlockingPortal alias; no dependency upgrade was attempted.
+- The sandboxed full run stalled at `test_api_findings_supports_extended_filters` and was interrupted. A separate 25-second bounded run with `-o faulthandler_timeout=10` showed TestClient waiting in AnyIO's thread portal. Running the unchanged suite outside the sandbox resolved the hang; this is an execution-environment limitation, not a failing assertion.
+- `git diff --check` passed; TOML parsing confirmed unique runtime requirements and the unchanged CLI entry point. No configured static checker was available to run.
 
-## Remaining gaps versus the full project spec
-- no YARA or ripgrep-heuristic coverage yet; repo history coverage now includes built-in git-history pattern scanning alongside current detect-secrets, repo-governance, DNS, WHOIS, crt.sh, ProjectDiscovery, and local metadata support
-- no advanced distributed orchestration beyond the initial Redis/RQ worker backend, and no tenant-aware HTML auth/session layer or PDF reporting
-- no paid provider implementations; only the abstraction and free/local correlation path exist
-- no large-scale branch/history orchestration or incremental repo mirror management
+Stale documentation corrected here: the prior roadmap said YARA/ripgrep, paid providers, PDF and mirror management were absent, and described ad hoc SQLite evolution despite existing Alembic migrations. The tooling-gap document repeated some of these claims. Architecture/contract/plan documents describe future requirements; a baseline link now distinguishes those requirements from current implementation.
 
-## Beta-readiness priorities
-- add YARA and ripgrep-style heuristics to close the most obvious OSS integration gaps
-- harden dashboard auth and tenant-aware filtering before any shared deployment
-- add richer interactive graph exploration and scan-log navigation polish on top of the current HTML views
-- package repeatable local/container setup so external scanners are easier to enable in beta environments
-
-## Current implementation stance
-The repository now covers the requested Phase 0/1 foundation and extends into practical slices for phases 2-10. The remaining gaps are primarily integrations, web UX, distributed execution, and enrichment breadth rather than missing core application structure.
+Remaining risks are pre-existing and outside this phase: external scanner and mirror subprocess calls lack uniform timeouts; scanner stderr can propagate into persisted errors without uniform redaction; untrusted-path/archive safety and HTTP authorization need dedicated hardening and tests. Normal tests use synthetic repositories and mocked external outputs, and do not prove production-scale safety or compatibility. No Ruff/mypy or other static-check configuration is currently present in `pyproject.toml` or CI.

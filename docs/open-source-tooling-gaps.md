@@ -1,53 +1,30 @@
 # Open-source tooling gaps and recommendations
 
-This document summarizes what the current repository can accomplish directly and where additional open-source tools or larger systems would materially improve coverage.
+For implementation status and test evidence, see the [current architecture/capability baseline](roadmap.md#current-architecturecapability-baseline). This document identifies integration limitations rather than assigning engineering phase order; use [development-plan.md](development-plan.md) for that order.
 
 ## Already integrated or supported
-- Built-in custom pattern scanning for local files and directories
-- Built-in git-history pattern scanning for historical added and removed diff content in Git repositories
-- Built-in repository governance scanning for missing CODEOWNERS, missing SECURITY.md, and unpinned GitHub Actions references
-- Optional `gitleaks` integration for generic secret scanning
-- Optional `detect-secrets` integration for complementary baseline-style secret detection
-- Optional `semgrep` integration for policy and code/config scanning
-- Optional `trufflehog` integration for verified secret detection
-- Optional ProjectDiscovery integration via `subfinder` and `httpx` for domain and HTTP exposure enrichment
-- Optional `crt.sh` integration for certificate-transparency host discovery
-- Optional `whois` integration for registrar and nameserver enrichment
-- Optional `dnspython` integration for DNS record enrichment
-- Optional paid-provider integrations for Have I Been Pwned, DeHashed, and Intelligence X
-- GitHub REST API discovery for public repository and organization metadata
-- Local correlation of domains against stored repository metadata and account emails
-- SQLite-backed persistence, exports, reports, and local API responses
-- FastAPI-served live dashboard and JSON API for local interactive use, including finding drill-downs, scan-job drill-downs, graph view, and artifact upload workflows
-- Optional Redis/RQ-backed scheduled scan queue workers
-- tooling readiness surfaced in CLI/API/dashboard with configured binary paths and install guidance for optional OSS integrations
 
-## High-value OSS tools to add next
+- Built-in custom patterns, Git history diff patterns, and repository governance checks.
+- Optional Gitleaks, TruffleHog, Semgrep, detect-secrets, YARA and ripgrep heuristic adapters, plus entry-point scanner plugins and supported saved-report ingestion.
+- YARA default token/private-key rules and a configurable rules path; ripgrep internal-hostname and organization-keyword heuristics.
+- ProjectDiscovery subfinder/httpx, crt.sh, whois, dnspython DNS, security.txt, and local repository/account/domain correlation.
+- GitHub REST discovery, contributor/fork/ownership relationships, and domain-based repository/code/issue search.
+- Optional Have I Been Pwned, DeHashed and Intelligence X provider implementations and aggregate enrichment.
+- Reusable repository checkouts, fetch/ref selection and scheduled mirror scans.
+- SQLAlchemy/SQLite persistence with Alembic, JSON/CSV/HTML/basic PDF reports, scheduled reports and webhook delivery.
+- FastAPI JSON API and server-rendered dashboard, detail/graph views and artifact uploads.
+- Redis/RQ and database queue workers, configurable retries and memory/database outbound request pacing.
+- CLI/API/dashboard binary-presence inventory with configured paths and install guidance.
 
-### Code and config analysis
-- **YARA**: matching for known document or artifact patterns
-- **ripgrep**-based heuristics: lightweight scanning for internal hostnames, org-specific strings, and governance files
+## Remaining integration and hardening gaps
 
-### Domain and infrastructure enrichment
-- other CT log APIs can complement the existing `crt.sh` integration with broader or redundant certificate-transparency coverage
-- **dnsrecon**: broader DNS enumeration beyond the current `dnspython` resolver-based enrichment
-- **httpx** / **subfinder** / **amass**: broader asset discovery, only where scope permits
+- Uniform scanner version/configuration readiness, timeout/error handling and safe diagnostics remain incomplete. YARA parses only known built-in rule IDs even with a custom rules file; ripgrep definitions are not a validated rule-file system. Existing parser tests are not live-binary compatibility certification.
+- Cross-scanner correlation and evidence deduplication need shared domain logic, not another scanner binary.
+- Incremental checkpoints, isolated repository materialization and locking are missing despite existing mirror/ref support.
+- Other CT sources, dnsrecon and amass could broaden enrichment; subfinder and httpx are already integrated.
+- Queue retry classification, stale-task recovery and upstream-aware deferral should extend the existing backends. A Celery/Dramatiq migration is not required by current evidence.
+- AuthContext, roles and session-token administration exist, but FastAPI JSON and HTML routes do not enforce those helpers. Browser authentication and HTTP tenant boundaries remain incomplete.
+- Basic PDF export exists; executive/technical layouts and SARIF remain missing. Graph exploration and operator workflows still need UI work.
+- Paid integrations require configured credentials and external service access. Mocked coverage does not certify current provider contracts; HIBP currently matches breached domains in its breach catalog rather than searching all employee accounts.
 
-### Execution and scale
-- **Dramatiq** or **Celery** with **Redis**: richer worker orchestration, retries, and scaling beyond the current initial RQ queue backend
-- richer client-side visualization stack for graph exploration and advanced dashboard UX beyond the current server-rendered FastAPI dashboard
-
-## Gaps that cannot be fully solved by simple library swaps alone
-- distributed, rate-aware scanning at scale requires queue infrastructure and operational deployment choices
-- graph visualization needs a UI layer and likely client-side visualization libraries, not just backend storage
-- multi-user auth/RBAC requires deployment architecture and identity integration, not only an OSS scanner
-- PDF reporting requires dedicated rendering tooling and styling, not just data export
-- paid breach/exposure providers require external accounts and ToS review; OSS can only cover the free-first subset
-
-## Current recommendation
-Use the current repository as the local-first control plane, then layer in:
-1. YARA and ripgrep-style heuristics to close the biggest remaining open-source scanner gaps
-2. Semgrep + crt.sh + ProjectDiscovery enrichment with clear local install guidance
-3. deeper retries/rate-aware scaling on top of the initial Redis/RQ queue workers
-4. stronger tenant-aware auth around the current FastAPI dashboard before shared beta usage
-5. Optional paid providers such as Have I Been Pwned, DeHashed, and Intelligence X after the free-first path is solid
+Production safety, release packaging and scale require validation beyond the existing unit suite. These are follow-on work, not new integrations undertaken in Phase 0.
