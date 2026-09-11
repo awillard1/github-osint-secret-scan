@@ -208,6 +208,89 @@ def test_cli_scan_with_git_history_scanner_persists_historical_findings(monkeypa
     get_settings.cache_clear()
 
 
+def test_cli_findings_supports_extended_filters(monkeypatch, tmp_path: Path) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    database_url = f"sqlite:///{tmp_path / 'findings-filters.db'}"
+    monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
+    monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+
+    now = datetime.now(UTC)
+    session_factory = create_session_factory(database_url)
+    init_db(database_url)
+    with session_factory() as session:
+        storage = Storage(session)
+        org, _ = storage.get_or_create_organization("example-org")
+        domain, _ = storage.get_or_create_domain("example.com", organization_id=org.id)
+        repo, _ = storage.get_or_create_repository("example-org/app", organization_id=org.id)
+        scan_job = storage.create_scan_job("repository", repo.full_name, "gitleaks", status="completed")
+        storage.create_finding(
+            CanonicalFinding(
+                source_tool="gitleaks",
+                source_name="gitleaks",
+                category="secret",
+                title="CLI matching finding",
+                description="Should match extended CLI filters",
+                status="triaged",
+                triage_state="reviewing",
+                organization_id=org.id,
+                domain_id=domain.id,
+                repository_id=repo.id,
+                scan_job_id=scan_job.id,
+                risk_score=82,
+                detected_at=now - timedelta(hours=2),
+            )
+        )
+        storage.create_finding(
+            CanonicalFinding(
+                source_tool="semgrep",
+                source_name="semgrep",
+                category="governance",
+                title="CLI other finding",
+                description="Should not match extended CLI filters",
+                risk_score=15,
+                detected_at=now - timedelta(days=2),
+            )
+        )
+        session.commit()
+
+    result = runner.invoke(
+        app,
+        [
+            "findings",
+            "--json",
+            "--source-tool",
+            "gitleaks",
+            "--triage-state",
+            "reviewing",
+            "--organization-id",
+            str(org.id),
+            "--domain-id",
+            str(domain.id),
+            "--repository-id",
+            str(repo.id),
+            "--scan-job-id",
+            str(scan_job.id),
+            "--risk-score-min",
+            "80",
+            "--risk-score-max",
+            "90",
+            "--detected-after",
+            (now - timedelta(days=1)).isoformat(),
+            "--detected-before",
+            now.isoformat(),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "CLI matching finding" in result.stdout
+    assert "CLI other finding" not in result.stdout
+    assert '"risk_score": 82' in result.stdout
+
+    get_settings.cache_clear()
+
+
 def test_cli_discover_report_export_and_dashboard(monkeypatch, tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'discover.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)

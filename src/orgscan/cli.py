@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from enum import StrEnum
 
@@ -92,8 +92,11 @@ def _serialize_finding(finding: Finding) -> dict[str, object]:
         "source_tool": finding.source_tool,
         "title": finding.title,
         "fingerprint": finding.fingerprint,
+        "organization_id": finding.organization_id,
+        "domain_id": finding.domain_id,
         "repository_id": finding.repository_id,
         "scan_job_id": finding.scan_job_id,
+        "risk_score": finding.risk_score,
         "triage_state": finding.triage_state,
         "triage_owner": finding.triage_owner,
         "triage_notes": finding.triage_notes,
@@ -117,6 +120,15 @@ def _parse_due_date(value: str | None) -> date | None:
         return date.fromisoformat(value)
     except ValueError as exc:
         raise typer.BadParameter("Due dates must use YYYY-MM-DD format.") from exc
+
+
+def _parse_datetime(value: str | None, *, option_name: str) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise typer.BadParameter(f"{option_name} must use ISO 8601 datetime format.") from exc
 
 
 def _resolve_asset_context(
@@ -451,11 +463,23 @@ def findings(
     category: str | None = typer.Option(None, "--category", help="Optional finding category filter."),
     severity: str | None = typer.Option(None, "--severity", help="Optional finding severity filter."),
     confidence: str | None = typer.Option(None, "--confidence", help="Optional finding confidence filter."),
+    source_tool: str | None = typer.Option(None, "--source-tool", help="Optional source tool filter."),
+    triage_state: str | None = typer.Option(None, "--triage-state", help="Optional triage state filter."),
+    organization_id: int | None = typer.Option(None, "--organization-id", help="Optional organization id filter."),
+    domain_id: int | None = typer.Option(None, "--domain-id", help="Optional domain id filter."),
+    repository_id: int | None = typer.Option(None, "--repository-id", help="Optional repository id filter."),
+    scan_job_id: int | None = typer.Option(None, "--scan-job-id", help="Optional scan job id filter."),
+    risk_score_min: float | None = typer.Option(None, "--risk-score-min", help="Optional minimum risk score filter."),
+    risk_score_max: float | None = typer.Option(None, "--risk-score-max", help="Optional maximum risk score filter."),
+    detected_after: str | None = typer.Option(None, "--detected-after", help="Optional ISO 8601 lower bound for detected_at."),
+    detected_before: str | None = typer.Option(None, "--detected-before", help="Optional ISO 8601 upper bound for detected_at."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
     init_db(settings.database_url)
     session_factory = create_session_factory(settings.database_url)
+    detected_after_value = _parse_datetime(detected_after, option_name="--detected-after")
+    detected_before_value = _parse_datetime(detected_before, option_name="--detected-before")
 
     with session_factory() as session:
         storage = Storage(session)
@@ -465,6 +489,16 @@ def findings(
             category=category,
             severity=severity,
             confidence=confidence,
+            source_tool=source_tool,
+            triage_state=triage_state,
+            organization_id=organization_id,
+            domain_id=domain_id,
+            repository_id=repository_id,
+            scan_job_id=scan_job_id,
+            risk_score_min=risk_score_min,
+            risk_score_max=risk_score_max,
+            detected_after=detected_after_value,
+            detected_before=detected_before_value,
         )
 
     if json_output:

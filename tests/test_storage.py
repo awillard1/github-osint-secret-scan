@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from orgscan.db import create_session_factory, init_db
@@ -161,6 +162,68 @@ def test_storage_deduplication_preserves_non_default_status(tmp_path: Path) -> N
         session.commit()
 
     assert finding.status == "suppressed"
+
+
+def test_storage_list_findings_supports_extended_filters(tmp_path: Path) -> None:
+    db_path = tmp_path / "filters.db"
+    database_url = f"sqlite:///{db_path}"
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+    now = datetime.now(UTC)
+
+    with session_factory() as session:
+        storage = Storage(session)
+        org = storage.create_organization("example-org")
+        domain = storage.create_domain("example.com", organization_id=org.id)
+        repo = storage.create_repository("example-org/app", organization_id=org.id)
+        scan_job = storage.create_scan_job("repository", repo.full_name, "gitleaks", status="completed")
+        matching = storage.create_finding(
+            CanonicalFinding(
+                source_tool="gitleaks",
+                source_name="gitleaks",
+                category="secret",
+                title="Matching finding",
+                description="Matches extended filters",
+                status="triaged",
+                triage_state="reviewing",
+                organization_id=org.id,
+                domain_id=domain.id,
+                repository_id=repo.id,
+                scan_job_id=scan_job.id,
+                risk_score=91,
+                detected_at=now - timedelta(hours=2),
+            )
+        )
+        storage.create_finding(
+            CanonicalFinding(
+                source_tool="semgrep",
+                source_name="semgrep",
+                category="code-policy",
+                title="Other finding",
+                description="Should be filtered out",
+                status="open",
+                triage_state="new",
+                risk_score=20,
+                detected_at=now - timedelta(days=3),
+            )
+        )
+        session.commit()
+
+    with session_factory() as session:
+        findings = Storage(session).list_findings(
+            source_tool="gitleaks",
+            triage_state="reviewing",
+            organization_id=org.id,
+            domain_id=domain.id,
+            repository_id=repo.id,
+            scan_job_id=scan_job.id,
+            risk_score_min=90,
+            risk_score_max=95,
+            detected_after=now - timedelta(days=1),
+            detected_before=now - timedelta(minutes=30),
+        )
+
+    assert [finding.id for finding in findings] == [matching.id]
 
 
 def test_get_or_create_updates_existing_repository_metadata(tmp_path: Path) -> None:

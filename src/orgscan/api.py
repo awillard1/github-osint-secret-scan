@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
 import uvicorn
@@ -29,6 +30,16 @@ class OrgscanApiService:
         severity: str | None = None,
         category: str | None = None,
         confidence: str | None = None,
+        source_tool: str | None = None,
+        triage_state: str | None = None,
+        organization_id: int | None = None,
+        domain_id: int | None = None,
+        repository_id: int | None = None,
+        scan_job_id: int | None = None,
+        risk_score_min: float | None = None,
+        risk_score_max: float | None = None,
+        detected_after: datetime | None = None,
+        detected_before: datetime | None = None,
     ) -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
@@ -38,6 +49,16 @@ class OrgscanApiService:
                 severity=severity,
                 category=category,
                 confidence=confidence,
+                source_tool=source_tool,
+                triage_state=triage_state,
+                organization_id=organization_id,
+                domain_id=domain_id,
+                repository_id=repository_id,
+                scan_job_id=scan_job_id,
+                risk_score_min=risk_score_min,
+                risk_score_max=risk_score_max,
+                detected_after=detected_after,
+                detected_before=detected_before,
             )
             return {
                 "findings": [
@@ -54,14 +75,23 @@ class OrgscanApiService:
                         "triage_notes": finding.triage_notes,
                         "source_tool": finding.source_tool,
                         "source_name": finding.source_name,
+                        "organization_id": finding.organization_id,
+                        "domain_id": finding.domain_id,
                         "repository_id": finding.repository_id,
                         "scan_job_id": finding.scan_job_id,
+                        "risk_score": finding.risk_score,
                         "detected_at": finding.detected_at.isoformat(),
                         "fingerprint": finding.fingerprint,
                     }
                     for finding in findings
                 ]
             }
+
+    @staticmethod
+    def _parse_datetime_param(value: str | None) -> datetime | None:
+        if value in (None, ""):
+            return None
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
     def _scheduled_scans_payload(self) -> dict[str, object]:
         with self.session_factory() as session:
@@ -161,6 +191,16 @@ class OrgscanApiService:
                 severity=params.get("severity", [None])[0],
                 category=params.get("category", [None])[0],
                 confidence=params.get("confidence", [None])[0],
+                source_tool=params.get("source_tool", [None])[0],
+                triage_state=params.get("triage_state", [None])[0],
+                organization_id=int(params["organization_id"][0]) if params.get("organization_id") else None,
+                domain_id=int(params["domain_id"][0]) if params.get("domain_id") else None,
+                repository_id=int(params["repository_id"][0]) if params.get("repository_id") else None,
+                scan_job_id=int(params["scan_job_id"][0]) if params.get("scan_job_id") else None,
+                risk_score_min=float(params["risk_score_min"][0]) if params.get("risk_score_min") else None,
+                risk_score_max=float(params["risk_score_max"][0]) if params.get("risk_score_max") else None,
+                detected_after=self._parse_datetime_param(params.get("detected_after", [None])[0]),
+                detected_before=self._parse_datetime_param(params.get("detected_before", [None])[0]),
             )
         if route == "/scheduled-scans":
             return 200, self._scheduled_scans_payload()
@@ -194,6 +234,16 @@ def create_app(database_url: str) -> FastAPI:
         severity: str | None = None,
         category: str | None = None,
         confidence: str | None = None,
+        source_tool: str | None = None,
+        triage_state: str | None = None,
+        organization_id: int | None = None,
+        domain_id: int | None = None,
+        repository_id: int | None = None,
+        scan_job_id: int | None = None,
+        risk_score_min: float | None = None,
+        risk_score_max: float | None = None,
+        detected_after: datetime | None = None,
+        detected_before: datetime | None = None,
     ) -> dict[str, object]:
         return service._findings_payload(
             limit=limit,
@@ -201,6 +251,16 @@ def create_app(database_url: str) -> FastAPI:
             severity=severity,
             category=category,
             confidence=confidence,
+            source_tool=source_tool,
+            triage_state=triage_state,
+            organization_id=organization_id,
+            domain_id=domain_id,
+            repository_id=repository_id,
+            scan_job_id=scan_job_id,
+            risk_score_min=risk_score_min,
+            risk_score_max=risk_score_max,
+            detected_after=detected_after,
+            detected_before=detected_before,
         )
 
     @app.get("/scheduled-scans")

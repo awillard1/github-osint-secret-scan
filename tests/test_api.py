@@ -70,6 +70,74 @@ def test_api_service_returns_summary_and_findings(tmp_path: Path) -> None:
     assert trends_payload["trends"]
 
 
+def test_api_findings_supports_extended_filters(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'api-filters.db'}"
+    init_db(database_url)
+    session_factory = create_session_factory(database_url)
+    now = datetime.now(UTC)
+    with session_factory() as session:
+        storage = Storage(session)
+        org, _ = storage.get_or_create_organization("example-org")
+        domain, _ = storage.get_or_create_domain("example.com", organization_id=org.id)
+        repo, _ = storage.get_or_create_repository("example-org/app", organization_id=org.id)
+        scan_job = storage.create_scan_job("repository", repo.full_name, "gitleaks", status="completed")
+        storage.create_finding(
+            CanonicalFinding(
+                source_tool="gitleaks",
+                source_name="gitleaks",
+                category="secret",
+                title="Matching API finding",
+                description="Stored for extended filter output",
+                severity="high",
+                status="triaged",
+                triage_state="reviewing",
+                organization_id=org.id,
+                domain_id=domain.id,
+                repository_id=repo.id,
+                scan_job_id=scan_job.id,
+                risk_score=87,
+                detected_at=now - timedelta(hours=1),
+            )
+        )
+        storage.create_finding(
+            CanonicalFinding(
+                source_tool="semgrep",
+                source_name="semgrep",
+                category="governance",
+                title="Other API finding",
+                description="Should be filtered out",
+                severity="low",
+                risk_score=10,
+                detected_at=now - timedelta(days=2),
+            )
+        )
+        session.commit()
+
+    client = TestClient(create_app(database_url))
+    response = client.get(
+        "/findings",
+        params={
+            "source_tool": "gitleaks",
+            "triage_state": "reviewing",
+            "organization_id": org.id,
+            "domain_id": domain.id,
+            "repository_id": repo.id,
+            "scan_job_id": scan_job.id,
+            "risk_score_min": 80,
+            "risk_score_max": 90,
+            "detected_after": (now - timedelta(days=1)).isoformat(),
+            "detected_before": now.isoformat(),
+        },
+    )
+
+    assert response.status_code == 200
+    findings = response.json()["findings"]
+    assert len(findings) == 1
+    assert findings[0]["title"] == "Matching API finding"
+    assert findings[0]["risk_score"] == 87
+    assert findings[0]["organization_id"] == org.id
+
+
 def test_fastapi_dashboard_and_json_routes(tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'fastapi.db'}"
     init_db(database_url)

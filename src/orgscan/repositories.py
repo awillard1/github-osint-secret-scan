@@ -339,8 +339,18 @@ class Storage:
         category: str | None = None,
         severity: str | None = None,
         confidence: str | None = None,
+        source_tool: str | None = None,
+        triage_state: str | None = None,
+        organization_id: int | None = None,
+        domain_id: int | None = None,
+        repository_id: int | None = None,
+        scan_job_id: int | None = None,
+        risk_score_min: float | None = None,
+        risk_score_max: float | None = None,
+        detected_after: datetime | None = None,
+        detected_before: datetime | None = None,
     ) -> Sequence[Finding]:
-        query = select(Finding).order_by(Finding.detected_at.desc(), Finding.id.desc()).limit(limit)
+        query = select(Finding)
         if status:
             query = query.where(Finding.status == status)
         if category:
@@ -349,6 +359,27 @@ class Storage:
             query = query.where(Finding.severity == severity)
         if confidence:
             query = query.where(Finding.confidence == confidence)
+        if source_tool:
+            query = query.where(Finding.source_tool == source_tool)
+        if triage_state:
+            query = query.where(Finding.triage_state == triage_state)
+        if organization_id is not None:
+            query = query.where(Finding.organization_id == organization_id)
+        if domain_id is not None:
+            query = query.where(Finding.domain_id == domain_id)
+        if repository_id is not None:
+            query = query.where(Finding.repository_id == repository_id)
+        if scan_job_id is not None:
+            query = query.where(Finding.scan_job_id == scan_job_id)
+        if risk_score_min is not None:
+            query = query.where(Finding.risk_score >= risk_score_min)
+        if risk_score_max is not None:
+            query = query.where(Finding.risk_score <= risk_score_max)
+        if detected_after is not None:
+            query = query.where(Finding.detected_at >= detected_after)
+        if detected_before is not None:
+            query = query.where(Finding.detected_at <= detected_before)
+        query = query.order_by(Finding.detected_at.desc(), Finding.id.desc()).limit(limit)
         return list(self.session.scalars(query))
 
     def get_finding(self, finding_id: int) -> Finding | None:
