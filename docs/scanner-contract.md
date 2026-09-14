@@ -146,3 +146,24 @@ Phase 17 redaction remains in force: source bodies/credential-labelled fields an
 recognized copied values are removed before persistence, and exports omit raw
 payloads/snippets/indicators. This does not identify every arbitrary unlabelled secret
 or make existing backups safe; operator/plugin metadata must remain redacted.
+
+
+## Phase 19 secret and executable boundaries
+
+All discovered evidence strings and nested metadata cross the shared redactor before
+persistence and again at supported presentation boundaries. Raw secret indicators
+are replaced with redaction markers; a SHA-256 secret digest supports correlation.
+Valid existing digests remain unchanged. Diagnostic targets, provider summaries and
+inventory/readiness warnings receive the same policy. Keep non-secret detector and
+location information; never rely on a UI alone to hide stored credentials.
+Migration 0009 repairs legacy evidence with a frozen copy of this policy.
+
+The supported detect-secrets contract is **1.5.x**. Invoke
+`detect-secrets scan --all-files --force-use-all-plugins TARGET`, which emits baseline
+JSON. Do not pass `--json`: it is not a scan option in the
+[1.5.0 scan parser](https://github.com/Yelp/detect-secrets/blob/v1.5.0/detect_secrets/core/usage/scan.py).
+Readiness requires successful, bounded `--version` and `scan --help` probes with
+the supported flags. Unknown versions/contracts are unavailable, rather than
+advertised ready. An optional live smoke test skips absent/unsupported executables.
+YARA retains its bounded version probe and execution-time rule syntax validation.
+External binaries and plugins still require deployment-specific validation.

@@ -30,12 +30,12 @@ def test_cli_init_db_and_status(monkeypatch, tmp_path: Path) -> None:
     init_result = runner.invoke(app, ["init-db"])
     assert init_result.exit_code == 0
     assert "Initialized database" in init_result.stdout
-    assert "schema_revision: 20260911_0008" in init_result.stdout
+    assert "schema_revision: 20260914_0009" in init_result.stdout
 
     status_result = runner.invoke(app, ["status"])
     assert status_result.exit_code == 0
     assert f"database_url: {database_url}" in status_result.stdout
-    assert "schema_revision: 20260911_0008" in status_result.stdout
+    assert "schema_revision: 20260914_0009" in status_result.stdout
     assert "organizations: 0" in status_result.stdout
 
     setup_result = runner.invoke(app, ["setup", "--verify-only"])
@@ -649,12 +649,13 @@ def test_cli_paid_domain_discovery_and_enriched_aggregate(monkeypatch, tmp_path:
     )
     def github_search_page(self, path, **kwargs):
         if path.startswith("/search/repositories?"):
-            items = [{"full_name": "example/repo", "html_url": "https://github.com/example/repo", "owner": {"login": "example"}}]
+            items = [{"full_name": "example/repo", "private": False, "html_url": "https://github.com/example/repo", "owner": {"login": "example"}}]
         elif path.startswith("/search/code?"):
             items = [{"path": "docs/ops.md", "html_url": "https://github.com/example/repo/blob/main/docs/ops.md",
-                      "repository": {"full_name": "example/repo", "owner": {"login": "example"}}}]
+                      "repository": {"full_name": "example/repo", "private": False, "owner": {"login": "example"}}}]
         else:
-            items = [{"number": 1, "html_url": "https://github.com/example/repo/issues/1", "user": {"login": "analyst"}}]
+            items = [{"number": 1, "html_url": "https://github.com/example/repo/issues/1", "user": {"login": "analyst"},
+                      "repository": {"full_name": "example/repo", "private": False}}]
         return {"items": items}
     monkeypatch.setattr("orgscan.providers.GitHubSearchDomainProvider._github_request_json", github_search_page)
     monkeypatch.setattr(

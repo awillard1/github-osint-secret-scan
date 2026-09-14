@@ -28,10 +28,10 @@ def test_search_deduplicates_normal_entities_findings_and_evidence(tmp_path):
     def request(path, **kwargs):
         requests.append(path)
         kind = urlsplit(path).path.rsplit('/',1)[-1]
-        repository = {'full_name':'outside/repo','owner':{'login':'outside'}}
+        repository = {'private':False,'full_name':'outside/repo','owner':{'login':'outside'}}
         item = repository if kind == 'repositories' else {'repository':repository, 'path':'.env'}
         if kind == 'issues':
-            item = {'repository_url':'https://api.github.com/repos/outside/repo','number':5,'user':{'login':'person'}}
+            item = {'repository':repository, 'repository_url':'https://api.github.com/repos/outside/repo','number':5,'user':{'login':'person'}}
         return {'items':[item], 'total_count':1, 'incomplete_results':False}
     service = GitHubSearchService(Settings(github_token='test-token'), request, lambda:{'rate_limit':{'x-ratelimit-remaining':'9'}})
     with create_session_factory(url)() as session:
@@ -61,7 +61,7 @@ def test_pagination_and_rate_limit_stop_are_recorded(tmp_path):
     calls = []
     def request(path, **kwargs):
         calls.append(path)
-        return {'items':[{'full_name':'outside/repo'}], 'total_count':100}
+        return {'items':[{'private':False,'full_name':'outside/repo'}], 'total_count':100}
     service = GitHubSearchService(Settings(github_token='test'), request,
                                   lambda:{'has_next':True,'rate_limit':{'x-ratelimit-remaining':'0','x-ratelimit-reset':'2000000000'}})
     with create_session_factory(url)() as session:
@@ -120,7 +120,7 @@ def test_multi_page_search_obeys_ceiling_and_records_queries(tmp_path):
     def request(path, **kwargs):
         calls.append(path)
         page = parse_qs(urlsplit(path).query)['page'][0]
-        return {'items':[{'full_name':f'outside/repo{page}'}], 'total_count':100, 'incomplete_results':True}
+        return {'items':[{'private':False,'full_name':f'outside/repo{page}'}], 'total_count':100, 'incomplete_results':True}
     service = GitHubSearchService(Settings(github_token=None),request,lambda:{'has_next':True})
     with create_session_factory(url)() as session:
         storage = Storage(session)

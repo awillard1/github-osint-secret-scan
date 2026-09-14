@@ -1,4 +1,5 @@
 from __future__ import annotations
+from orgscan.redaction import safe_url
 
 import json
 from collections.abc import Mapping
@@ -132,7 +133,7 @@ def setup(
     typer.echo(f"platform: {details['platform']}")
     typer.echo(f"package_manager: {details['package_manager'] or 'unknown'}")
     typer.echo(f"data_dir: {details['data_dir']}")
-    typer.echo(f"database_url: {details['database_url']}")
+    typer.echo(f"database_url: {safe_url(details['database_url'])}")
     typer.echo("required_dependencies:")
     for command, present in details["required"].items():
         typer.echo(f"  - {command}: {'ok' if present else 'missing'}")
@@ -154,7 +155,7 @@ def setup(
 def init_database() -> None:
     settings = _settings()
     init_db(settings.database_url)
-    typer.echo(f"Initialized database at {settings.database_url}")
+    typer.echo(f"Initialized database at {safe_url(settings.database_url)}")
     typer.echo(f"schema_revision: {current_db_revision(settings.database_url) or 'unknown'}")
 
 
@@ -162,7 +163,7 @@ def init_database() -> None:
 def migrate_database() -> None:
     settings = _settings()
     init_db(settings.database_url)
-    typer.echo(f"Migrated database at {settings.database_url}")
+    typer.echo(f"Migrated database at {safe_url(settings.database_url)}")
     typer.echo(f"schema_revision: {current_db_revision(settings.database_url) or 'unknown'}")
 
 
@@ -370,7 +371,7 @@ def status() -> None:
         counts = storage.counts()
     typer.echo(f"app: {settings.app_name}")
     typer.echo(f"environment: {settings.app_env}")
-    typer.echo(f"database_url: {settings.database_url}")
+    typer.echo(f"database_url: {safe_url(settings.database_url)}")
     typer.echo(f"schema_revision: {revision or 'unknown'}")
     typer.echo(_format_counts(counts))
 

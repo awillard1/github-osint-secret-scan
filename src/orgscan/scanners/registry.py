@@ -218,4 +218,5 @@ class ScannerRegistry:
                 "source_class": str(getattr(scanner_class, "source_class", "internal")),
                 "supports_report_ingestion": callable(getattr(scanner_class, "load_report", None)),
             })
-        return rows
+        from orgscan.redaction import redact
+        return redact(rows, secrets_from=settings.as_dict(include_secrets=True) if settings else None)

@@ -10,7 +10,7 @@ The package now has `api/` (FastAPI, compatibility `OrgscanApiService`, artifact
 
 | Area | Implemented capability and evidence | Partial or missing scope |
 | --- | --- | --- |
-| Foundation and storage | Packaging, CLI entry point, environment configuration/redaction, bootstrap/readiness, SQLAlchemy `Storage`, canonical findings, evidence, risk scores, targets, jobs, relationships, suppressions, users/sessions, queue and rate-limit records. `db.py` supports explicit Alembic migration through `20260911_0008`; production startup checks the revision without applying migrations. Tests: `test_config.py`, `test_bootstrap.py`, `test_db.py`, `test_storage.py`, `test_schemas.py`. | SQLite fresh initialization and populated prior evidence-schema upgrades are exercised; PostgreSQL operation remains unverified. Phase 16 adds non-creating doctor and wheel resources; Phase 18 adds runtime-only clean-install CI and frozen historical migration inputs. Bootstrap offers installation guidance, not a complete external-binary installer. |
+| Foundation and storage | Packaging, CLI entry point, environment configuration/redaction, bootstrap/readiness, SQLAlchemy `Storage`, canonical findings, evidence, risk scores, targets, jobs, relationships, suppressions, users/sessions, queue and rate-limit records. `db.py` supports explicit Alembic migration through `20260914_0009`; production startup checks the revision without applying migrations. Tests: `test_config.py`, `test_bootstrap.py`, `test_db.py`, `test_storage.py`, `test_schemas.py`. | SQLite fresh initialization and populated prior evidence-schema upgrades are exercised; PostgreSQL operation remains unverified. Phase 16 adds non-creating doctor and wheel resources; Phase 18 adds runtime-only clean-install CI and frozen historical migration inputs. Bootstrap offers installation guidance, not a complete external-binary installer. |
 | Scanners and plugins | Ten registered scanners (Phase 7 adds heuristic-rules): custom-patterns, git-history-patterns, repo-governance, gitleaks, detect-secrets, semgrep, trufflehog, yara, ripgrep-heuristics, heuristic-rules. Registry factory and `orgscan.scanners` entry-point loading already exist, including report ingestion for supporting scanners. `runner.py` normalizes `ScanMatch` into stored `CanonicalFinding` and records ToolRuns. Phase 2 adds uniform metadata/readiness/context/result adapters, duplicate-ID rejection and registry-driven API/CLI inventory. Tests: `test_scanner.py`, `test_external_scanners.py`, `test_runner.py`, `test_cli.py`, `tests/scanners/`, `tests/api/test_scanner_registry.py`. | YARA versions are probed; other external versions/runtime configuration are not probed; legacy plugins retain responsibility for execution safety. Mocked tests do not establish live tool compatibility. |
 | YARA and heuristics | YARA ships three token/key rules and accepts a configured rules file; its parser redacts matches. Ripgrep scans configurable internal suffixes and organization keywords. Tests: YARA/ripgrep parser cases in `test_scanner.py`; configuration cases in `test_config.py`. | Phase 6 maps local rule metadata and unknown rule IDs, detects versions, and fully redacts matched values/source snippets. Tests: `tests/scanners/test_yara_contract.py`. Phase 18 fingerprints bounded local includes and disables skipping for unresolved configuration. Phase 7 adds the opt-in heuristic-rules scanner with validated JSON, timed regex, stable digests and five starters. Existing ripgrep/custom definitions remain compatible. Tests: `tests/scanners/test_heuristic_rules.py`. |
 | Scan planning | Eight deterministic profiles, explicit overrides and versioned plans shared by CLI/API/scheduler/queues; job/schedule JSON preserves intent. Tests: `tests/services/test_scan_plan.py`, `tests/api/test_scan_profiles.py`. | Discovery profiles use existing domain providers; the dashboard scanner dropdown still supplies explicit scanner selection. Batches are sequential, with per-scanner commits. |
@@ -243,3 +243,17 @@ Phase 18 final validation: **420 tests passed** (22 added cases), two existing
 deprecation warnings; doctor required checks passed with 17 environment warnings.
 The distribution build and separate runtime-only Python 3.13 clean-install validation
 passed. Phase 1 remains partial; see release readiness for migration and deployment limits.
+
+
+## Phase 19 — adversarial security boundaries
+
+Implemented shared persistence/presentation sanitization and forward legacy repair,
+tenant-scoped domain source reads, authoritative report/request visibility, verified
+public GitHub ingestion, credential-safe URL diagnostics, bounded HTTP/Git acquisition,
+and the detect-secrets 1.5.x command/readiness contract. See the seven-item coverage
+and exact validation status in [release readiness](release-readiness.md#phase-19-adversarial-boundary-remediation).
+
+Production rollout requires explicit migration from 0008 to 0009 after backup.
+Portable cache checks require deployment disk quotas; PostgreSQL and live external
+tools remain uncertified. Phase 1 remains **partial**. Dashboard scaling, queue batch
+summaries, compatibility-helper cleanup and broader decomposition are deferred.

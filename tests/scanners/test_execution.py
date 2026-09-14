@@ -32,7 +32,10 @@ def test_external_execution_uses_context_and_safe_errors(monkeypatch, tmp_path, 
 
     def run(command, **kwargs):
         if command[-1] == "--version":
-            return subprocess.CompletedProcess(command, 0, stdout="4.5.0", stderr="")
+            return subprocess.CompletedProcess(command, 0, stdout="1.5.0" if name == "detect-secrets" else "4.5.0", stderr="")
+        if name == "detect-secrets" and command[-2:] == ["scan", "--help"]:
+            assert kwargs["timeout"] == 5
+            return subprocess.CompletedProcess(command, 0, stdout="--all-files --force-use-all-plugins", stderr="")
         assert isinstance(command, list)
         assert kwargs["timeout"] == 7.5
         assert kwargs["cwd"] == Path.cwd()

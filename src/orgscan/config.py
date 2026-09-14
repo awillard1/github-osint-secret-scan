@@ -28,7 +28,10 @@ class Settings(BaseSettings):
     github_api_base_url: str = "https://api.github.com"
     crtsh_base_url: str = "https://crt.sh"
     github_token: str | None = None
-    http_timeout_seconds: int = 15
+    http_timeout_seconds: int = Field(default=15, gt=0)
+    http_response_max_bytes: int = Field(default=2_000_000, gt=0, le=100_000_000)
+    git_output_max_bytes: int = Field(default=8_000_000, gt=0, le=100_000_000)
+    repository_max_bytes: int = Field(default=1_000_000_000, gt=0)
     outbound_requests_per_minute: int = 0
     outbound_min_interval_seconds: float = 0.0
     rate_limit_backend: str = "db"
@@ -91,6 +94,9 @@ class Settings(BaseSettings):
             ):
                 if payload.get(secret_field):
                     payload[secret_field] = "<redacted>"
+        if not include_secrets:
+            from orgscan.redaction import redact
+            payload = redact(payload, secrets_from=self.model_dump())
         return payload
 
     def heuristic_term_list(self) -> list[str]:
@@ -113,6 +119,9 @@ def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
         "ORGSCAN_CRTSH_BASE_URL": "https://crt.sh",
         "ORGSCAN_GITHUB_TOKEN": "",
         "ORGSCAN_HTTP_TIMEOUT_SECONDS": 15,
+        "ORGSCAN_HTTP_RESPONSE_MAX_BYTES": 2_000_000,
+        "ORGSCAN_GIT_OUTPUT_MAX_BYTES": 8_000_000,
+        "ORGSCAN_REPOSITORY_MAX_BYTES": 1_000_000_000,
         "ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE": 0,
         "ORGSCAN_OUTBOUND_MIN_INTERVAL_SECONDS": 0,
         "ORGSCAN_RATE_LIMIT_BACKEND": "db",

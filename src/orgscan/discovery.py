@@ -6,6 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from orgscan.config import Settings
+from orgscan.http_limits import read_response, response_deadline, ResponseTooLarge
 from orgscan.rate_limit import wait_for_rate_limit
 
 
@@ -104,13 +105,14 @@ class GitHubDiscoveryClient:
         request = Request(f"{self.base_url}{path}", headers=headers)
         try:
             wait_for_rate_limit(self.settings, "github-api")
+            deadline = response_deadline(self.timeout)
             with urlopen(request, timeout=self.timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
+                return json.loads(read_response(response, settings=self.settings, deadline=deadline).decode("utf-8"))
         except HTTPError as exc:
             if exc.code == 403:
                 raise DiscoveryError(
                     "GitHub API request was rate limited or forbidden; configure ORGSCAN_GITHUB_TOKEN to raise limits."
-                ) from exc
-            raise DiscoveryError(f"GitHub API request failed with status {exc.code}") from exc
-        except URLError as exc:
-            raise DiscoveryError(f"GitHub API request failed: {exc.reason}") from exc
+                ) from None
+            raise DiscoveryError(f"GitHub API request failed with status {exc.code}") from None
+        except (OSError, UnicodeError, json.JSONDecodeError, ResponseTooLarge):
+            raise DiscoveryError("GitHub API request failed: transport, size or decoding error") from None

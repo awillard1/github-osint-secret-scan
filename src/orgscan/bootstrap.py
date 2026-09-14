@@ -7,6 +7,7 @@ import sys
 import venv
 from pathlib import Path
 
+from orgscan.redaction import safe_url, redact
 from orgscan.config import Settings
 from orgscan.scanners import get_registry
 from orgscan.services.scanner_service import scanner_inventory
@@ -119,7 +120,7 @@ def optional_tool_inventory(settings: Settings, *, inventory=None) -> list[dict[
                 "install_note": OPTIONAL_INSTALL_NOTES.get(command, ""),
             }
         )
-    return tools
+    return redact(tools, secrets_from=settings.model_dump())
 
 
 def recommended_install_command(package_manager: str | None, commands: tuple[str, ...]) -> str:
@@ -180,7 +181,7 @@ def bootstrap(
         "venv_exists": venv_path.exists(),
         "install_returncode": None if install_result is None else install_result.returncode,
         "mode": "verify-only" if verify_only else "install",
-        "database_url": settings.database_url,
+        "database_url": safe_url(settings.database_url),
         "data_dir": str(settings.data_dir),
         "next_steps": [
             "Create and activate the virtual environment." if not venv_path.exists() else "Activate the existing virtual environment.",

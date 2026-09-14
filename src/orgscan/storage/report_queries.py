@@ -1,7 +1,7 @@
 """Report aggregates and bounded detail queries; no full finding materialization."""
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import case, func, select, or_, cast, String
+from sqlalchemy import case, func, select, cast, String
 
 from orgscan import models as m
 
@@ -9,39 +9,9 @@ from orgscan import models as m
 def report_summary(storage, *, tenant_keys=None):
     session = storage.session
     scope = storage.finding_tenant_scope(tenant_keys)
-    finding_ids = select(m.Finding.id).where(scope)
-    orgs = select(m.Organization.id)
-    if tenant_keys is not None:
-        orgs = orgs.where(m.Organization.tenant_key.in_(tenant_keys))
-    conditions = {m.Organization: m.Organization.id.in_(orgs)}
-    for model in (m.Repository, m.Domain, m.Account):
-        conditions[model] = model.organization_id.in_(orgs)
-    if tenant_keys is None:
-        conditions = {}
+    from orgscan.storage.visibility import visibility_ids
+    conditions = {} if tenant_keys is None else {model: model.id.in_(ids) for model, ids in visibility_ids(tenant_keys).items()}
     conditions[m.Finding] = scope
-    conditions[m.Evidence] = m.Evidence.finding_id.in_(finding_ids)
-    domains = select(m.Domain.id).where(conditions.get(m.Domain, True))
-    for model in (m.DomainExposure, m.IdentityCorrelation):
-        conditions[model] = model.domain_id.in_(domains) if tenant_keys is not None else True
-    repos = select(m.Repository.id).where(conditions.get(m.Repository, True))
-    if tenant_keys is not None:
-        plan = m.ScanJob.parameters_json['scan_plan']
-        conditions[m.ScanJob] = or_(m.ScanJob.id.in_(select(m.Finding.scan_job_id).where(scope)),
-            plan['organization_id'].as_integer().in_(orgs), plan['repository_id'].as_integer().in_(repos),
-            (m.ScanJob.target_type == 'domain') & m.ScanJob.target_id.in_(select(cast(m.Domain.id, String)).where(m.Domain.id.in_(domains))))
-        conditions[m.ToolRun] = m.ToolRun.scan_job_id.in_(select(m.ScanJob.id).where(conditions[m.ScanJob]))
-        metadata = m.ScheduledScan.metadata_json
-        conditions[m.ScheduledScan] = or_(metadata['organization_id'].as_integer().in_(orgs),
-            metadata['repository_id'].as_integer().in_(repos), metadata['scan_plan']['organization_id'].as_integer().in_(orgs),
-            metadata['scan_plan']['domain_id'].as_integer().in_(domains))
-        conditions[m.ScheduledReport] = or_(m.ScheduledReport.target_type == 'global',
-            (m.ScheduledReport.target_type == 'tenant') & m.ScheduledReport.target_value.in_(tenant_keys))
-        entity_conditions = []
-        for kind, model in [('organization', m.Organization), ('repository', m.Repository), ('domain', m.Domain), ('account', m.Account)]:
-            ids = select(cast(model.id, String)).where(conditions.get(model, True))
-            entity_conditions.append((m.Relationship.from_entity_type == kind) & m.Relationship.from_entity_id.in_(ids))
-            entity_conditions.append((m.Relationship.to_entity_type == kind) & m.Relationship.to_entity_id.in_(ids))
-        conditions[m.Relationship] = or_(*entity_conditions)
 
     def rows(model, limit=None):
         query = select(model).where(conditions.get(model, True)).order_by(model.id.desc())

@@ -17,6 +17,7 @@ import dns.exception
 import dns.resolver
 
 from orgscan.config import Settings
+from orgscan.http_limits import read_response, response_deadline, ResponseTooLarge
 from orgscan.services.job_policy import Failure, classify_failure
 from orgscan.rate_limit import wait_for_rate_limit
 from orgscan.repositories import Storage
@@ -28,6 +29,12 @@ class DomainProviderResult:
     identity_correlations: list[str]
     warnings: list[str] | None = None
     failure: Failure | None = None
+
+    def __post_init__(self):
+        from orgscan.redaction import redact
+        values = redact({'exposures':self.exposures, 'identity_correlations':self.identity_correlations, 'warnings':self.warnings})
+        for key, value in values.items():
+            object.__setattr__(self, key, value)
 
 
 class DomainProviderError(RuntimeError):
@@ -89,14 +96,17 @@ def _request_json(
     request = Request(url, headers=headers or {}, method=method, data=data)
     try:
         wait_for_rate_limit(settings, scope)
+        deadline = response_deadline(timeout)
         with urlopen(request, timeout=timeout) as response:
             if response_metadata is not None:
                 response_metadata.update(_response_metadata(response))
-            payload = json.loads(response.read().decode("utf-8") or "null")
+            payload = json.loads(read_response(response, settings=settings, deadline=deadline).decode("utf-8") or "null")
     except HTTPError as exc:
         if response_metadata is not None:
             response_metadata.update(_response_metadata(exc))
         raise DomainProviderError(f"request failed with status {exc.code}", failure=classify_failure(exc)) from None
+    except ResponseTooLarge:
+        raise DomainProviderError("HTTP response exceeds the allowed size limit") from None
     except (OSError, UnicodeError) as exc:
         raise DomainProviderError("Provider transport or decoding failure", failure=classify_failure(exc)) from None
     except json.JSONDecodeError as exc:
@@ -130,38 +140,39 @@ class LocalMetadataDomainProvider(DomainIntelligenceProvider):
         exposures: list[str] = []
         identity_correlations: list[str] = []
 
-        for repository in storage.list_repositories():
-            haystacks = [
-                repository.full_name.lower(),
-                (repository.url or "").lower(),
-                json.dumps(repository.metadata_json).lower(),
-            ]
-            if any(needle in haystack for haystack in haystacks):
-                summary = f"Repository metadata references domain {domain_name}: {repository.full_name}"
-                storage.create_domain_exposure(
-                    domain_record.id,
-                    source="github-metadata",
-                    source_name=self.name,
-                    result_summary=summary,
-                    normalized_hash=self._hash("repo", domain_name, repository.full_name),
-                    source_class="free",
-                    confidence="likely",
-                    severity="low",
-                )
-                exposures.append(summary)
+        with storage.domain_sources(domain_record) as sources:
+            for repository in sources.list_repositories():
+                haystacks = [
+                    repository.full_name.lower(),
+                    (repository.url or "").lower(),
+                    json.dumps(repository.metadata_json).lower(),
+                ]
+                if any(needle in haystack for haystack in haystacks):
+                    summary = f"Repository metadata references domain {domain_name}: {repository.full_name}"
+                    storage.create_domain_exposure(
+                        domain_record.id,
+                        source="github-metadata",
+                        source_name=self.name,
+                        result_summary=summary,
+                        normalized_hash=self._hash("repo", domain_name, repository.full_name),
+                        source_class="free",
+                        confidence="likely",
+                        severity="low",
+                    )
+                    exposures.append(summary)
 
-        for account in storage.list_accounts():
-            if account.email and account.email.lower().endswith(f"@{needle}"):
-                storage.create_identity_correlation(
-                    domain_record.id,
-                    source="github-metadata",
-                    relation_type="email-domain-match",
-                    email=account.email,
-                    username=account.username,
-                    confidence="likely",
-                    evidence_reference=account.email,
-                )
-                identity_correlations.append(account.username)
+            for account in sources.list_accounts():
+                if account.email and account.email.lower().endswith(f"@{needle}"):
+                    storage.create_identity_correlation(
+                        domain_record.id,
+                        source="github-metadata",
+                        relation_type="email-domain-match",
+                        email=account.email,
+                        username=account.username,
+                        confidence="likely",
+                        evidence_reference=account.email,
+                    )
+                    identity_correlations.append(account.username)
 
         return DomainProviderResult(exposures=exposures, identity_correlations=identity_correlations, warnings=[])
 
@@ -331,10 +342,13 @@ class CrtShDomainProvider(DomainIntelligenceProvider):
             },
         )
         try:
+            deadline = response_deadline(settings.http_timeout_seconds)
             with urlopen(request, timeout=settings.http_timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8") or "[]")
+                payload = json.loads(read_response(response, settings=settings, deadline=deadline).decode("utf-8") or "[]")
         except HTTPError as exc:
             raise DomainProviderError(f"crt.sh request failed with status {exc.code}", failure=classify_failure(exc)) from None
+        except ResponseTooLarge:
+            raise DomainProviderError("HTTP response exceeds the allowed size limit") from None
         except (OSError, UnicodeError) as exc:
             raise DomainProviderError("crt.sh transport or decoding failure", failure=classify_failure(exc)) from None
         except json.JSONDecodeError as exc:
@@ -575,12 +589,15 @@ class SecurityTxtDomainProvider(DomainIntelligenceProvider):
             )
             try:
                 wait_for_rate_limit(settings, "securitytxt")
+                deadline = response_deadline(settings.http_timeout_seconds if settings else 15)
                 with urlopen(request, timeout=settings.http_timeout_seconds if settings else 15) as response:
-                    return response.read().decode("utf-8", errors="replace"), url
+                    return read_response(response, settings=settings, deadline=deadline).decode("utf-8", errors="replace"), url
             except HTTPError as exc:
                 if exc.code == 404:
                     continue
                 raise DomainProviderError(f"security.txt request failed with status {exc.code}", failure=classify_failure(exc)) from None
+            except ResponseTooLarge:
+                raise DomainProviderError("HTTP response exceeds the allowed size limit") from None
             except (OSError, UnicodeError) as exc:
                 raise DomainProviderError("security.txt transport or decoding failure", failure=classify_failure(exc)) from None
         return None, None

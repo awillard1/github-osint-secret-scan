@@ -13,7 +13,7 @@ scanner registry readiness and known versions, and provider configuration.
 Unknown scanner versions are explicit. Provider readiness checks do not send requests.
 Doctor does not create missing directories/databases, migrate, install, scan, fetch
 repositories, or print configured credentials/URLs. Registry readiness can run its
-bounded version probe (currently YARA). Third-party plugins remain trusted code.
+bounded compatibility probes (YARA and detect-secrets). Third-party plugins remain trusted code.
 Directory permission checks cannot certify capacity, quotas or later filesystem changes.
 PostgreSQL connectivity/schema reads have a code path but no integration certification.
 
@@ -55,15 +55,17 @@ Before upgrading an existing installation:
    separately, with restricted access. Test restoring to a separate location.
 3. Install the reviewed wheel in the intended virtual environment.
 4. Run `orgscan doctor --json`; an old schema should report an upgrade requirement.
-5. Run `orgscan init-db` explicitly, then doctor again. Head is `20260911_0008`.
+5. Run `orgscan init-db` explicitly, then doctor again. Head is `20260914_0009`.
    Migration 0006 adds evidence identity; 0007 maps lifecycle and records inferred
    legacy timestamps. Migration 0008 adds durable queue execution identities,
    quarantines duplicate legacy executions, and sanitizes legacy evidence/diagnostics.
+   Migration 0009 repairs additional credential-bearing evidence and diagnostic fields,
+   including domain summaries, nested plugin metadata and job targets.
    Redaction is irreversible; these migrations do not reconstruct unavailable history.
 6. Validate authorized reads, a local test scan and reporting before restarting workers.
 
 Rollback should restore a tested matching backup and application version. Downgrading
-0008 cannot restore redacted data, and downgrading 0007 removes lifecycle/history fields; it is not a lossless rollback strategy.
+0009/0008 cannot restore redacted data, and downgrading 0007 removes lifecycle/history fields; it is not a lossless rollback strategy.
 
 ## Local smoke and validation
 
@@ -258,3 +260,86 @@ Public CLI/API commands and supported legacy scanner/provider entry points remai
 resolved domain IDs, conservative rescanning and portable report labels are intentional
 behavior changes. No release publication or commit was performed; changes remain in
 the working tree for review.
+
+
+## Phase 19 adversarial boundary remediation
+
+The preceding final adversarial audit reported four release blockers: domain and
+plugin evidence disclosure, cross-tenant local metadata discovery, inconsistent
+report ownership, and private results entering public GitHub search. It also
+identified credential-bearing URL diagnostics, unbounded HTTP/Git acquisition and
+an unsupported detect-secrets argument. This section records that audit's scope
+and the current corrections; earlier phase test counts are historical.
+
+| Item | Implemented boundary | Adversarial coverage |
+| --- | --- | --- |
+| 1. Evidence disclosure | Shared recursive redaction before ORM persistence and at API/report/provider/inventory serialization; secret fingerprints retained; forward repair 0009 | `test_phase19_redaction.py`: tokens, AWS keys, bearer credentials, URL credentials, copied/nested/plugin values, readiness, domain summaries, legacy API rows, repeatable upgrade |
+| 2. Domain tenant isolation | Local metadata reads through a fresh, read-only tenant-scoped source session, including nested providers | `test_phase19_tenancy.py`: private repositories/accounts across synchronous, scheduled and queued local/aggregate discovery |
+| 3. Report ownership | Request authorization, report queries and discovery consume `storage/visibility.py`; explicit finding owner takes precedence; both relationship endpoints required; related assets also scoped | Mixed ownership across JSON/CSV/HTML/PDF/SARIF, API scopes, summaries, scheduled reports and webhook payloads |
+| 4. Public GitHub ingestion | Public repository/issue queries; legacy code queries restricted to verified public repositories; independent affirmative, consistent visibility validation and provenance | Public, private, internal, missing, contradictory and authenticated private responses for each result kind |
+| 5. Safe diagnostics | Shared URL rendering masks userinfo and credential query/fragment fields; safe settings/bootstrap/CLI output; controlled legacy transport errors | Configuration URL copies and CLI diagnostics; URLError, TimeoutError and decoding failures |
+| 6. Acquisition bounds | Shared bounded HTTP reader/deadline; bounded Git stdout/stderr; conservative cache size pre/post checks | Exact byte limit, limit+1, Content-Length, unknown length, deadline, excessive Git output and cache budget |
+| 7. detect-secrets | Baseline JSON scan contract without `--json`; readiness accepts verified 1.5.x version/help contract | Argument/output fixtures, incompatible versions and optional live smoke |
+
+### Migration and deployment implications
+
+`20260914_0009` follows `20260911_0008`; no released migration is changed.
+It uses a frozen sanitizer and keyset batches of 250 rows. It changes data only,
+retains primary/foreign keys and valid correlation digests, logs no evidence values,
+and is repeatable. Downgrade cannot recover removed credentials. Back up and stop
+writers before explicitly running `orgscan migrate-db`; production startup still
+checks the head without applying migrations. Test a deployment backup separately.
+Existing backups and previously exported reports are not repaired automatically.
+
+Authentication records, live connection settings and scheduled webhook URLs retain
+operational credentials required to execute their functions. Diagnostic and report
+rendering masks those credentials; restrict access to the database/configuration.
+Recognized credential formats, labelled secrets and their copies are removed, but
+no heuristic identifies every arbitrary unlabelled secret. Plugins execute trusted
+Python code and must not log or send raw evidence outside the supported boundaries.
+
+Public search coverage is deliberately conservative: ambiguous visibility is
+excluded, including issue payloads without repository visibility. Authenticated
+legacy code search is restricted to at most five verified public repository results.
+See [GitHub search](github-search.md) for the command semantics and provenance.
+CLI/API command names and response structure remain compatible; unsafe evidence,
+mixed-tenant associations and ambiguous public results are intentionally omitted.
+
+HTTP defaults to 2,000,000 response bytes and a 15-second request deadline. Git
+stdout/stderr defaults to 8,000,000 bytes; repository cache budget defaults to
+1,000,000,000 bytes. See [repository cache](repository-cache.md). Pre/post checks
+are not hard disk quotas: use deployment-level quotas for mirrors, temporary
+worktrees and process output, plus process/container resource limits. DNS resolution
+and underlying platform transport behavior still require deployment-level egress
+and time limits. PostgreSQL integration and real external scanner/provider
+certification remain deployment validation requirements. General architecture,
+dashboard scaling and queue batch summaries are outside this phase.
+
+### Phase 19 validation
+
+- Focused Phase 19 adversarial suite: **84 passed, 1 skipped**, two dependency
+  deprecation warnings, 25.17 seconds.
+- Complete suite: **504 passed, 1 skipped**, two dependency deprecation warnings,
+  146.10 seconds. The optional live detect-secrets test skipped because the
+  executable is absent; argument/parser/readiness fixture tests passed.
+- Compile checks (`src`, `migrations`, `scripts`, `tests`) and `git diff --check` passed.
+- Source and wheel distributions built successfully with isolated build dependencies.
+- Clean-install validation passed in a new external virtual environment with only
+  declared runtime dependencies: `pip check`, explicit database initialization,
+  CLI startup, API lifespan/health, local scan and JSON/SARIF reports. Development
+  pytest/httpx packages were absent.
+- Populated legacy repair tests and a separate explicit SQLite **0008 → 0009**
+  upgrade passed. A repeated repair preserved relationships and correlation hashes.
+  Alembic source head: **20260914_0009**. Released migrations 0001–0008 are unchanged.
+- Configured-database doctor: **exit 1**, expected migration-head failure (database
+  remains at 0008), **17 warnings**. The existing database was not modified.
+- Temporary upgraded database doctor using the DB queue: **exit 0**, no required
+  failures, **16 warnings** for optional tools/configuration and deployment settings.
+- Final source/test diff reviewed. Synthetic credentials are constructed only in
+  tests; no full GitHub/AWS credential-shaped literals were introduced into changed
+  files or documentation. No real provider credentials were used for validation.
+
+These checks certify the tested SQLite/runtime paths, not a production PostgreSQL
+rollout or live external-tool availability. Before deployment, back up and explicitly
+apply 0009, rerun doctor with the intended queue/auth configuration, and enforce the
+resource quotas described above.

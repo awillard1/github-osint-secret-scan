@@ -19,12 +19,13 @@ def install():
             if not isinstance(row, (Finding, Evidence, ToolRun, ScanJob, DomainExposure,
                                     IdentityCorrelation, Relationship, FindingHistory, Organization, Repository, Domain, Account, RiskScore, Suppression, ScheduledReport, QueueTask)):
                 continue
-            fields = ('title','description','remediation_hint','raw_payload','metadata_json',
-                      'snippet','extracted_indicator','source_url','triage_notes','reason',
-                      'evidence_summary','stdout_log','stderr_log','error_message','last_error',
-                      'command_line','parameters_json','scope_json','query_used','rationale','repository_path')
-            values = {field: getattr(row,field) for field in fields if hasattr(row,field)}
-            cleaned = redact(values)
+            # Cover every evidence/diagnostic string and JSON field, including newly
+            # added model columns. Connection credentials needed by scheduled delivery
+            # are operational configuration, protected separately at serialization.
+            values = {column.key: getattr(row, column.key) for column in inspect(row).mapper.columns
+                      if isinstance(getattr(row, column.key), (str, dict, list))
+                      and column.key != 'webhook_url'}
+            cleaned = redact(values, preserve_root_keys=True)
             for field, value in cleaned.items():
                 if value != values[field]:
                     setattr(row,field,value)

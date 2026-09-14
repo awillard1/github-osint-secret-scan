@@ -12,83 +12,21 @@ from urllib.request import Request, urlopen
 
 from orgscan.config import Settings
 from orgscan.reports.redaction import redact
+from orgscan.redaction import safe_output
 from orgscan.repositories import Storage
 
 
 def _scoped_assets(storage: Storage, tenant_keys: list[str] | None = None) -> dict[str, Any]:
-    organizations = list(storage.list_organizations())
-    if tenant_keys is not None:
-        organizations = [org for org in organizations if org.tenant_key in tenant_keys]
-    organization_ids = {org.id for org in organizations}
-
-    repositories = [repo for repo in storage.list_repositories() if tenant_keys is None or repo.organization_id in organization_ids]
-    repository_ids = {repo.id for repo in repositories}
-    domains = [domain for domain in storage.list_domains() if tenant_keys is None or domain.organization_id in organization_ids]
-    domain_ids = {domain.id for domain in domains}
-    accounts = [account for account in storage.list_accounts() if tenant_keys is None or account.organization_id in organization_ids]
-    account_ids = {account.id for account in accounts}
-
-    findings = [
-        finding
-        for finding in storage.list_findings(limit=None)
-        if tenant_keys is None
-        or finding.organization_id in organization_ids
-        or finding.repository_id in repository_ids
-        or finding.domain_id in domain_ids
-        or finding.account_id in account_ids
-    ]
-    finding_ids = {finding.id for finding in findings}
-    scan_job_ids = {finding.scan_job_id for finding in findings if finding.scan_job_id is not None}
-    domain_exposures = [exposure for exposure in storage.list_domain_exposures(limit=None) if tenant_keys is None or exposure.domain_id in domain_ids]
-    identity_correlations = [
-        correlation for correlation in storage.list_identity_correlations() if tenant_keys is None or correlation.domain_id in domain_ids
-    ]
-    relationships = list(storage.list_relationships(limit=None))
-    if tenant_keys is not None:
-        allowed_ids = {
-            "organization": {str(value) for value in organization_ids},
-            "repository": {str(value) for value in repository_ids},
-            "domain": {str(value) for value in domain_ids},
-            "account": {str(value) for value in account_ids},
-        }
-        relationships = [
-            relationship
-            for relationship in relationships
-            if relationship.from_entity_id in allowed_ids.get(relationship.from_entity_type, set())
-            or relationship.to_entity_id in allowed_ids.get(relationship.to_entity_type, set())
-        ]
-    scan_jobs = [job for job in storage.list_scan_jobs(limit=None) if tenant_keys is None or job.id in scan_job_ids]
-    tool_runs = [run for run in storage.list_tool_runs(limit=None) if tenant_keys is None or run.scan_job_id in scan_job_ids]
-    scheduled_scans = [
-        scan
-        for scan in storage.list_scheduled_scans()
-        if tenant_keys is None
-        or (scan.metadata_json or {}).get("organization_id") in organization_ids
-        or (scan.metadata_json or {}).get("repository_id") in repository_ids
-    ]
-    scheduled_reports = [
-        report
-        for report in storage.list_scheduled_reports()
-        if tenant_keys is None
-        or report.target_type == "global"
-        or (report.target_type == "tenant" and report.target_value in tenant_keys)
-    ]
-    return {
-        "organizations": organizations,
-        "repositories": repositories,
-        "domains": domains,
-        "accounts": accounts,
-        "findings": findings,
-        "scan_jobs": scan_jobs,
-        "tool_runs": tool_runs,
-        "scheduled_scans": scheduled_scans,
-        "scheduled_reports": scheduled_reports,
-        "domain_exposures": domain_exposures,
-        "identity_correlations": identity_correlations,
-        "relationships": relationships,
-        "finding_ids": finding_ids,
-        "scan_job_ids": scan_job_ids,
-    }
+    from orgscan import models as m
+    models = {'organizations': m.Organization, 'repositories': m.Repository, 'domains': m.Domain,
+              'accounts': m.Account, 'findings': m.Finding, 'scan_jobs': m.ScanJob,
+              'tool_runs': m.ToolRun, 'scheduled_scans': m.ScheduledScan,
+              'scheduled_reports': m.ScheduledReport, 'domain_exposures': m.DomainExposure,
+              'identity_correlations': m.IdentityCorrelation, 'relationships': m.Relationship}
+    scope = {name: storage.visible_rows(model, tenant_keys) for name, model in models.items()}
+    scope['finding_ids'] = {row.id for row in scope['findings']}
+    scope['scan_job_ids'] = {row.id for row in scope['scan_jobs']}
+    return scope
 
 
 def _filtered_findings(
@@ -112,6 +50,7 @@ def _filtered_findings(
     return findings
 
 
+@safe_output
 def build_summary(storage: Storage, *, tenant_keys: list[str] | None = None) -> dict[str, Any]:
     scope = _scoped_assets(storage, tenant_keys)
     findings = list(scope["findings"])

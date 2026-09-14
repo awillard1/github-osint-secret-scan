@@ -26,6 +26,9 @@ class ScanExecutionResult:
     status: str = "completed"
     skip_reason: str | None = None
 
+    def __post_init__(self):
+        object.__setattr__(self, 'target', redact(self.target))
+
 
 def execute_scan(
     storage: Storage,
@@ -226,9 +229,8 @@ def _persist_matches(
 ) -> list[int]:
     from orgscan.services.correlation import finding_identity, evidence_identity, detector_id
     finding_ids: list[int] = []
-    for match in matches:
-        safe = redact({"path":match.path,"title":match.title,"description":match.description,"raw_payload":match.raw_payload,"metadata":match.metadata,"snippet":match.snippet,"indicator":match.indicator,"remediation_hint":match.remediation_hint})
-        match = replace(match, **safe)
+    from orgscan.redaction import sanitize_matches
+    for match in sanitize_matches(matches):
         identity = finding_identity(
             match, scanner_name, organization_id=organization_id, repository_id=repository_id
         )

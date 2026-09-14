@@ -888,11 +888,20 @@ class Storage:
         from sqlalchemy import true
         if tenant_keys is None:
             return true()
-        orgs = select(Organization.id).where(Organization.tenant_key.in_(tenant_keys))
-        return or_(Finding.organization_id.in_(orgs),
-                   Finding.repository_id.in_(select(Repository.id).where(Repository.organization_id.in_(orgs))),
-                   Finding.domain_id.in_(select(Domain.id).where(Domain.organization_id.in_(orgs))),
-                   Finding.account_id.in_(select(Account.id).where(Account.organization_id.in_(orgs))))
+        from orgscan.storage.visibility import visibility_ids
+        return Finding.id.in_(visibility_ids(tenant_keys)[Finding])
+
+    def visible_rows(self, model, tenant_keys=None):
+        from orgscan.storage.visibility import visibility_ids
+        query = select(model).order_by(model.id.desc())
+        if tenant_keys is not None:
+            query = query.where(model.id.in_(visibility_ids(tenant_keys)[model]))
+        return list(self.session.scalars(query))
+
+    def domain_sources(self, domain):
+        """Tenant-scoped, fresh read session; cached foreign objects cannot bypass scope."""
+        from orgscan.storage.sources import domain_sources
+        return domain_sources(self, domain)
 
     def report_summary(self, *, tenant_keys=None):
         from orgscan.storage.report_queries import report_summary

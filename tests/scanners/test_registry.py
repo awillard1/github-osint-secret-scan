@@ -128,7 +128,10 @@ def test_broken_entry_point_is_reported_without_exception_contents(install_plugi
 def test_builtin_metadata_and_readiness_do_not_execute_scans(monkeypatch, name):
     def unexpected(command, **kwargs):
         if command[-1] == "--version":
-            return SimpleNamespace(returncode=0, stdout="4.5.0")
+            return SimpleNamespace(returncode=0, stdout="1.5.0" if name == "detect-secrets" else "4.5.0")
+        if name == "detect-secrets" and command[-2:] == ["scan", "--help"]:
+            assert kwargs["timeout"] == 5
+            return SimpleNamespace(returncode=0, stdout="--all-files --force-use-all-plugins")
         pytest.fail("Readiness must not execute a scan")
 
     monkeypatch.setattr("orgscan.scanners.registry.shutil.which", lambda command: f"/fake/{command}")

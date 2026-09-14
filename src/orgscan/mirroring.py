@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import subprocess
+from orgscan import processes as subprocess
 import os
 import tempfile
 import time
@@ -15,6 +15,8 @@ from orgscan.repositories import Storage
 
 
 _GIT_TIMEOUT = ContextVar("git_timeout", default=300)
+_GIT_OUTPUT_LIMIT = ContextVar("git_output_limit", default=8_000_000)
+_GIT_DISK_CHECK = ContextVar("git_disk_check", default=lambda: None)
 
 
 class MirrorError(RuntimeError):
@@ -51,12 +53,22 @@ class RepositoryMirrorManager:
         self._depth = 0
         self._owner = None
 
+    def _check_disk_budget(self):
+        total = 0
+        if self.path.exists():
+            for root, directories, files in os.walk(self.path, followlinks=False):
+                for name in files:
+                    total += (Path(root) / name).lstat().st_size
+                    if total > self.settings.repository_max_bytes:
+                        raise MirrorError('Repository cache exceeds the configured disk budget; quarantine or remove it before retry')
+
     @contextmanager
     def locked(self):
         if self._depth and self._owner == threading.get_ident():
             self._depth += 1
             try:
                 yield self
+                self._check_disk_budget()
             finally:
                 self._depth -= 1
             return
@@ -79,10 +91,16 @@ class RepositoryMirrorManager:
             self._depth = 1
             self._owner = threading.get_ident()
             token = _GIT_TIMEOUT.set(self.settings.git_timeout_seconds)
+            output_token = _GIT_OUTPUT_LIMIT.set(self.settings.git_output_max_bytes)
+            disk_token = _GIT_DISK_CHECK.set(self._check_disk_budget)
             try:
+                self._check_disk_budget()
                 yield self
+                self._check_disk_budget()
             finally:
                 _GIT_TIMEOUT.reset(token)
+                _GIT_OUTPUT_LIMIT.reset(output_token)
+                _GIT_DISK_CHECK.reset(disk_token)
                 self._depth = 0
                 self._owner = None
                 fcntl.flock(handle, fcntl.LOCK_UN)
@@ -400,8 +418,13 @@ def _git_process(command: list[str], action: str):
                '-c', 'protocol.ext.allow=never', *command[1:]]
     environment = {**os.environ, 'GIT_TERMINAL_PROMPT': '0', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull}
     try:
-        return subprocess.run(command, check=False, capture_output=True, text=True,
-                              timeout=_GIT_TIMEOUT.get(), env=environment)
+        _GIT_DISK_CHECK.get()()
+        result = subprocess.run(command, check=False, capture_output=True, text=True,
+                              timeout=_GIT_TIMEOUT.get(), max_output_bytes=_GIT_OUTPUT_LIMIT.get(), env=environment)
+        _GIT_DISK_CHECK.get()()
+        return result
+    except subprocess.OutputLimitExceeded:
+        raise MirrorError(f"Git output exceeded the allowed size limit: {action}") from None
     except subprocess.TimeoutExpired:
         raise MirrorError(f'Git operation timed out: {action}') from None
     except OSError:

@@ -21,3 +21,23 @@ Git runs argument arrays with captured status/output and bounded timeouts. Failu
 Cache names must be owner/name and cannot traverse outside the managed root. Existing ordinary owner/name cache paths are retained. Names containing underscores use a hash suffix to prevent ambiguous path collisions; old caches with such names need explicit resynchronization to their new managed path. Symlink cache/worktree roots are rejected.
 
 Remaining limits: Git output is buffered without a size cap; fetch can succeed before a later sync step fails, so database observations deliberately remain at the last fully successful sync. No scan checkpoint advances on that failure. Local synthetic Git tests cover cache reuse, changed OIDs/default branches, checkpoint separation, cleanup, stable findings, lock contention, hook suppression, symlink containment and timeout diagnostics.
+
+
+## Acquisition limits (Phase 19)
+
+`ORGSCAN_GIT_OUTPUT_MAX_BYTES` defaults to 8,000,000 bytes for bounded subprocess
+stdout/stderr; `ORGSCAN_GIT_TIMEOUT_SECONDS` retains its 300-second default. Excessive
+output and timeouts stop the process group and return controlled diagnostics.
+`ORGSCAN_REPOSITORY_MAX_BYTES` defaults to 1,000,000,000 bytes. Cache checks run before
+and after Git operations under the mirror lock; an oversized cache fails subsequent
+acquisition until an operator quarantines/removes it. Failed checks release locks.
+
+These portable checks can overshoot during a Git operation and do not account for
+all temporary/materialized worktrees or disk allocation overhead. **Production must
+apply filesystem/container quotas to mirrors and temporary storage**, and process
+memory/CPU limits. Do not treat the configured byte budget as a hard quota.
+
+Provider/GitHub HTTP responses use `ORGSCAN_HTTP_RESPONSE_MAX_BYTES` (2,000,000 default)
+and `ORGSCAN_HTTP_TIMEOUT_SECONDS` (15 default). Large Content-Length is rejected
+before reading; unknown-length responses are read in bounded chunks with deadline
+checks. HTTP response failures do not retain remote bodies or transport diagnostics.

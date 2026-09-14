@@ -14,14 +14,14 @@ def test_organization_search_preserves_target_tenant_without_claiming_repository
     monkeypatch.setenv('ORGSCAN_DATA_DIR',str(tmp_path / 'data'))
     monkeypatch.delenv('ORGSCAN_GITHUB_TOKEN',raising=False)
     monkeypatch.setattr('orgscan.providers.GitHubSearchDomainProvider._github_request_json',
-                        lambda self,path,**kwargs: {'items':[{'full_name':'external/repo'}]} if path.startswith('/search/repositories?') else {'items':[]})
+                        lambda self,path,**kwargs: {'items':[{'full_name':'external/repo','private':False}]} if path.startswith('/search/repositories?') else {'items':[]})
     get_settings.cache_clear()
     try:
         result = CliRunner().invoke(app,['discover','organization','Example','--provider','github-search','--tenant-key','tenant-a','--json'])
         assert result.exit_code == 0, result.stdout
         assert len(json.loads(result.stdout)['references']) == 1
         jobs = CliRunner().invoke(app,['jobs','--json'])
-        assert json.loads(jobs.stdout)['scan_jobs'][0]['scope_json']['pages'][0]['query'] == '"Example" in:name,description,readme'
+        assert json.loads(jobs.stdout)['scan_jobs'][0]['scope_json']['pages'][0]['query'] == '"Example" in:name,description,readme is:public'
         with create_session_factory(url)() as session:
             storage = Storage(session)
             target = storage.get_organization_by_name('Example')

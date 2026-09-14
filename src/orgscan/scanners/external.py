@@ -145,13 +145,30 @@ class DetectSecretsScanner:
     def __init__(self, *, settings: Settings | None = None) -> None:
         self.binary = settings.detect_secrets_binary if settings is not None else self.name
 
+    def readiness(self):
+        binary = shutil.which(self.binary)
+        if not binary:
+            return ScannerReadiness(False, 'missing_binary')
+        try:
+            version_result = run_scanner_process([self.binary, '--version'], timeout=5)
+            version = version_result.stdout.strip()
+            help_result = run_scanner_process([self.binary, 'scan', '--help'], timeout=5)
+            import re
+            if version_result.returncode or not re.fullmatch(r'1\.5\.\d+', version) or help_result.returncode or not all(flag in help_result.stdout for flag in ('--all-files', '--force-use-all-plugins')):
+                return ScannerReadiness(False, 'unsupported', binary_path=binary,
+                                        warnings=('Supported detect-secrets contract is 1.5.x with baseline JSON scan output',))
+            return ScannerReadiness(True, 'ready', binary_path=binary, version=version)
+        except ScannerExecutionError:
+            return ScannerReadiness(False, 'unsupported', binary_path=binary,
+                                    warnings=('detect-secrets command compatibility could not be established',))
+
     def scan_path(self, target: Path) -> list[ScanMatch]:
         target = validate_scan_target(target, external=True)
         if not shutil.which(self.binary):
             raise _not_installed_error(self.binary)
 
         completed = run_scanner_process(
-            [self.binary, "scan", "--all-files", "--force-use-all-plugins", "--json", str(target)],
+            [self.binary, "scan", "--all-files", "--force-use-all-plugins", str(target)],
             check=False,
             capture_output=True,
             text=True,

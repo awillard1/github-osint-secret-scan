@@ -29,13 +29,28 @@ def build_queries(identifiers: tuple[str, ...]) -> list[SearchQuery]:
             raise ValueError("Search identifiers must be 2–100 letters, digits, spaces, dots, underscores or hyphens")
         quoted = f'"{identifier}"'
         queries.extend([
-            SearchQuery("repositories", f"{quoted} in:name,description,readme"),
+            SearchQuery("repositories", f"{quoted} in:name,description,readme is:public"),
             SearchQuery("code", f"{quoted} in:file"),
-            SearchQuery("issues", f"{quoted} type:issue"),
+            SearchQuery("issues", f"{quoted} type:issue is:public"),
         ])
         queries.extend(SearchQuery("code", f"{quoted} filename:{name}", True)
                        for name in (".env", "credentials.json", "id_rsa"))
     return queries
+
+
+def public_visibility(*records):
+    """Require affirmative public evidence and reject contradictory/unknown flags."""
+    observations = []
+    for record in records:
+        if not isinstance(record, dict):
+            return None
+        for key in ('private', 'visibility'):
+            if key in record:
+                value = record[key]
+                if (key == 'private' and value is not False) or (key == 'visibility' and value != 'public'):
+                    return None
+                observations.append({key: value})
+    return {'verified_public': True, 'visibility_fields': observations} if observations else None
 
 
 def _hash(*parts) -> str:
@@ -77,6 +92,7 @@ class GitHubSearchService:
         storage.mark_scan_job_running(job)
         result = SearchResult()
         exhausted = False
+        public_repositories = set()
         for query in queries:
             if exhausted:
                 break
@@ -85,6 +101,16 @@ class GitHubSearchService:
                 if warning not in result.warnings:
                     result.warnings.append(warning)
                 continue
+            if query.kind == 'code':
+                # REST code search uses legacy qualifiers: is:public is NOT a
+                # documented code qualifier. Scope to at most five repositories
+                # independently verified public by this search's repository results.
+                if not public_repositories:
+                    warning = 'Code search skipped: no verified public repositories in the bounded discovery results'
+                    if warning not in result.warnings:
+                        result.warnings.append(warning)
+                    continue
+                query = SearchQuery(query.kind, query.query + ' ' + ' '.join('repo:' + name for name in sorted(public_repositories)[:5]), query.sensitive_filename)
             for page in range(1, pages + 1):
                 endpoint = f"/search/{query.kind}?{urlencode({'q': query.query, 'per_page': per_page, 'page': page})}"
                 provenance = {"source": "github-search", "query": query.query, "endpoint": endpoint,
@@ -112,6 +138,14 @@ class GitHubSearchService:
                     return result
                 for item in items[:per_page]:
                     if isinstance(item, dict):
+                        if query.kind == 'repositories' and public_visibility(item):
+                            name = item.get('full_name', '')
+                            if isinstance(name, str) and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', name):
+                                public_repositories.add(name)
+                        if query.kind == 'code':
+                            repository = item.get('repository')
+                            if not isinstance(repository, dict) or repository.get('full_name') not in sorted(public_repositories)[:5]:
+                                continue
                         self._persist_item(storage, target_type, target, query, item, provenance, job.id, result)
                 if str(provenance.get("rate_limit", {}).get("x-ratelimit-remaining", "")) == "0":
                     result.warnings.append("GitHub search paused at the reported rate limit; inspect the search job for reset timing.")
@@ -130,6 +164,12 @@ class GitHubSearchService:
         repository_data = item if query.kind == "repositories" else item.get("repository") or {}
         if not isinstance(repository_data, dict):
             repository_data = {}
+        visibility = public_visibility(repository_data, item)
+        if visibility is None:
+            warning = 'Search results without consistent public visibility were excluded'
+            if warning not in result.warnings:
+                result.warnings.append(warning)
+            return
         full_name = str(repository_data.get("full_name") or "")
         url = str(item.get("html_url") or "")
         if not full_name and query.kind == "issues":
@@ -143,6 +183,8 @@ class GitHubSearchService:
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", full_name):
             return
         repository, _ = storage.get_or_create_repository(full_name, provider="github")
+        if repository.is_private:
+            return
         path = str(item.get("path") or "") if query.kind == "code" else ""
         issue_number = item.get("number") or (url.rstrip("/").split("/")[-1] if query.kind == "issues" else "")
         if query.kind == "code" and (not path or len(path) > 512):
@@ -157,7 +199,7 @@ class GitHubSearchService:
             summary = f"GitHub code search match for {target.name}: {full_name}:{path}"
         else:
             summary = f"GitHub issue mentions {target.name}: {full_name}#{issue_number}"
-        metadata = {**provenance, "reason": "Public text match; not evidence of target ownership", "resource": resource}
+        metadata = {**provenance, **visibility, "reason": "Public text match; not evidence of target ownership", "resource": resource}
         severity = "medium" if query.sensitive_filename else "low"
         finding = storage.upsert_correlated_finding(CanonicalFinding(
             source_tool="github-search", source_name="github-search", source_class="free",

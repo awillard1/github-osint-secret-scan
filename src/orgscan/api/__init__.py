@@ -278,6 +278,7 @@ class OrgscanApiService:
             return f"Signed in as {auth.name} ({auth.role}); tenant scope: {', '.join(auth.tenants)}."
         return "Local development mode: authentication is not configured."
 
+    @safe_output
     def _tooling_payload(self) -> dict[str, object]:
         inventory = scanner_inventory(self.settings)
         tools = optional_tool_inventory(self.settings, inventory=inventory)
@@ -290,10 +291,12 @@ class OrgscanApiService:
             "missing_optional_tools": [item["name"] for item in tools if not item["installed"]],
         }
 
+    @safe_output
     def _summary_payload(self) -> dict[str, object]:
         with self.session_factory() as session:
             return build_summary(Storage(session))
 
+    @safe_output
     def _findings_payload(
         self,
         *,
@@ -382,6 +385,7 @@ class OrgscanApiService:
     def _resolve_asset_context(self, storage, *, organization, repository, provider):
         return resolve_asset_context(storage, organization=organization, repository=repository, provider=provider)
 
+    @safe_output
     def _scan_uploaded_artifact(
         self,
         *,
@@ -454,9 +458,11 @@ class OrgscanApiService:
 
         return {**result_payload(results), "artifact_name": artifact_name, "extracted": extracted}
 
+    @safe_output
     def _finding_html_payload(self, finding_id: int) -> dict[str, object] | None:
         return self._finding_payload(finding_id)
 
+    @safe_output
     def _scan_job_payload(self, scan_job_id: int) -> dict[str, object] | None:
         with self.session_factory() as session:
             storage = Storage(session)
@@ -499,6 +505,7 @@ class OrgscanApiService:
             "average_risk_score": 0.0,
         }
 
+    @safe_output
     def _organizations_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
@@ -525,6 +532,7 @@ class OrgscanApiService:
                 ]
             }
 
+    @safe_output
     def _organization_payload(
         self,
         organization_id: int,
@@ -565,6 +573,7 @@ class OrgscanApiService:
                 "top_findings": [_serialize_finding(finding) for finding in findings],
             }
 
+    @safe_output
     def _repositories_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
@@ -593,6 +602,7 @@ class OrgscanApiService:
                 ]
             }
 
+    @safe_output
     def _repository_payload(
         self,
         repository_id: int,
@@ -632,6 +642,7 @@ class OrgscanApiService:
                 "top_findings": [_serialize_finding(finding) for finding in findings],
             }
 
+    @safe_output
     def _domains_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
@@ -658,6 +669,7 @@ class OrgscanApiService:
                 ]
             }
 
+    @safe_output
     def _domain_payload(
         self,
         domain_id: int,
@@ -718,6 +730,7 @@ class OrgscanApiService:
                 "top_findings": [_serialize_finding(finding) for finding in findings],
             }
 
+    @safe_output
     def _accounts_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
@@ -746,6 +759,7 @@ class OrgscanApiService:
                 ]
             }
 
+    @safe_output
     def _account_payload(
         self,
         account_id: int,
@@ -786,6 +800,7 @@ class OrgscanApiService:
                 "top_findings": [_serialize_finding(finding) for finding in findings],
             }
 
+    @safe_output
     def _finding_payload(self, finding_id: int) -> dict[str, object] | None:
         detail = self.finding_service.get_detail(finding_id)
         if detail is None:
@@ -797,6 +812,7 @@ class OrgscanApiService:
             "risk_scores": [_serialize_risk_score(score) for score in detail.risk_scores],
         }
 
+    @safe_output
     def _risk_summary_payload(
         self,
         *,
@@ -815,6 +831,7 @@ class OrgscanApiService:
                 ),
             }
 
+    @safe_output
     def _scheduled_scans_payload(self) -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
@@ -833,10 +850,12 @@ class OrgscanApiService:
                 ]
             }
 
+    @safe_output
     def _relationship_graph_payload(self, *, limit: int = 200) -> dict[str, object]:
         with self.session_factory() as session:
             return relationship_graph(Storage(session), limit=limit)
 
+    @safe_output
     def _finding_trends_payload(self, *, days: int = 30) -> dict[str, object]:
         with self.session_factory() as session:
             return {"days": days, "trends": finding_trends(Storage(session), days=days)}

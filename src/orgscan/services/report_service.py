@@ -48,6 +48,14 @@ def _source_url(value):
 
 
 def query_report(storage, *, limit=500, tenant_keys=None, lifecycle_state=None):
+    if tenant_keys is not None:
+        from orgscan.storage.sources import scoped_reader
+        with scoped_reader(storage, tenant_keys) as scoped:
+            return _query_report(scoped, limit=limit, tenant_keys=tenant_keys, lifecycle_state=lifecycle_state)
+    return _query_report(storage, limit=limit, tenant_keys=tenant_keys, lifecycle_state=lifecycle_state)
+
+
+def _query_report(storage, *, limit=500, tenant_keys=None, lifecycle_state=None):
     from orgscan.reporting import finding_row
     if limit is not None and limit < 0:
         raise ValueError('Report limit must be nonnegative')
