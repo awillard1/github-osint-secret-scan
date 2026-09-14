@@ -29,6 +29,7 @@ class DashboardService:
             def queue(name, count, items):
                 queues[name] = {"label": QUEUE_LABELS[name], "count": count, "items": items}
 
+            finding_queues = []
             for name, filters in (
                 ("new", {"first_seen_after": cutoff}),
                 ("high-risk", {"excluded_states": MANAGED_STATES,
@@ -37,6 +38,10 @@ class DashboardService:
                 ("triage", {"states": ("NEW", "REVIEWING", "REGRESSED"), "order_by_risk": True}),
             ):
                 count, findings = storage.findings(limit=limit, offset=offset, **filters)
+                finding_queues.append((name, count, findings))
+            from orgscan.storage.credential_context import bind_finding_contexts
+            bind_finding_contexts(storage, [finding for _, _, findings in finding_queues for finding in findings])
+            for name, count, findings in finding_queues:
                 queue(name, count, [
                     safe_finding_fields(finding, {"id": finding.id, "label": finding.title,
                      "href": f"/dashboard/findings/{finding.id}",

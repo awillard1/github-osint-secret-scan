@@ -331,3 +331,13 @@ and an RQ service invocation have regressions. Encrypted evidence and explicit r
 are unchanged. This is a presentation-only correction: no migration, head remains
 0013, and frozen migrations remain intact. Summary context adds one bounded joined
 query; existing query-count and detail-limit checks remain required.
+
+## Phase 26 — complete credential context propagation
+
+Report context now covers all authorized contributing source populations rather than
+the page, top ranking, graph endpoints or remediation selection. Finding/API/browser
+presentation receives batched associated evidence context through one shared boundary.
+Both paths fail closed when context completeness exceeds their documented budgets.
+The two gate reproductions and query measurements have permanent regression coverage.
+No migration or authorized reveal change is required; head remains 0013. Phase 1
+decomposition remains partial. See release readiness for final validation results.

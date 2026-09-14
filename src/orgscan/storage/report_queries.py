@@ -1,15 +1,14 @@
 """Report aggregates and bounded detail queries; no full finding materialization."""
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import case, func, select, cast, String, or_
+from sqlalchemy import case, func, select, cast, String
 
 from orgscan import models as m
 
 
 def report_summary(storage, *, tenant_keys=None, source_context=None):
-    from orgscan.reports.projection import source_fields, safe_report_projection, MAX_CONTEXT_ROWS
-    from orgscan.redaction import SanitizationLimitError
-    sources = source_context if source_context is not None else []
+    from orgscan.reports.projection import safe_report_projection, MAX_CONTEXT_ROWS
+    from orgscan.storage.credential_context import build_report_context
     session = storage.session
     scope = storage.finding_tenant_scope(tenant_keys)
     from orgscan.storage.visibility import visibility_ids
@@ -19,7 +18,6 @@ def report_summary(storage, *, tenant_keys=None, source_context=None):
     def rows(model, limit=200):
         query = select(model).where(conditions.get(model, True)).order_by(model.id.desc())
         result = list(session.scalars(query.limit(limit) if limit is not None else query))
-        sources.extend(source_fields(row) for row in result)
         return result
 
     def count(model, extra=True):
@@ -46,7 +44,6 @@ def report_summary(storage, *, tenant_keys=None, source_context=None):
         if endpoint_ids.get(kind):
             endpoints = list(session.scalars(select(model).where(conditions.get(model, True),
                 cast(model.id, String).in_(endpoint_ids[kind]))))
-            sources.extend(source_fields(row) for row in endpoints)
             labels.update({(kind, str(row.id)): getattr(row, label.key) for row in endpoints})
     graph = {'nodes': [], 'edges': [], 'summary': {}}
     nodes, relations = {}, {}
@@ -82,30 +79,6 @@ def report_summary(storage, *, tenant_keys=None, source_context=None):
         .order_by(func.sum(high).desc(), func.count(m.Finding.id).desc(), m.Finding.category, effective_hint).limit(10)).all()
     trends = finding_trends(storage, tenant_keys=tenant_keys)
     top = list(session.scalars(select(m.Finding).where(scope).order_by(func.coalesce(m.Finding.risk_score, 0).desc(), m.Finding.detected_at.desc(), m.Finding.id.desc()).limit(10)))
-    # Summary priorities, finding graph endpoints and custom remediation groups
-    # need evidence knowledge even when the detailed report limit is zero.
-    # One bounded column query, no per-finding lazy loads or protected evidence.
-    identities = {f.id for f in top}
-    identities.update(int(value) for value in endpoint_ids.get('finding', ()) if value.isdecimal())
-    hints = {hint for category, hint, *_ in remediation
-             if hint and hint != _default_remediation_hint(category)}
-    if identities or hints:
-        finding_columns = list(m.Finding.__table__.columns)
-        evidence_columns = list(m.Evidence.__table__.columns)
-        # Evidence ownership is exactly its parent finding's visibility. Joining
-        # its table avoids a redundant evidence-visibility subquery; the Finding
-        # ORM source still receives request authorization, as well as scope below.
-        evidence_table = m.Evidence.__table__
-        context_rows = session.execute(select(*finding_columns, *evidence_columns)
-            .select_from(m.Finding).outerjoin(evidence_table, evidence_table.c.finding_id == m.Finding.id)
-            .where(scope, or_(m.Finding.id.in_(identities), m.Finding.remediation_hint.in_(hints)))
-            .order_by(m.Finding.id, m.Evidence.id).limit(MAX_CONTEXT_ROWS + 1)).mappings().all()
-        if len(context_rows) > MAX_CONTEXT_ROWS:
-            raise SanitizationLimitError('Report source context row limit exceeded')
-        for row in context_rows:
-            for columns in (finding_columns, evidence_columns):
-                sources.append({column.key: row[column] for column in columns
-                                if isinstance(row[column], (str, dict, list))})
     repo_label = func.coalesce(m.Repository.full_name, 'unassigned')
     risky_assets = session.execute(select(repo_label, func.count(m.Finding.id)).select_from(m.Finding)
         .outerjoin(m.Repository, m.Finding.repository_id == m.Repository.id).where(scope).group_by(repo_label)
@@ -129,7 +102,8 @@ def report_summary(storage, *, tenant_keys=None, source_context=None):
         top_risky_assets=[dict(repository=name, findings=n) for name,n in risky_assets],
         scheduled_scans=[dict(id=s.id, target_type=s.target_type, target_value=s.target_value, scanner_name=s.scanner_name, cadence=s.cadence, enabled=s.enabled) for s in rows(m.ScheduledScan)],
     )
-    return bounded_summary(safe_report_projection(projection, sources))
+    context = source_context or build_report_context(storage, tenant_keys=tenant_keys, max_rows=MAX_CONTEXT_ROWS)
+    return bounded_summary(safe_report_projection(projection, context))
 
 
 def finding_trends(storage, *, days=30, tenant_keys=None):

@@ -96,9 +96,11 @@ class FindingService:
         if query.high_signal_only:
             filters["limit"] = max(query.limit * 4, query.limit)
         with self.session_factory() as session:
-            findings = list(Storage(session).list_findings(**filters))
-        if query.high_signal_only:
-            return high_signal_findings(findings, min_confidence=query.min_confidence, limit=query.limit)
+            storage = Storage(session)
+            findings = list(storage.list_findings(**filters, include_safety_context=False))
+            if query.high_signal_only:
+                findings = high_signal_findings(findings, min_confidence=query.min_confidence, limit=query.limit)
+            storage.bind_finding_contexts(findings)
         return findings
 
     def get_detail(self, finding_id: int) -> FindingDetail | None:
@@ -125,6 +127,7 @@ class FindingService:
             self._require_finding(storage, finding_id)
             finding = storage.update_finding_triage(finding_id, **asdict(update))
             session.commit()
+            storage.bind_finding_contexts([finding])
             return finding
 
     def apply_decision(self, finding_id: int, decision: FindingDecision, *, status: str) -> Finding:
@@ -140,6 +143,7 @@ class FindingService:
                 status=status,
             )
             session.commit()
+            storage.bind_finding_contexts([finding])
             return finding
 
     def reopen(self, finding_id: int, *, note: str | None = None) -> Finding:

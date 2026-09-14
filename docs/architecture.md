@@ -425,7 +425,30 @@ reveal service, authorization checks, audit commit and response headers are unch
 Report DTO construction now ends at `reports/projection.py::safe_report_projection`.
 The complete projection is sanitized against combined ordinary finding/evidence,
 job and ancillary summary source context before any source knowledge is discarded.
-Summary clipping follows sanitization. Storage owns the bounded joined context query;
+Summary clipping follows sanitization. Storage owns the bounded context query;
 there are no per-finding evidence reads or protected-evidence/decryption dependencies.
 All format adapters and manual/API/scheduled delivery consume that logical model.
 See the field inventory and resource bounds in [reporting](reporting.md).
+
+## Complete credential context (Phase 26)
+
+`storage/credential_context.py` owns source selection and private credential knowledge.
+Report source populations cover every authorized contributor to details, summary
+aggregates, groups, relationship provenance and evidence-backed text. Page/ranking
+selection never limits this context. One portable UNION ALL reads bounded ordinary
+text/JSON columns using the authoritative tenant visibility policy and all inherited
+scopes. The source inventory is documented in [reporting](reporting.md).
+
+Finding presentation instead batches only emitted finding IDs, including associated
+evidence, finding history and risk-score text. Storage binds an opaque, non-ORM context
+before detaching the objects; API, browser, triage and compatibility report serializers
+consume the shared `safe_finding_fields` boundary. A live singular compatibility caller
+can build that context on demand; a detached object without context fails closed.
+Dashboard queues are bound together, and high-signal selection precedes context loading.
+
+`ORGSCAN_FINDING_CONTEXT_MAX_ROWS` defaults to 2,000 ordinary source rows across a
+page/queue batch, with a maximum configurable value of 100,000. Each batch is also
+limited to 500 distinct findings. Incomplete, oversized or uninspectable context fails
+closed; existing sanitizer work budgets still apply. Context is ephemeral, uses the
+shared credential vocabulary, has a private representation and never queries or
+decrypts protected evidence. These are presentation changes, with no schema migration.

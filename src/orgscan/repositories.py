@@ -872,6 +872,7 @@ class Storage:
         include_evidence: bool = False,
         high_signal_only: bool = False,
         min_confidence: str = "likely",
+        include_safety_context: bool = True,
     ) -> Sequence[Finding]:
         query = select(Finding).order_by(Finding.detected_at.desc(), Finding.id.desc())
         if tenant_keys is not None:
@@ -914,7 +915,8 @@ class Storage:
             query = query.where(Finding.detected_at <= self._normalize_datetime_filter(detected_before))
         if limit is not None:
             query = query.limit(limit)
-        return list(self.session.scalars(query))
+        findings = list(self.session.scalars(query))
+        return self.bind_finding_contexts(findings, tenant_keys=tenant_keys) if include_safety_context else findings
 
     @staticmethod
     def _normalize_datetime_filter(value: datetime) -> datetime:
@@ -947,7 +949,14 @@ class Storage:
         return report_summary(self, tenant_keys=tenant_keys, source_context=source_context)
 
     def get_finding(self, finding_id: int) -> Finding | None:
-        return self.session.get(Finding, finding_id)
+        finding = self.session.get(Finding, finding_id)
+        if finding is not None:
+            self.bind_finding_contexts([finding])
+        return finding
+
+    def bind_finding_contexts(self, findings, *, tenant_keys=None):
+        from orgscan.storage.credential_context import bind_finding_contexts
+        return bind_finding_contexts(self, findings, tenant_keys=tenant_keys)
 
     def get_scan_jobs_by_ids(self, identities):
         return {job.id: job for job in self.session.scalars(select(ScanJob).where(ScanJob.id.in_(identities)))}
@@ -1241,7 +1250,7 @@ class Storage:
             .order_by(Finding.risk_score.desc().nullslast(), Finding.detected_at.desc(), Finding.id.desc())
             .limit(limit)
         )
-        return list(self.session.scalars(query))
+        return self.bind_finding_contexts(list(self.session.scalars(query)))
 
     def list_entity_risk_profiles(
         self,

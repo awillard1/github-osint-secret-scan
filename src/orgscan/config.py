@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     app_env: str = "development"
     auto_migrate: bool = True  # Development bootstrap only; never honored in production.
     preserve_secrets: bool = False
+    report_context_max_rows: int = Field(default=1000, ge=1, le=100000)
+    finding_context_max_rows: int = Field(default=2000, ge=1, le=100000)
     secret_encryption_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
     secret_encryption_key_id: str = Field(default='v1', pattern=r'^[A-Za-z0-9_.-]{1,64}$')
     log_level: str = "INFO"

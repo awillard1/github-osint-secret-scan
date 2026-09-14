@@ -228,3 +228,21 @@ forbidden during export, report audits stay at zero, and explicit authorized rev
 returns the exact original value and creates one audit. A separate normal-ingestion
 case verifies that this is a presentation defect, not a new persistence regression.
 Existing report/query-count assertions are retained unchanged.
+
+## Phase 26 complete-context regression
+
+`tests/security/test_phase26_context.py` adds 21 cases. Direct SQL fixtures reproduce
+both reported leaks: an older credential source excluded from page/top/graph/group
+selection, and finding text whose only credential label is in associated evidence.
+Coverage includes finding/evidence-only knowledge, copied source-tool/category labels,
+titles, evidence queries and relationship provenance; JSON/CSV/HTML/PDF/SARIF; reader,
+analyst and admin API/browser/summary/operator surfaces; inherited tenant-scope
+intersection; detached-object and context-overflow safe failures.
+
+Protected columns must remain identical. Generic reads run with decryption forbidden,
+create zero reveal audits and leave deliberately unsafe SQL fixtures unchanged.
+Authorized reveal subsequently returns the exact original value and creates one audit;
+readers, ungranted analysts and other tenants remain denied. At 10/100/300 findings,
+page loading is two SELECTs and report-context loading is one, with SQL limits and
+no protected-evidence query. Existing Phase 20 aggregate/query-count and Phase 25
+scheduled/webhook/RQ service regression assertions remain unchanged.

@@ -74,22 +74,18 @@ def finding_rows(
     category: str | None = None,
     confidence: str | None = None,
 ) -> list[dict[str, Any]]:
-    from orgscan.reports.projection import source_fields, safe_report_projection
+    from orgscan.reports.projection import safe_report_projection, MAX_CONTEXT_ROWS
+    from orgscan.storage.credential_context import build_report_context
     findings = storage.list_findings(
         limit=limit, tenant_keys=tenant_keys, status=status, severity=severity,
-        category=category, confidence=confidence, include_evidence=True)
-    sources = [source_fields(record) for finding in findings
-               for record in (finding, *finding.evidence_items)]
-    return safe_report_projection([finding_projection(finding) for finding in findings], sources)
+        category=category, confidence=confidence, include_evidence=True, include_safety_context=False)
+    context = build_report_context(storage, tenant_keys=tenant_keys, max_rows=MAX_CONTEXT_ROWS)
+    return safe_report_projection([finding_projection(finding) for finding in findings], context)
 
 
 def finding_row(finding):
-    from orgscan.reports.projection import source_fields, safe_report_projection
-    sources = [source_fields(finding)]
-    # Single-record compatibility callers can supply eagerly loaded evidence;
-    # batch exports use finding_rows/query_report and always load it together.
-    sources.extend(source_fields(e) for e in finding.__dict__.get('evidence_items', ()))
-    return safe_report_projection(finding_projection(finding), sources)
+    from orgscan.presentation import safe_finding_fields
+    return safe_finding_fields(finding, finding_projection(finding))
 
 
 def finding_projection(finding):

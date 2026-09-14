@@ -82,7 +82,7 @@ The inventory below describes the projection and its non-exported context:
 | Finding | ID; title/description; category/severity/confidence; status and lifecycle timestamps/counts; triage state/owner/notes; remediation due date/hint; scanner/source names; repository/job IDs; risk score; detected time; fingerprint; repository display name | Every ordinary string/JSON column on the finding, including metadata, raw payload and remediation text; loaded repository/job source fields |
 | Evidence | Scanner/source; logical path; line range; commit/ref; safe source URL; query; observed time; confidence; observation fingerprint | Every ordinary string/JSON evidence column, including metadata, snippets, extracted indicators, original URLs and provider context; evidence job parameters |
 | Relationships | Node IDs/types/labels/degrees; edge endpoints/type/confidence/source/provenance; graph breakdowns | Ordinary relationship columns, including omitted evidence summaries; visible endpoint asset records and finding/evidence context |
-| Summary | Counts/breakdowns; organization/repository/account names; domain exposure previews; identity correlations; trends; organization comparisons; remediation suggestions; recent jobs/tool runs; priority findings/assets; schedules | Bounded source rows before projection/clipping; one joined finding/evidence context query for priority findings, finding graph endpoints and custom remediation groups |
+| Summary | Counts/breakdowns; organization/repository/account names; domain exposure previews; identity correlations; trends; organization comparisons; remediation suggestions; recent jobs/tool runs; priority findings/assets; schedules | Complete authorized source populations, independently of priority ranking, grouping, graph endpoints or displayed pages; one bounded column query |
 | Delivery | JSON/CSV/HTML/PDF/SARIF and manual/API/scheduled report payloads | All consume the sanitized model; scheduler adds operational schedule/output identifiers, never raw finding/evidence columns |
 
 Raw payloads/snippets/indicators are context only and remain excluded from normal
@@ -91,15 +91,28 @@ Reports do not require the encryption key, mutate ciphertext, or create reveal a
 Authorized tenant-scoped reveal remains the only intentional plaintext operation.
 
 Detailed finding filters/limits and select-in evidence loading remain in storage.
-Summary counts still cover all authorized rows. Summary context uses one additional
-joined column query, not one query per finding, and materializes no Evidence ORM
-objects. At most 1,000 joined context rows are accepted; overflow raises a fixed,
-input-free sanitizer limit error rather than emitting a context-incomplete report.
-Existing character/node/depth/replacement budgets and preview limits also apply.
-A very large custom remediation group or evidence history can therefore require
-operator review/legacy data repair before rendering. No data is silently truncated
-from the safety context. Already bounded detail sources are reused in the final
-whole-report pass so evidence knowledge also protects copied summary/provenance text.
+Summary counts still cover all authorized rows. Phase 26 context uses one UNION ALL
+column query over findings, evidence, organizations, repositories, accounts, domains,
+domain exposures, identity correlations, relationships, scan jobs, tool runs, scheduled
+scans and scheduled reports. Every authorized row in these populations participates,
+including rows outside all displayed pages, rankings and groups. This covers source
+tool/category labels, copied previews, remediation groups and provenance. Context
+selection intersects requested tenant scope with inherited/request authorization.
+
+Only ordinary string/JSON columns are loaded, excluding identity/fingerprint references;
+no source ORM graph or protected evidence is loaded. Descriptions and raw payloads must
+participate because credentials can be identified there. SQL bounds each value before
+fetching, and shared character/node/depth/replacement budgets still apply. The default
+`ORGSCAN_REPORT_CONTEXT_MAX_ROWS=1000` counts source rows across these populations
+(a finding and its evidence count separately). Configure this environment setting
+before starting the process; its maximum is 100,000. Overflow or uninspectable context
+raises an input-free safety error: no partially sanitized report is returned. Increasing
+the row limit does not bypass the sanitizer's other work limits.
+
+The same private credential knowledge sanitizes the summary and complete report after
+projection. It is never reconstructed from the displayed subset. Large tenant datasets
+may require adjusting the context budget; repairing legacy data alone does not remove
+the completeness check. Evidence queries remain batched, with no N+1 reads.
 
 There is no built-in queued-report job type. The regression suite exercises an RQ
 caller invoking the existing report service with explicit tenant scope; it does not

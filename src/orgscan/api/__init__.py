@@ -806,12 +806,13 @@ class OrgscanApiService:
         detail = self.finding_service.get_detail(finding_id)
         if detail is None:
             return None
-        return {
+        from orgscan.presentation import safe_finding_fields
+        return safe_finding_fields(detail.finding, {
             "finding": _serialize_finding(detail.finding, include_detail=True),
             "evidence": [_serialize_evidence(evidence) for evidence in detail.evidence],
             "history": [history_row(event) for event in detail.history],
             "risk_scores": [_serialize_risk_score(score) for score in detail.risk_scores],
-        }
+        })
 
     @safe_output
     def _risk_summary_payload(

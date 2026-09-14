@@ -309,7 +309,7 @@ def _copied_assignments(text):
                 pos += 1
 
 
-def redact(value, *, secrets_from=None, preserve_root_keys=False, _capture=None, _known_values=()):
+def redact(value, *, secrets_from=None, preserve_root_keys=False, _capture=None, _known_values=(), _knowledge=None):
     known = set()
     nodes = characters = replacement_work = 0
     root_key_depth = 1 if isinstance(value, (list, tuple)) else 0
@@ -404,6 +404,8 @@ def redact(value, *, secrets_from=None, preserve_root_keys=False, _capture=None,
     collect(value)
     collect(secrets_from)
     secrets = sorted(known, key=len, reverse=True)
+    if _knowledge is not None:
+        _knowledge.update(known)
     def scrub(text):
         nonlocal replacement_work
         for secret in secrets:

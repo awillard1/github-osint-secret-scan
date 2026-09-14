@@ -56,11 +56,12 @@ def query_report(storage, *, limit=500, tenant_keys=None, lifecycle_state=None):
 
 def _query_report(storage, *, limit=500, tenant_keys=None, lifecycle_state=None):
     from orgscan.reporting import finding_projection
-    from orgscan.reports.projection import source_fields, safe_report_projection
+    from orgscan.reports.projection import safe_report_projection, MAX_CONTEXT_ROWS
+    from orgscan.storage.credential_context import build_report_context
     if limit is not None and limit < 0:
         raise ValueError('Report limit must be nonnegative')
     findings = storage.list_findings(limit=limit, tenant_keys=tenant_keys,
-                                     lifecycle_state=lifecycle_state, include_evidence=True)
+                                     lifecycle_state=lifecycle_state, include_evidence=True, include_safety_context=False)
     evidence_job_ids = {(e.metadata_json or {}).get('last_scan_job_id') for f in findings for e in f.evidence_items}
     evidence_jobs = storage.get_scan_jobs_by_ids([identity for identity in evidence_job_ids if isinstance(identity, int)]) if evidence_job_ids else {}
     def location(evidence, root, params, repository_root):
@@ -69,14 +70,9 @@ def _query_report(storage, *, limit=500, tenant_keys=None, lifecycle_state=None)
             params = job.parameters_json or {}
             root = params.get('location_root') or repository_root
         return evidence_location(evidence.repository_path, root, params)
-    rows, sources = [], []
+    rows = []
     for finding in findings:
         row = finding_projection(finding)
-        sources.append(source_fields(finding))
-        sources.extend(source_fields(e) for e in finding.evidence_items)
-        for record in (finding.repository, finding.scan_job):
-            if record is not None:
-                sources.append(source_fields(record))
         repository_root = finding.repository.mirror_path if finding.repository else None
         root = repository_root
         params = finding.scan_job.parameters_json if finding.scan_job else {}
@@ -92,8 +88,8 @@ def _query_report(storage, *, limit=500, tenant_keys=None, lifecycle_state=None)
             'observation_fingerprint': evidence.observation_fingerprint,
         } for evidence in sorted(finding.evidence_items, key=lambda e: (e.observed_at, e.id), reverse=True)]
         rows.append(row)
-    sources.extend(source_fields(job) for job in evidence_jobs.values())
-    summary = storage.report_summary(tenant_keys=tenant_keys, source_context=sources)
+    context = build_report_context(storage, tenant_keys=tenant_keys, max_rows=MAX_CONTEXT_ROWS)
+    summary = storage.report_summary(tenant_keys=tenant_keys, source_context=context)
     for collection, field in (('recent_scan_jobs', 'target_id'), ('recent_tool_runs', 'target')):
         for row in summary.get(collection, []):
             value = PurePosixPath(str(row[field]).replace('\\', '/'))
@@ -101,7 +97,7 @@ def _query_report(storage, *, limit=500, tenant_keys=None, lifecycle_state=None)
                 row[field] = value.name
     summary['report_scope'] = {'included_findings': len(rows), 'limit': limit, 'lifecycle_state': lifecycle_state,
                                'summary_scope': 'all authorized findings'}
-    return safe_report_projection({'summary': summary, 'findings': rows}, sources)
+    return safe_report_projection({'summary': summary, 'findings': rows}, context)
 
 
 class ReportService:

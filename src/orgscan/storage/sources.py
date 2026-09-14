@@ -14,6 +14,9 @@ def scoped_reader(storage, tenant_keys):
     auth = storage.session.info.get('auth_context') or current_auth.get()
     parent_ids = visibility_ids(auth.tenants) if auth and '*' not in auth.tenants else None
     with Session(storage.session.connection(), autoflush=False, join_transaction_mode="rollback_only") as session:
+        session.info['source_tenant_scopes'] = (*storage.session.info.get('source_tenant_scopes', ()), tuple(tenant_keys))
+        if auth is not None:
+            session.info['auth_context'] = auth
         options = []
         for mapper in m.Base.registry.mappers:
             model = mapper.class_

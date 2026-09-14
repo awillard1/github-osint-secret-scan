@@ -694,3 +694,63 @@ Redis certification and previously documented deployment limitations remain unch
   scan/report output, encrypted storage and exact authorized reveal.
 - Field inventory and final projection boundary reviewed; no frozen migration or
   secret-evidence/reveal implementation changed. No release commit/tag was created.
+
+## Phase 26 — complete credential context propagation
+
+The Phase 25 gate reproduced two context-selection defects: omitted low-ranked
+sources could identify credentials copied into aggregate labels or displayed titles,
+and generic finding presentation missed credential labels found only in evidence.
+The new storage-owned context builder fixes both without changing authorized reveal.
+
+Report context covers complete tenant-authorized populations contributing details,
+aggregates, groups, provenance and source labels, independently of display selection.
+One bounded UNION ALL reads ordinary string/JSON columns; requested and inherited
+tenant scopes are intersected using the shared visibility policy. The context is
+reused through final summary/report sanitization, including compatibility exports.
+Finding presentation batches associated evidence/history/risk text for emitted IDs.
+API, browser, detail and operation queues consume the shared finding boundary.
+Neither context path queries protected evidence or calls decryption.
+
+This remains **case A: presentation/context selection only**. Normal persistence is
+covered by the retained Phase 24 tests; unsafe SQL fixtures deliberately bypass it.
+No migration is needed; current/head stays **20260914_0013**, and migrations 0009–0013,
+ciphertext, key handling, reveal authorization and audit implementation are unchanged.
+
+Report context defaults to 1,000 source rows across all contributing populations;
+finding context defaults to 2,000 rows per batch and 500 distinct finding IDs. These
+are source-completeness limits, not display limits. Environment settings and exact
+source populations are documented in [reporting](reporting.md) and
+[architecture](architecture.md#complete-credential-context-phase-26). Existing
+character/node/depth/replacement limits remain active. Large scopes can fail closed
+even with safe data; operators must size the configured budget accordingly. No
+truncated credential context is used to emit output. Detached finding objects without
+context now fail safely instead of permitting incomplete compatibility serialization.
+
+PostgreSQL/live Redis/live scanner certification and production resource assumptions
+remain as previously documented; this phase does not certify those environments or
+complete Phase 1 decomposition. No commit/tag is created by this implementation.
+
+### Phase 26 validation
+
+- Added **21 adversarial cases**; both exact gate reproductions pass. Final focused
+  Phase 23–26 security/report/API/service run: **159 passed** in 215.45 seconds.
+- Final complete suite: **769 passed, 6 skipped** in 478.22 seconds, with two existing
+  dependency deprecation warnings. Existing assertions were not weakened.
+- JSON/CSV/HTML/PDF/SARIF and compatibility exports contain no fixture plaintext.
+  Retained Phase 25 scheduled/webhook/RQ service tests pass. API/list/detail/browser,
+  summary and operator queues redact evidence-identified copies. Generic reads are
+  tested with decryption forbidden, unchanged ciphertext and zero reveal audits;
+  authorized analyst reveal returns the exact original secret and records one audit.
+  Reader/ungranted-analyst/other-tenant denial and the existing admin matrix pass.
+- At **10/100/300 findings**: page plus credential context **2 SELECTs**; report
+  context **1 SELECT**; complete summary **37 SELECTs**; dashboard **55 SELECTs**.
+  Summary counts remain unchanged; dashboard adds two batch queries over Phase 25.
+  Existing ORM-materialization, evidence-batching and query-count checks pass.
+- Doctor: **ok=true, 17 warnings**. Configured schema and migration head are both
+  **20260914_0013**. Local preservation is disabled/key missing; protected tests use
+  disposable keys/databases. The configured database was not migrated or modified.
+- Final wheel and sdist build passed. Fresh external runtime-only installation
+  passed dependency checks, migrations, CLI/API startup, scan/JSON/SARIF and encrypted
+  evidence/exact reveal smoke validation. Compile and `git diff --check` passed.
+- Final projection/context diff and documentation reviewed; no synthetic credential
+  values were introduced into documentation. No frozen migrations were changed.
