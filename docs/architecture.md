@@ -419,3 +419,13 @@ scope retains its private redaction knowledge until all ordinary writes are safe
 exit discards that knowledge on success or failure. Source extraction precedes
 redaction, and encrypted evidence retains the exact original value. The dedicated
 reveal service, authorization checks, audit commit and response headers are unchanged.
+
+## Report projection context (Phase 25)
+
+Report DTO construction now ends at `reports/projection.py::safe_report_projection`.
+The complete projection is sanitized against combined ordinary finding/evidence,
+job and ancillary summary source context before any source knowledge is discarded.
+Summary clipping follows sanitization. Storage owns the bounded joined context query;
+there are no per-finding evidence reads or protected-evidence/decryption dependencies.
+All format adapters and manual/API/scheduled delivery consume that logical model.
+See the field inventory and resource bounds in [reporting](reporting.md).

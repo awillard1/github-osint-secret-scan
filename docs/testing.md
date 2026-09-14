@@ -215,3 +215,16 @@ preservation and encryption failure. The migration test seeds unsafe Phase 23-st
 SQL rows at 0012, upgrades without a key, repeats repair, compares protected columns
 byte-for-byte, verifies relationship IDs/lifecycle history, and successfully reveals
 the original value afterward. Existing sanitizer/presentation defenses remain tested.
+
+## Phase 25 report projection regression
+
+`tests/reports/test_phase25_projection.py` inserts unsafe legacy copies through SQL,
+including the release-gate metadata/remediation/query reproduction. It checks all five
+formats, reader/analyst/admin HTTP exports, evidence-only and cross-field knowledge,
+summary-only and out-of-page remediation groups, relationship provenance, compatibility
+rows, scheduled/webhook output and an RQ service invocation. Protected columns remain
+byte-for-byte unchanged, legacy SQL values remain unsafe during reads, decryption is
+forbidden during export, report audits stay at zero, and explicit authorized reveal
+returns the exact original value and creates one audit. A separate normal-ingestion
+case verifies that this is a presentation defect, not a new persistence regression.
+Existing report/query-count assertions are retained unchanged.

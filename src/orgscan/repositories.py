@@ -942,9 +942,9 @@ class Storage:
         from orgscan.storage.sources import domain_sources
         return domain_sources(self, domain)
 
-    def report_summary(self, *, tenant_keys=None):
+    def report_summary(self, *, tenant_keys=None, source_context=None):
         from orgscan.storage.report_queries import report_summary
-        return report_summary(self, tenant_keys=tenant_keys)
+        return report_summary(self, tenant_keys=tenant_keys, source_context=source_context)
 
     def get_finding(self, finding_id: int) -> Finding | None:
         return self.session.get(Finding, finding_id)

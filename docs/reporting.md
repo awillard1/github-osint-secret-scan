@@ -65,3 +65,42 @@ Asset-name and ancillary observation arrays retain their existing scope semantic
 and can still grow; report encoding is in memory. This is not a streaming exporter
 or deployment-scale performance certification. Existing unrelated dashboard analytics
 continue to have decomposition/query-efficiency work outstanding.
+
+## Phase 25: complete projection safety
+
+`reports/projection.py::safe_report_projection` sanitizes the complete logical model
+with ordinary source context before formats receive it. It uses the shared bounded
+redactor; there are no format-specific credential patterns. `query_report`, summary
+queries and compatibility `finding_rows` retain source knowledge until this boundary.
+No untrusted ORM fields are appended afterward. Format adapters retain their defensive
+redaction and output-field exclusions.
+
+The inventory below describes the projection and its non-exported context:
+
+| Surface | Projected fields covered by final sanitization | Additional source context |
+| --- | --- | --- |
+| Finding | ID; title/description; category/severity/confidence; status and lifecycle timestamps/counts; triage state/owner/notes; remediation due date/hint; scanner/source names; repository/job IDs; risk score; detected time; fingerprint; repository display name | Every ordinary string/JSON column on the finding, including metadata, raw payload and remediation text; loaded repository/job source fields |
+| Evidence | Scanner/source; logical path; line range; commit/ref; safe source URL; query; observed time; confidence; observation fingerprint | Every ordinary string/JSON evidence column, including metadata, snippets, extracted indicators, original URLs and provider context; evidence job parameters |
+| Relationships | Node IDs/types/labels/degrees; edge endpoints/type/confidence/source/provenance; graph breakdowns | Ordinary relationship columns, including omitted evidence summaries; visible endpoint asset records and finding/evidence context |
+| Summary | Counts/breakdowns; organization/repository/account names; domain exposure previews; identity correlations; trends; organization comparisons; remediation suggestions; recent jobs/tool runs; priority findings/assets; schedules | Bounded source rows before projection/clipping; one joined finding/evidence context query for priority findings, finding graph endpoints and custom remediation groups |
+| Delivery | JSON/CSV/HTML/PDF/SARIF and manual/API/scheduled report payloads | All consume the sanitized model; scheduler adds operational schedule/output identifiers, never raw finding/evidence columns |
+
+Raw payloads/snippets/indicators are context only and remain excluded from normal
+exports. Protected evidence is never queried or decrypted for report construction.
+Reports do not require the encryption key, mutate ciphertext, or create reveal audits.
+Authorized tenant-scoped reveal remains the only intentional plaintext operation.
+
+Detailed finding filters/limits and select-in evidence loading remain in storage.
+Summary counts still cover all authorized rows. Summary context uses one additional
+joined column query, not one query per finding, and materializes no Evidence ORM
+objects. At most 1,000 joined context rows are accepted; overflow raises a fixed,
+input-free sanitizer limit error rather than emitting a context-incomplete report.
+Existing character/node/depth/replacement budgets and preview limits also apply.
+A very large custom remediation group or evidence history can therefore require
+operator review/legacy data repair before rendering. No data is silently truncated
+from the safety context. Already bounded detail sources are reused in the final
+whole-report pass so evidence knowledge also protects copied summary/provenance text.
+
+There is no built-in queued-report job type. The regression suite exercises an RQ
+caller invoking the existing report service with explicit tenant scope; it does not
+add queue scheduling, authorization policy or a new production report job API.

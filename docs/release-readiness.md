@@ -648,3 +648,49 @@ on an upgraded disposable database with preservation enabled. Distribution build
 clean-install validation (including candidate-copy storage and exact reveal), compile
 checks and whitespace checks passed. Optional live tools and PostgreSQL/live Redis
 certification remain subject to the previously documented limitations.
+
+## Phase 25 — report projection secret-context hardening
+
+The Phase 24 gate reproduced ordinary plaintext in JSON/CSV/PDF/SARIF after report
+construction appended fields without their credential-bearing source metadata.
+The final shared report boundary now sanitizes complete projections using ordinary
+finding/evidence context, including omitted metadata/snippets and source fields.
+Summary provenance, priorities and custom remediation hints retain bounded context
+before clipping, even when the detailed report page excludes the source finding.
+All five formats and manual/API/scheduled/webhook paths consume the sanitized model.
+
+This is **case A: presentation/projection only**. The reproduction requires unsafe
+legacy/direct-SQL rows; normal Phase 24 storage already sanitizes these copies.
+No new migration is needed. Head remains **20260914_0013**; migrations 0009–0013 are
+unchanged. Reports neither repair legacy rows nor decrypt protected evidence.
+Existing 0013 repair semantics remain unchanged, including its documented ordinary
+text loss. Ciphertext remains intact and authorized reveal returns the exact value.
+
+One bounded joined context query supports summaries, preserving batched detail
+loading and exact aggregate counts. The 1,000-row context cap and existing sanitizer
+work budgets fail closed; unusually large custom remediation groups/evidence history
+may need operator review or legacy repair. No evidence context is silently truncated.
+There is no built-in queued-report job type; validation exercises the existing service
+from an RQ caller without adding new production queue functionality. PostgreSQL/live
+Redis certification and previously documented deployment limitations remain unchanged.
+
+### Phase 25 validation
+
+- Added **19 regression cases**. Focused reports/API/background plus Phase 23/24
+  protected-secret run: **129 passed**, two dependency deprecation warnings.
+- Complete suite: **748 passed, 6 skipped**, two dependency deprecation warnings,
+  423.21 seconds. Existing tests/assertions were not weakened.
+- Original legacy-copy reproduction passes all five formats. Ciphertext stays
+  byte-for-byte unchanged; generic reads/exports create zero reveal audits, then
+  authorized analyst reveal returns the exact original value and creates one audit.
+- At 10/100/300 findings: summaries **37 SELECTs**, dashboards **53 SELECTs**,
+  constant with dataset size (previously 36/52). Detail evidence remains batched;
+  the extra joined context query does not materialize Evidence ORM rows.
+- Doctor: **ok=true, 17 warnings**, configured schema/head **0013**. Preservation
+  is disabled locally because no key is configured; encrypted tests use disposable
+  keys/databases. The configured database was not migrated or modified by this phase.
+- Distribution build, runtime-only clean-install validation, compile checks and
+  whitespace checks passed. Clean install exercises CLI/API startup, migrations,
+  scan/report output, encrypted storage and exact authorized reveal.
+- Field inventory and final projection boundary reviewed; no frozen migration or
+  secret-evidence/reveal implementation changed. No release commit/tag was created.

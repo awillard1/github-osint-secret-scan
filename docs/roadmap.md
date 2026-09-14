@@ -321,3 +321,13 @@ imported results and both queue backends have regression coverage. Migration 001
 performs keyless, conservative repair of affected ordinary records while retaining
 protected ciphertext and references. See release readiness for repair data loss and
 validation results. No reveal endpoint or permission expansion is introduced.
+
+## Phase 25 — report projection secret context
+
+Complete report/summary projections now retain ordinary finding and evidence secret
+knowledge through final shared sanitization, including legacy copied remediation,
+query and provenance values. All five formats, API exports, scheduled/webhook delivery
+and an RQ service invocation have regressions. Encrypted evidence and explicit reveal
+are unchanged. This is a presentation-only correction: no migration, head remains
+0013, and frozen migrations remain intact. Summary context adds one bounded joined
+query; existing query-count and detail-limit checks remain required.

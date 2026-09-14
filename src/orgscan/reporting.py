@@ -74,14 +74,27 @@ def finding_rows(
     category: str | None = None,
     confidence: str | None = None,
 ) -> list[dict[str, Any]]:
-    return [finding_row(finding) for finding in storage.list_findings(
+    from orgscan.reports.projection import source_fields, safe_report_projection
+    findings = storage.list_findings(
         limit=limit, tenant_keys=tenant_keys, status=status, severity=severity,
-        category=category, confidence=confidence)]
+        category=category, confidence=confidence, include_evidence=True)
+    sources = [source_fields(record) for finding in findings
+               for record in (finding, *finding.evidence_items)]
+    return safe_report_projection([finding_projection(finding) for finding in findings], sources)
 
 
 def finding_row(finding):
-    from orgscan.presentation import safe_finding_fields
-    return safe_finding_fields(finding, {
+    from orgscan.reports.projection import source_fields, safe_report_projection
+    sources = [source_fields(finding)]
+    # Single-record compatibility callers can supply eagerly loaded evidence;
+    # batch exports use finding_rows/query_report and always load it together.
+    sources.extend(source_fields(e) for e in finding.__dict__.get('evidence_items', ()))
+    return safe_report_projection(finding_projection(finding), sources)
+
+
+def finding_projection(finding):
+    """Ordinary fields; callers must sanitize after completing their projection."""
+    return {
             "id": finding.id,
             **lifecycle_fields(finding),
             "title": finding.title,
@@ -101,7 +114,7 @@ def finding_row(finding):
             "risk_score": finding.risk_score or 0,
             "detected_at": finding.detected_at.isoformat(),
             "fingerprint": finding.fingerprint,
-        })
+        }
 
 
 def finding_trends(storage: Storage, days: int = 30, *, tenant_keys: list[str] | None = None) -> list[dict[str, Any]]:
