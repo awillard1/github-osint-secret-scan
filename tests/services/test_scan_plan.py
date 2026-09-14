@@ -79,4 +79,7 @@ def test_domain_plan_uses_existing_provider_and_records_intent(monkeypatch, tmp_
         result = execute_plan(storage, plan)
         assert seen == [('local-metadata', 'example.com')]
         assert result[0].findings == 0
-        assert storage.list_scan_jobs()[0].parameters_json['scan_plan'] == plan.serialized()
+        job = storage.list_scan_jobs()[0]
+        domain = storage.get_domain_by_name(plan.target)
+        assert job.target_id == str(domain.id)
+        assert job.parameters_json['scan_plan'] == plan.model_copy(update={'domain_id': domain.id}).serialized()

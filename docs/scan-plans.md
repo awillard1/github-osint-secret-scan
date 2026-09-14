@@ -33,3 +33,17 @@ Artifact API and dashboard POST accept optional `profile` alongside `scanner`; a
 To serialize a discovery plan, use `resolve_scan_plan(target="example.com", target_type="domain", profile="domain-only").model_dump_json()`. The same JSON is accepted by the `scan-plan` command or by a scheduled record's `metadata_json.scan_plan`.
 
 Phase 5 implements [incremental and branch orchestration](incremental-scans.md) using the recorded intent. Full remains the default; no-profile mirror commands preserve tracked-ref selection. No schema migration was required for ScanPlan.
+
+## Phase 18 domain context
+
+Domain plans add optional `domain_id` without changing version 1. Execution resolves
+and validates the name/ID, organization and tenant before invoking providers, then
+persists the resolved plan with a numeric domain asset ID in `ScanJob.target_id`.
+A requested tenant must match the domain's owning organization; tenant-only requests
+cannot invent an organization or reassign an existing domain. Providers receive a
+`DomainContext` through `discover_context`; the documented two-argument `discover`
+method remains supported. GitHub domain searches also record resolved plans.
+CLI `discover domain` and `scan-plan`, serialized/legacy schedules and queued jobs
+share context resolution. Legacy schedules retain provider selection. The API has
+read/report access to domain jobs, but no domain execution endpoint was added.
+Pre-existing name-based job rows are not rewritten; new domain jobs use asset IDs.

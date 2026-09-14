@@ -5,10 +5,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from orgscan.config import Settings
-from orgscan.mirroring import scan_repository_mirror_refs
 from orgscan.repositories import Storage
 from orgscan.reporting import deliver_report_webhook, scheduled_report_output_path, write_export
-from orgscan.runner import ScanExecutionResult, execute_scan
+from orgscan.runner import ScanExecutionResult
 
 
 def next_run_from_cadence(cadence: str, reference: datetime | None = None) -> datetime:
@@ -39,7 +38,9 @@ def execute_scheduled_scan(storage: Storage, scheduled, *, settings: Settings | 
         plan = ScanPlan.model_validate(metadata["scan_plan"])
     else:
         plan = resolve_scan_plan(target=scheduled.target_value, target_type=scheduled.target_type,
-                                 scanners=[scheduled.scanner_name], settings=settings,
+                                 scanners=None if scheduled.target_type == "domain" else [scheduled.scanner_name],
+                                 discovery_provider=scheduled.scanner_name if scheduled.target_type == "domain" else None,
+                                 tenant_key=metadata.get("tenant_key"), domain_id=metadata.get("domain_id"), settings=settings,
                                  refs=metadata.get("refs"), organization_id=metadata.get("organization_id"),
                                  repository_id=metadata.get("repository_id"), scope=metadata.get("scope_json") or {})
     execution = {}

@@ -130,3 +130,23 @@ Tests must not depend on:
 - Redis being externally available.
 
 Use recorded fixtures or fakes.
+
+## Clean runtime installation (CI/release validation)
+
+The ordinary `tests/packaging/test_installed_wheel.py` verifies wheel contents and
+installed imports using development dependencies; it is not a clean-install claim.
+Run the separate validation after building:
+
+```bash
+python -m build
+python scripts/validate_clean_install.py dist/orgscan-0.1.0-py3-none-any.whl
+```
+
+The script creates a fresh venv under `/tmp`, outside the checkout, with no system
+site packages, PYTHONPATH or development extras. It installs the wheel with declared
+runtime dependencies, runs `pip check`, explicit production database initialization,
+CLI startup, local scan, JSON/SARIF reports and API lifespan/health without httpx.
+It asserts pytest/httpx are absent and cleans the temporary environment afterward.
+Index access (or pip wheelhouse configuration) is required. The GitHub Actions
+`clean-install.yml` runs this independently on Python 3.12 and 3.13; normal unit tests
+remain offline and do not perform this dependency install.

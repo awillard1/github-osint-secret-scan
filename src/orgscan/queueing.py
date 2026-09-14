@@ -14,7 +14,7 @@ from rq import Queue, Retry, SimpleWorker, get_current_job
 from rq.registry import FailedJobRegistry, StartedJobRegistry
 
 from orgscan.config import Settings
-from orgscan.db import create_session_factory, init_db
+from orgscan.db import prepare_database, create_session_factory
 from orgscan.repositories import Storage
 from orgscan.scheduler import execute_scheduled_scan, next_run_from_cadence
 from orgscan.services.job_policy import (classify_failure, retry_delay, retry_limit, Failure, JobExecutionError, logical_job_type)
@@ -99,7 +99,7 @@ def enqueue_due_scheduled_scans(
 ) -> list[dict[str, Any]]:
     if _queue_backend(settings) == "db":
         return _enqueue_due_scheduled_scans_db(settings, limit=limit)
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     queue = get_scan_queue(settings, connection=connection, is_async=is_async)
     _reserve_due(settings, backend='rq', limit=limit)
@@ -167,7 +167,7 @@ def _reserve_due(settings, *, backend, limit):
 
 def execute_scheduled_scan_job(scheduled_scan_id: int, settings_payload: dict[str, Any] | None = None, execution_key: str | None = None) -> dict[str, Any]:
     settings = Settings(**(settings_payload or {}))
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
 
     with session_factory() as session:
@@ -272,6 +272,7 @@ def run_worker(
     connection: Redis | None = None,
     max_jobs: int | None = None,
 ) -> bool:
+    prepare_database(settings)
     if _queue_backend(settings) == "db":
         return _run_db_worker(settings, burst=burst, max_jobs=max_jobs)
     queue = get_scan_queue(settings, connection=connection)
@@ -280,7 +281,7 @@ def run_worker(
 
 
 def _db_queue_status(settings: Settings) -> dict[str, Any]:
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -301,12 +302,11 @@ def _db_queue_status(settings: Settings) -> dict[str, Any]:
 
 
 def _enqueue_due_scheduled_scans_db(settings: Settings, *, limit: int = 10) -> list[dict[str, Any]]:
-    init_db(settings.database_url)
+    prepare_database(settings)
     return _reserve_due(settings, backend='db', limit=limit)
 
 
 def _run_db_worker(settings: Settings, *, burst: bool = False, max_jobs: int | None = None) -> bool:
-    init_db(settings.database_url)
     processed = 0
     worker_id = settings.scan_queue_worker_id or f"db-worker-{uuid.uuid4().hex[:12]}"
     while True:

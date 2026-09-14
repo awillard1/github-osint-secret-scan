@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from orgscan.bootstrap import optional_tool_inventory
 from orgscan.config import Settings, get_settings
-from orgscan.db import create_session_factory, init_db
+from orgscan.db import prepare_database, create_session_factory
 from orgscan.models import ScanJob, ToolRun
 from orgscan.runner import execute_scan
 from orgscan.reporting import (
@@ -55,6 +55,7 @@ from orgscan.services.dashboard_service import DashboardService
 from orgscan.scanners import get_registry
 from orgscan.services.scanner_service import artifact_scanner_options, scanner_inventory
 from orgscan.services.scan_plan import resolve_scan_plan
+from orgscan.services.target_service import resolve_asset_context
 from orgscan.services.scan_service import execute_plan, result_payload
 from orgscan.scanners.external import ScannerExecutionError
 
@@ -264,10 +265,10 @@ def _extract_tar_artifact(artifact_path: Path, destination_root: Path) -> int:
 class OrgscanApiService:
     def __init__(self, database_url: str, settings: Settings | None = None) -> None:
         self.database_url = database_url
-        init_db(self.database_url)
+        self.settings = (settings or get_settings()).model_copy(update={"database_url": database_url})
+        prepare_database(self.settings)
         from orgscan.storage.authorization import authorized_session_factory
         self.session_factory = authorized_session_factory(create_session_factory(self.database_url))
-        self.settings = (settings or get_settings()).model_copy(update={"database_url": database_url})
         self.finding_service = FindingService(self.session_factory)
 
     def _access_context_note(self) -> str:
@@ -277,14 +278,12 @@ class OrgscanApiService:
             return f"Signed in as {auth.name} ({auth.role}); tenant scope: {', '.join(auth.tenants)}."
         return "Local development mode: authentication is not configured."
 
-    def _artifact_scanner_options(self, *, selected: str = "custom-patterns") -> list[dict[str, Any]]:
-        return artifact_scanner_options(self.settings, selected=selected)
-
     def _tooling_payload(self) -> dict[str, object]:
-        tools = optional_tool_inventory(self.settings)
+        inventory = scanner_inventory(self.settings)
+        tools = optional_tool_inventory(self.settings, inventory=inventory)
         return {
-            "scanners": self._artifact_scanner_options(),
-            "scanner_readiness": scanner_inventory(self.settings),
+            "scanners": artifact_scanner_options(self.settings, inventory=inventory),
+            "scanner_readiness": inventory,
             "scanner_registry_warnings": list(get_registry().warnings),
             "optional_tools": tools,
             "installed_optional_tools": [item["name"] for item in tools if item["installed"]],
@@ -380,37 +379,8 @@ class OrgscanApiService:
             return None
         return {"finding": _serialize_finding(updated, include_detail=True)}
 
-    def _resolve_asset_context(
-        self,
-        storage: Storage,
-        *,
-        organization: str | None,
-        repository: str | None,
-        provider: str,
-    ) -> tuple[int | None, int | None]:
-        from orgscan.security_context import AuthorizationError, current_auth
-        auth = current_auth.get()
-        if auth is not None and "*" not in auth.tenants:
-            org = storage.get_organization_by_name(organization) if organization else None
-            repo = storage.get_repository_by_full_name(repository) if repository else None
-            if (organization and org is None) or (repository and repo is None) or (org is None and repo is None):
-                raise AuthorizationError("Select an existing organization or repository in your tenant scope")
-            if org is not None and repo is not None and repo.organization_id != org.id:
-                raise AuthorizationError("Repository and organization scopes do not match")
-            return org.id if org is not None else repo.organization_id, repo.id if repo is not None else None
-        organization_id = None
-        repository_id = None
-        if organization:
-            organization_record, _ = storage.get_or_create_organization(organization)
-            organization_id = organization_record.id
-        if repository:
-            repository_record, _ = storage.get_or_create_repository(
-                repository,
-                organization_id=organization_id,
-                provider=provider,
-            )
-            repository_id = repository_record.id
-        return organization_id, repository_id
+    def _resolve_asset_context(self, storage, *, organization, repository, provider):
+        return resolve_asset_context(storage, organization=organization, repository=repository, provider=provider)
 
     def _scan_uploaded_artifact(
         self,
@@ -922,6 +892,7 @@ class OrgscanApiService:
                 }
                 for finding in findings
             ]
+            tooling = self._tooling_payload()
             return render_dashboard_html(
                 summary,
                 filtered_rows,
@@ -943,11 +914,11 @@ class OrgscanApiService:
                 artifact_scan_error=artifact_scan_error,
                 finding_action_result=finding_action_result,
                 finding_action_error=finding_action_error,
-                scanner_options=self._artifact_scanner_options(
-                    selected=str((artifact_scan_result or {}).get("scanner") or "custom-patterns")
+                scanner_options=artifact_scanner_options(
+                    self.settings, inventory=tooling["scanner_readiness"], selected=str((artifact_scan_result or {}).get("scanner") or "custom-patterns")
                 ),
                 access_context_note=self._access_context_note(),
-                tooling=self._tooling_payload(),
+                tooling=tooling,
             )
 
     def _dashboard_finding_workflow(

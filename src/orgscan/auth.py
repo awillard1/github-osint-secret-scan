@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import Header, HTTPException
 
 from orgscan.config import Settings
-from orgscan.db import init_db
+from orgscan.db import prepare_database
 from orgscan.repositories import Storage
 
 from orgscan.security_context import AuthContext, ROLE_LEVELS
@@ -97,7 +97,7 @@ def create_db_session_token(
 def auth_dependency(settings: Settings, *, required_role: str = "reader"):
     from orgscan.services.auth_service import AuthService
     from orgscan.security_context import LOCAL_CONTEXT
-    init_db(settings.database_url)
+    prepare_database(settings)
     service = AuthService(settings)
 
     def _resolve_context(x_orgscan_token: str | None = Header(default=None, alias="X-Orgscan-Token")) -> AuthContext:
@@ -133,22 +133,6 @@ def serialize_auth_context(auth: AuthContext) -> dict[str, Any]:
         "source": auth.source,
         "user_id": auth.user_id,
     }
-
-
-def _database_auth_enabled(settings: Settings) -> bool:
-    from orgscan.services.auth_service import AuthService
-    init_db(settings.database_url)
-    return AuthService(settings).enabled()
-
-
-def _load_db_auth_context(settings: Settings, raw_token: str | None) -> AuthContext | None:
-    from orgscan.services.auth_service import AuthService
-    init_db(settings.database_url)
-    return AuthService(settings).resolve(raw_token)
-
-
-def _highest_role(roles: list[str]) -> str:
-    return max(roles, key=lambda role: ROLE_LEVELS.get(role, 0))
 
 
 def _normalize_datetime(value: datetime) -> datetime:

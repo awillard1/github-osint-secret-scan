@@ -41,7 +41,7 @@ Register Python classes through the `orgscan.scanners` entry-point group. For ex
 example = "example_package.scanner:ExampleScanner"
 ```
 
-The registry includes all nine existing scanners, loads entry points in deterministic name/value order, and lists IDs in sorted order. Metadata IDs take precedence over legacy names. Duplicate IDs, including collisions with built-ins, raise `DuplicateScannerError`; an explicit registration ID must match the declared ID. Unloadable entry points are skipped with safe registry warnings. Entry-point discovery is cached for the process lifetime, as before.
+The registry includes ten bundled scanners (including heuristic-rules), loads entry points in deterministic name/value order, and lists IDs in sorted order. Metadata IDs take precedence over legacy names. Duplicate IDs, including collisions with built-ins, raise `DuplicateScannerError`; an explicit registration ID must match the declared ID. Unloadable entry points are skipped with safe registry warnings. Entry-point discovery is cached for the process lifetime, as before.
 
 Registry inventory supplies `config`, `verify-deps`, bootstrap, `/scanners`, and dashboard scanner choices. Existing inventory fields remain, with metadata/readiness added. Artifact options use declared target capabilities instead of a scanner-name allowlist; new plugins need no API/CLI dispatch branches. Target support describes the prepared input kind, not guaranteed applicability to every file: history scanning still requires Git contents. Failed initialization/readiness is reported as unavailable without exposing arbitrary exception text. Duplicate registration remains a configuration error.
 
@@ -130,3 +130,19 @@ remediation: ...
 Validate rules at startup/load time.
 
 A bad rule should identify the file/rule and fail predictably rather than corrupting the scan.
+
+## Phase 18 effective configuration and readiness
+
+An inventory snapshot is shared by API tooling, bootstrap and CLI output; one
+request does not repeat each scanner's readiness probe for every representation.
+YARA checks the configured source file and probes `--version` with a five-second
+bound. A failed probe leaves an unknown version and warning; it does not certify or
+reject runtime rule compatibility. Rule syntax is checked during execution.
+
+Checkpoint reuse is limited to reviewed built-ins, JSON heuristic rules and bounded
+local YARA includes. Other external tools and plugins execute again because their
+full effective configuration is not declared. See [incremental scans](incremental-scans.md).
+Phase 17 redaction remains in force: source bodies/credential-labelled fields and
+recognized copied values are removed before persistence, and exports omit raw
+payloads/snippets/indicators. This does not identify every arbitrary unlabelled secret
+or make existing backups safe; operator/plugin metadata must remain redacted.

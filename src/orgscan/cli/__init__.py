@@ -13,7 +13,7 @@ from orgscan.auth import create_db_session_token
 from orgscan.bootstrap import bootstrap, optional_tool_inventory
 from orgscan.api import serve_api
 from orgscan.config import Settings, get_settings, render_env_template
-from orgscan.db import create_session_factory, current_db_revision, init_db
+from orgscan.db import prepare_database, create_session_factory, current_db_revision, init_db
 from orgscan.discovery import DiscoveryError, GitHubDiscoveryClient
 from orgscan.expansion import GitHubExpansionEngine
 from orgscan.cli.dependencies import _settings
@@ -41,6 +41,7 @@ from orgscan.scanners import ScannerExecutionError, available_scanner_names, loa
 from orgscan.scanners.base import ScanMatch
 from orgscan.services.scanner_service import scanner_inventory
 from orgscan.services.scan_plan import ScanPlan, resolve_scan_plan
+from orgscan.services.target_service import resolve_asset_context
 from orgscan.services.scan_service import execute_plan, result_payload
 from orgscan.scheduler import next_run_from_cadence, run_due_reports, run_due_scans
 
@@ -100,27 +101,7 @@ def _parse_expiration(hours: int | None) -> datetime | None:
     return datetime.now(UTC) + timedelta(hours=hours)
 
 
-def _resolve_asset_context(
-    storage: Storage,
-    *,
-    organization: str | None,
-    repository: str | None,
-    provider: str,
-    tenant_key: str | None = None,
-) -> tuple[int | None, int | None]:
-    organization_id = None
-    repository_id = None
-    if organization:
-        organization_record, _ = storage.get_or_create_organization(organization, tenant_key=tenant_key)
-        organization_id = organization_record.id
-    if repository:
-        repository_record, _ = storage.get_or_create_repository(
-            repository,
-            organization_id=organization_id,
-            provider=provider,
-        )
-        repository_id = repository_record.id
-    return organization_id, repository_id
+_resolve_asset_context = resolve_asset_context
 
 
 def _load_scanner_report(scanner: str, report_path: Path) -> tuple[str, list[ScanMatch]]:
@@ -192,11 +173,11 @@ def config(
 ) -> None:
     settings = _settings()
     details = bootstrap(settings, verify_only=True)
-    optional_tools = details.get("optional_tools", optional_tool_inventory(settings))
+    optional_tools = details["optional_tools"] if "optional_tools" in details else optional_tool_inventory(settings)
     payload = {
         "settings": settings.as_dict(include_secrets=show_secrets),
         "available_scanners": available_scanner_names(),
-        "scanner_readiness": scanner_inventory(settings),
+        "scanner_readiness": details["scanner_readiness"] if "scanner_readiness" in details else scanner_inventory(settings),
         "available_domain_providers": available_domain_provider_names(),
         "available_execution_backends": ["local", "rq"],
         "optional_tools": optional_tools,
@@ -255,7 +236,7 @@ def add_target(
     tenant_key: str | None = typer.Option(None, "--tenant-key", help="Optional tenant scope for organization-linked records."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
 
     with session_factory() as session:
@@ -294,7 +275,7 @@ def create_user(
     display_name: str | None = typer.Option(None, "--display-name", help="Optional display name."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -310,7 +291,7 @@ def grant_tenant_role(
     role: str = typer.Option("reader", "--role", help="Tenant role: reader, analyst, or admin."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -335,7 +316,7 @@ def create_session_token(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -368,7 +349,7 @@ def revoke_session(
     session_id: int,
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -380,7 +361,7 @@ def revoke_session(
 @app.command("status")
 def status() -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     revision = current_db_revision(settings.database_url)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
@@ -404,7 +385,7 @@ def discover(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     client = GitHubDiscoveryClient(settings)
     session_factory = create_session_factory(settings.database_url)
 
@@ -436,14 +417,15 @@ def discover(
             return
 
         if target_type == DiscoverTargetType.DOMAIN:
+            from orgscan.services.scan_service import execute_domain_plan
             try:
-                domain_provider = get_domain_provider(provider, settings)
+                plan = resolve_scan_plan(target=value, target_type='domain', discovery_provider=provider,
+                                         tenant_key=tenant_key, settings=settings)
+                _, provider_result = execute_domain_plan(storage, plan, settings=settings)
             except ValueError as exc:
                 raise typer.BadParameter(str(exc)) from exc
-            try:
-                provider_result = domain_provider.discover(storage, value)
-            except DomainProviderError as exc:
-                typer.echo(f"Domain discovery failed: {exc}", err=True)
+            except RuntimeError as exc:
+                typer.echo("Domain discovery failed; inspect the recorded job", err=True)
                 raise typer.Exit(code=1) from exc
             discovered_domain_exposures.extend(provider_result.exposures)
             discovered_identity_correlations.extend(provider_result.identity_correlations)
@@ -515,7 +497,7 @@ def expand(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     client = GitHubDiscoveryClient(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
@@ -559,7 +541,7 @@ def report(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -597,7 +579,7 @@ def scan(
         raise typer.BadParameter(f"Target does not exist: {target}")
 
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     resolved_target = target.absolute()
 
@@ -645,7 +627,7 @@ def ingest_results(
         raise typer.BadParameter(f"Report does not exist: {report_path}")
 
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     source_class, matches = _load_scanner_report(scanner, report_path)
 
@@ -697,7 +679,7 @@ def schedule_scan(
     tenant_key: str | None = typer.Option(None, "--tenant-key", help="Optional tenant scope for associated organization."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -746,7 +728,7 @@ def schedule_mirror_scan(
     resync_before_run: bool = typer.Option(True, "--resync/--no-resync", help="Whether to refresh the mirror before each scheduled run."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -786,7 +768,7 @@ def run_scheduled(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -824,7 +806,7 @@ def schedule_report(
     enabled: bool = typer.Option(True, "--enabled/--disabled", help="Whether the schedule starts enabled."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -849,7 +831,7 @@ def run_scheduled_reports_command(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -903,7 +885,7 @@ def sync_mirror(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -941,7 +923,7 @@ def sync_mirrors(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -991,7 +973,7 @@ def scan_mirror(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -1096,7 +1078,7 @@ def jobs(
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -1193,7 +1175,7 @@ def export(
     limit: int = typer.Option(500, "--limit", min=1, help="Maximum number of findings to export."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -1211,7 +1193,7 @@ def dashboard(
     limit: int = typer.Option(100, "--limit", min=1, help="Maximum number of findings to include."),
 ) -> None:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     tooling = bootstrap(settings, verify_only=True)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
@@ -1245,7 +1227,7 @@ def verify_deps(
 ) -> None:
     settings = _settings()
     details = bootstrap(settings, verify_only=True)
-    optional_tools = details.get("optional_tools", optional_tool_inventory(settings))
+    optional_tools = details["optional_tools"] if "optional_tools" in details else optional_tool_inventory(settings)
     missing_required = sorted(command for command, present in details["required"].items() if not present)
     result = {
         **details,
@@ -1265,7 +1247,7 @@ def verify_deps(
             guidance = "" if item["installed"] else f" | configure via {item['env_var'] or 'PATH'} | {item['install_note']}"
             typer.echo(f"  - {item['name']} ({item['category']}): {'ok' if item['installed'] else 'missing'} -> {item['configured_command']}{guidance}")
         typer.echo("Scanner readiness")
-        for item in result.get("scanner_readiness", scanner_inventory(settings)):
+        for item in (result["scanner_readiness"] if "scanner_readiness" in result else scanner_inventory(settings)):
             typer.echo(f"  - {item['name']}: {item['readiness']['status']}")
         if missing_required:
             typer.echo(f"Missing required dependencies: {', '.join(missing_required)}")
@@ -1290,7 +1272,7 @@ def scan_plan_command(plan_file: Path, dry_run: bool = typer.Option(False, "--dr
         if dry_run:
             typer.echo(plan.model_dump_json(indent=2))
             return
-        init_db(settings.database_url)
+        prepare_database(settings)
         with create_session_factory(settings.database_url)() as session:
             payload = result_payload(execute_plan(Storage(session), plan, settings=settings))
         typer.echo(json.dumps(payload, indent=2, default=str))

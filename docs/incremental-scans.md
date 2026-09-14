@@ -24,7 +24,7 @@ Profile-driven mirror plans default to default-only; explicit refs select select
 | --- | --- |
 | Explicit full/history mode | Always execute the selected scanner at the pinned commit; history mode requires history capability |
 | First scan or changed configuration | Full tree/history scan |
-| Incremental, same commit and ref object | Record an unchanged skip; no scanner or worktree execution |
+| Incremental, fingerprintable configuration, same commit and ref object | Record an unchanged skip; no scanner or worktree execution |
 | Incremental, verified descendant, history adapter supports ranges | Execute the entire `previous_oid..current_oid` range |
 | Changed content scanner without range semantics | Full tree scan, preserving cross-file scanner behavior |
 | Diverged/force-pushed history or unavailable old commit | Full tree/history fallback |
@@ -37,6 +37,19 @@ Git-history execution pins the commit/range rather than resolving stale local br
 
 Successful checkpoints advance only after the scanner and worktree cleanup succeed. Skips and failures never advance them. Completed earlier scanners in a multi-scanner plan keep their individual checkpoints if a later scanner fails. A crash between persisted findings and checkpoint commit causes safe re-execution; this is not exactly-once evidence ingestion. All-skipped scheduled jobs complete normally. Locks serialize concurrent jobs sharing a cache, allowing the second job to observe the first job's successful checkpoint.
 
-Configuration keys conservatively hash settings, scanner version, declared local rules-file contents, binary path/mtime/size, history policy and scope. The Phase 5 contract-key version invalidates older checkpoints once. Remote auto-updated rules, undeclared plugin inputs, environment-only changes, and same-size binary replacements preserving timestamps cannot be detected reliably: request a full scan when these change. Optional tools remain required for scans that execute. Skipped scans do not refresh finding last-seen times or imply automatic remediation; existing finding lifecycle behavior remains unchanged.
+Phase 18 configuration keys hash settings, scanner version, scanner source and bundled
+JSON dependencies, runtime Python/regex/Pydantic versions, executable contents,
+plan timeout, history policy and scope. The new contract-key version invalidates
+older checkpoints once. Local JSON heuristic rules are hashed by content. YARA
+literal local includes are recursively hashed (at most 100 files, 1 MB per file,
+4 MB total); missing, ambiguous, unreadable includes or module imports disable reuse.
+Rules and binaries must remain quiescent while a scan runs.
 
-Inherited cache limits remain: POSIX/shared-filesystem locking, buffered subprocess output, and operator cleanup of crash-orphan worktrees. Normal tests use local synthetic Git repositories and fake external tools/Redis; they do not certify live tool compatibility or large-repository performance.
+For Semgrep, Gitleaks, detect-secrets, TruffleHog, ripgrep and plugins, unmodelled
+user/environment/remote configuration prevents deterministic reuse. Incremental
+requests execute a full tree/history scan with reason
+`configuration-not-fingerprintable`; no new reusable checkpoint is written. This
+conservative policy trades speed for coverage. Remote configuration is never assumed
+unchanged merely because Git is unchanged. Explicit full/history scans still run. Optional tools remain required for scans that execute. Skipped scans do not refresh finding last-seen times or imply automatic remediation; existing finding lifecycle behavior remains unchanged.
+
+Inherited cache limits remain: POSIX/shared-filesystem locking, bounded captured subprocess output, and operator cleanup of crash-orphan worktrees. Normal tests use local synthetic Git repositories and fake external tools/Redis; they do not certify live tool compatibility or large-repository performance.

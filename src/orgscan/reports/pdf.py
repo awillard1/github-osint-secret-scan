@@ -30,6 +30,9 @@ def write_pdf_report(output_path, summary, findings, *, variant='executive'):
         paragraph('Prioritized findings', 'Heading1')
         for row in sorted(findings,key=lambda item: (-(item.get('risk_score') or 0), item['id']))[:10]:
             paragraph(f'#{row["id"]}: {row["title"]} — {row["severity"]} / {row["confidence"]}; {row.get("lifecycle_state")}; risk {row.get("risk_score",0)}')
+            for item in row.get('evidence', []):
+                if item.get('path'):
+                    paragraph(f"Location: {item['path']}:{item.get('line_start') or ''}")
         paragraph('Recommended actions', 'Heading1')
         for row in summary.get('remediation_suggestions',[]):
             paragraph(f'{row["category"]}: {row["suggestion"]}')

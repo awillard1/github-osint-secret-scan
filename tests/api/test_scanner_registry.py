@@ -143,3 +143,21 @@ def test_timeout_diagnostic_persisted_without_raw_scanner_output(monkeypatch, tm
         assert "private-token" not in run.stderr_log
         assert storage.list_findings() == []
     get_settings.cache_clear()
+
+
+def test_api_tooling_probes_each_scanner_once(plugin_environment, monkeypatch):
+    from orgscan.api import OrgscanApiService
+    plugin, url, _ = plugin_environment
+    calls = []
+    def readiness(self):
+        calls.append(True)
+        return ScannerReadiness(True, 'ready', version='2.0')
+    monkeypatch.setattr(plugin, 'readiness', readiness)
+    service = OrgscanApiService(url)
+    payload = service._tooling_payload()
+    assert len(calls) == 1
+    assert any(row['name'] == 'example-plugin' for row in payload['scanner_readiness'])
+
+    calls.clear()
+    service._dashboard_html()
+    assert len(calls) == 1

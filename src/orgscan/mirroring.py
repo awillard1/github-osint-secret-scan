@@ -301,10 +301,13 @@ def _scan_repository_mirror_refs(
         for scanner_name in plan.scanners:
             metadata = get_registry().get(scanner_name, settings=settings).metadata
             key = scanner_configuration_key(settings, plan, scanner_name)
-            checkpoint = storage.get_repository_checkpoint(repository, ref=qualified_ref, scanner=scanner_name, configuration_key=key)
+            checkpoint = storage.get_repository_checkpoint(repository, ref=qualified_ref, scanner=scanner_name, configuration_key=key) if key else None
             decision = decide_scan(mode=plan.mode, checkpoint=checkpoint, oid=oid,
                                    supports_history=metadata.supports_history, supports_incremental=metadata.supports_incremental,
                                    is_ancestor=is_ancestor)
+            if key is None and oid is not None:
+                from orgscan.services.incremental import RepositoryScanDecision
+                decision = RepositoryScanDecision('history' if metadata.supports_history else 'full', 'configuration-not-fingerprintable', None, oid)
             if decision.reason == 'unchanged' and checkpoint.ref_oid != available.get(qualified_ref):
                 from orgscan.services.incremental import RepositoryScanDecision
                 decision = RepositoryScanDecision('history' if metadata.supports_history else 'full',
@@ -329,8 +332,9 @@ def _scan_repository_mirror_refs(
                                       command_line=f'orgscan scan-mirror {repository.full_name} --scanner {scanner_name} --ref {ref_name}',
                                       tool_target=f'{repository.full_name}@{ref_name}')
             # Only advance after execution AND materialization cleanup succeed.
-            storage.record_repository_checkpoint(repository, RepositoryCheckpoint(qualified_ref, scanner_name, key, oid,
-                                                                                  result.scan_job_id, datetime.now(UTC).isoformat(), available[qualified_ref]))
+            if key is not None:
+                storage.record_repository_checkpoint(repository, RepositoryCheckpoint(qualified_ref, scanner_name, key, oid,
+                                                                                      result.scan_job_id, datetime.now(UTC).isoformat(), available[qualified_ref]))
             storage.session.commit()
             results.append(result)
     return results

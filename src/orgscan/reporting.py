@@ -240,8 +240,13 @@ def finding_rows(
     category: str | None = None,
     confidence: str | None = None,
 ) -> list[dict[str, Any]]:
-    return [
-        {
+    return [finding_row(finding) for finding in storage.list_findings(
+        limit=limit, tenant_keys=tenant_keys, status=status, severity=severity,
+        category=category, confidence=confidence)]
+
+
+def finding_row(finding):
+    return {
             "id": finding.id,
             **lifecycle_fields(finding),
             "title": finding.title,
@@ -262,15 +267,6 @@ def finding_rows(
             "detected_at": finding.detected_at.isoformat(),
             "fingerprint": finding.fingerprint,
         }
-        for finding in _filtered_findings(
-            storage,
-            tenant_keys=tenant_keys,
-            status=status,
-            severity=severity,
-            category=category,
-            confidence=confidence,
-        )[:limit]
-    ]
 
 
 def finding_trends(storage: Storage, days: int = 30, *, tenant_keys: list[str] | None = None) -> list[dict[str, Any]]:
@@ -565,7 +561,8 @@ def render_dashboard_html(
             f"<td>{html.escape(str(row['detected_at']))}</td>"
         )
         if not live:
-            return base + "</tr>"
+            locations = '; '.join(f"{item['path']}:{item.get('line_start') or ''}" for item in row.get('evidence', []) if item.get('path'))
+            return base + '<td>' + html.escape(locations) + '</td></tr>'
         action_form = (
             "<td>"
             "<form method='post' action='/dashboard/findings/{id}/workflow' class='finding-action'>"
@@ -694,7 +691,7 @@ def render_dashboard_html(
     ) or "<li>No graph nodes</li>"
     findings_header = (
         "<tr><th>ID</th><th>Title</th><th>Category</th><th>Severity</th><th>Confidence</th><th>Risk</th><th>Workflow</th><th>Tool</th><th>Detected</th>"
-        + ("<th>Actions</th>" if live else "")
+        + ("<th>Actions</th>" if live else "<th>Locations</th>")
         + "</tr>"
     )
     identity_labels = [

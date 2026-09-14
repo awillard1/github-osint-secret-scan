@@ -41,6 +41,7 @@ class ScanPlan(BaseModel):
     mode: Literal['full', 'incremental', 'history'] = 'full'
     discovery_provider: str | None = None
     timeout_seconds: float = Field(default=300, gt=0, allow_inf_nan=False)
+    domain_id: int | None = None
     organization_id: int | None = None
     repository_id: int | None = None
     tenant_key: str | None = None
@@ -76,7 +77,7 @@ def resolve_scan_plan(*, target: str, target_type: str = 'path', profile: str | 
                       settings: Settings | None = None, **overrides) -> ScanPlan:
     if profile is not None and profile not in PROFILES:
         raise ValueError(f'Unknown scan profile: {profile}')
-    defaults = PROFILES[profile] if profile else ScanProfile(scanners=('git-history-patterns',) if target_type == 'mirror' else ('custom-patterns',))
+    defaults = PROFILES[profile] if profile else ScanProfile(discovery_provider='local-metadata') if target_type == 'domain' else ScanProfile(scanners=('git-history-patterns',) if target_type == 'mirror' else ('custom-patterns',))
     values = dict(target=target, target_type=target_type, profile=profile,
                   scanners=tuple(dict.fromkeys(scanners)) if scanners is not None else defaults.scanners,
                   discovery_provider=defaults.discovery_provider, history_policy=defaults.history_policy,

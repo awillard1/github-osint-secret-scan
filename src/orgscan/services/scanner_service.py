@@ -12,7 +12,7 @@ def scanner_inventory(settings: Settings) -> list[dict[str, Any]]:
     return get_registry().inventory(settings=settings)
 
 
-def artifact_scanner_options(settings: Settings, *, selected: str = "custom-patterns") -> list[dict[str, Any]]:
+def artifact_scanner_options(settings: Settings, *, selected: str = "custom-patterns", inventory=None) -> list[dict[str, Any]]:
     return [
         {
             "name": row["name"],
@@ -20,6 +20,6 @@ def artifact_scanner_options(settings: Settings, *, selected: str = "custom-patt
             "selected": row["name"] == selected,
             "status": row["readiness"]["status"],
         }
-        for row in scanner_inventory(settings)
+        for row in (scanner_inventory(settings) if inventory is None else inventory)
         if "artifact" in row["metadata"]["supported_targets"]
     ]

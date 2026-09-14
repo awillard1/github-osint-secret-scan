@@ -362,3 +362,15 @@ Release diagnostics and installed migration resources are documented in [release
 5. Remove old code only after callers migrate.
 
 No flag-day rewrite.
+
+## Phase 18 boundary refinement
+
+Phase 1 remains **partial**. `services/target_service.py` owns shared asset ownership
+resolution and domain context; `services/scan_service.py` owns durable domain
+execution for CLI and jobs. API/CLI retain thin compatibility entry points.
+Report detail queries and aggregation live behind `Storage` in
+`storage/report_queries.py`; services map records into portable report DTOs.
+API upload orchestration, organization expansion and other command families still
+need incremental extraction. No wholesale API/CLI rewrite or public command removal
+was performed. Unused private runner/auth helpers and scheduler imports were removed;
+public scanner factories, parsers, auth helpers and documented exports remain.

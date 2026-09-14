@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-from orgscan.models import Base
+from orgscan.migration_snapshots.phase17_schema import metadata
 
 revision = "20260909_0001"
 down_revision = None
@@ -21,7 +21,7 @@ def _add_column_if_missing(table_name: str, column: sa.Column[object]) -> None:
 
 def upgrade() -> None:
     bind = op.get_bind()
-    Base.metadata.create_all(bind=bind)
+    metadata.create_all(bind=bind)
 
     for table_name, column in (
         ("organizations", sa.Column("tenant_key", sa.String(length=255), nullable=True)),

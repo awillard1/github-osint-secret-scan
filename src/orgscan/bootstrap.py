@@ -83,10 +83,10 @@ def command_status(command: str) -> bool:
     return shutil.which(command) is not None
 
 
-def optional_tool_inventory(settings: Settings) -> list[dict[str, object]]:
+def optional_tool_inventory(settings: Settings, *, inventory=None) -> list[dict[str, object]]:
     tools: list[dict[str, object]] = []
     scanner_tools = {}
-    for row in scanner_inventory(settings):
+    for row in (scanner_inventory(settings) if inventory is None else inventory):
         metadata = row["metadata"]
         binary = metadata["binary"]
         if binary and binary not in REQUIRED_COMMANDS:
@@ -164,14 +164,15 @@ def bootstrap(
             text=True,
         )
 
-    tools = optional_tool_inventory(settings)
+    inventory = scanner_inventory(settings)
+    tools = optional_tool_inventory(settings, inventory=inventory)
     return {
         "platform": platform.platform(),
         "package_manager": package_manager,
         "required": {command: command_status(command) for command in REQUIRED_COMMANDS},
         "optional": {str(tool["name"]): tool["installed"] for tool in tools},
         "optional_tools": tools,
-        "scanner_readiness": scanner_inventory(settings),
+        "scanner_readiness": inventory,
         "scanner_registry_warnings": list(get_registry().warnings),
         "recommended_install": recommended_install_command(package_manager, REQUIRED_COMMANDS),
         "optional_install_notes": OPTIONAL_INSTALL_NOTES,

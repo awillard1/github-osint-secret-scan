@@ -21,7 +21,7 @@ or CSRF controls, even when exported from an authenticated request.
 
 SARIF 2.1.0 uses scanner/category rule IDs, canonical fingerprint partial identities,
 severity levels and lifecycle/confidence/provenance properties. Only evidence paths
-that are relative or contained in a known repository mirror map to physical locations;
+that are relative or contained in a recorded scan root map to physical locations;
 unmapped paths produce locationless results, not fabricated source locations.
 Multiple scanners remain evidence on the same result. Managed findings have external
 suppressions. Lifecycle is not mapped to SARIF baselineState because a remediation
@@ -46,3 +46,22 @@ redacted and review legacy data before sharing. Stored canonical hashes are reta
 ReportLab's standard fonts do not guarantee complete Unicode font coverage. PDF
 structure and extracted content are tested, including 120 findings; pixel-perfect
 layout, external ingestion and production-scale export performance are not certified.
+
+## Phase 18 locations and query bounds
+
+New path/file, artifact and mirror jobs record a logical location root. Reports use
+an evidence observation's job provenance (batch-loaded), with legacy job/mirror and
+canonical artifact-root fallbacks. Absolute paths outside a known root remain
+locationless. No filesystem access is needed at export time. Local-file names,
+archive-relative paths and repository-relative paths appear in JSON, static HTML,
+executive/technical PDF and SARIF. Summary job/tool labels omit absolute local roots;
+raw API job records remain available to authorized operators.
+
+Finding tenant/lifecycle filters and limits run in SQL before ORM materialization.
+Evidence and repositories load in batches; finding summaries use SQL counts/grouping,
+with bounded priority, trend, graph and comparison queries. Tests cover 300 findings,
+tenant separation, zero/negative limits and bounded finding/evidence loading.
+Asset-name and ancillary observation arrays retain their existing scope semantics
+and can still grow; report encoding is in memory. This is not a streaming exporter
+or deployment-scale performance certification. Existing unrelated dashboard analytics
+continue to have decomposition/query-efficiency work outstanding.

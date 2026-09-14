@@ -8,3 +8,6 @@ __pycache__/
 *.sqlite
 *.sqlite3
 data/
+
+# Built release artifacts; validate without committing generated distributions.
+dist/

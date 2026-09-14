@@ -63,12 +63,17 @@ class GitHubSearchService:
             raise ValueError("GitHub search is limited to 1–3 pages and 1–100 results per page")
         queries = build_queries(tuple(dict.fromkeys((value, *identifiers))))
         if target_type == "domain":
-            target, _ = storage.get_or_create_domain(value)
+            from orgscan.services.scan_plan import resolve_scan_plan
+            from orgscan.services.target_service import resolve_domain_context
+            plan = resolve_scan_plan(target=value, target_type='domain', discovery_provider='github-search', tenant_key=tenant_key)
+            context = resolve_domain_context(storage, plan)
+            plan = plan.model_copy(update=dict(domain_id=context.domain_id, organization_id=context.organization_id, tenant_key=context.tenant_key))
+            target = storage.get_domain(context.domain_id)
             storage.record_domain_discovery_source(target, "github-search")
         else:
             target, _ = storage.get_or_create_organization(value, **({"tenant_key": tenant_key} if tenant_key is not None else {}))
         job = storage.create_scan_job(target_type, str(target.id), "github-search",
-                                      parameters_json={"queries": [q.__dict__ for q in queries]}, scope_json={"pages": []})
+                                      parameters_json={"queries": [q.__dict__ for q in queries], **({"scan_plan": plan.serialized()} if target_type == "domain" else {})}, scope_json={"pages": []})
         storage.mark_scan_job_running(job)
         result = SearchResult()
         exhausted = False

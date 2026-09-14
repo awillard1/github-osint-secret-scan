@@ -43,7 +43,7 @@ def upgrade():
         if key:
             bind.execute(schedules.update().where(schedules.c.id==row['id']).values(queue_execution_key=key))
     # Historical source bodies and diagnostics were never required for canonical identity.
-    from orgscan.redaction import redact
+    from orgscan.migration_snapshots.phase17_redaction import redact
     for table_name in ('findings','evidence','domain_exposures','identity_correlations','relationships','finding_history','tool_runs','scan_jobs'):
         table = sa.Table(table_name,sa.MetaData(),autoload_with=bind)
         fields = set(table.c.keys()) & {'title','description','raw_payload','metadata_json','snippet',

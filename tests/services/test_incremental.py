@@ -246,3 +246,45 @@ def test_mirror_adapter_rejects_mismatched_plan_before_execution(cache):
         scan_repository_mirror_refs(storage, settings=settings, repository_full_name='example/repo',
                                     scanner_name='custom-patterns', plan=plan)
     assert storage.list_scan_jobs() == []
+
+
+def test_unchanged_repository_rescanned_after_effective_json_rules_change(cache, tmp_path):
+    import json
+    from orgscan.scanners.heuristic_rules import DEFAULT_RULES
+    _, _, _, settings, _, _ = cache
+    rules = tmp_path / 'rules.json'
+    definitions = json.loads(DEFAULT_RULES.read_text())
+    rules.write_text(json.dumps(definitions))
+    settings.heuristic_rules_path = str(rules)
+    plan = plan_for(settings, scanners=['heuristic-rules'])
+    assert run(cache, plan)[0].status == 'completed'
+    assert run(cache, plan)[0].status == 'skipped'
+    definitions[0]['regex'] = 'phase18_changed_rule_[0-9]+'
+    rules.write_text(json.dumps(definitions))
+    assert run(cache, plan)[0].status == 'completed'
+
+
+def test_yara_transitive_include_change_and_unresolved_dependencies(cache, tmp_path):
+    from orgscan.repository_state import scanner_configuration_key
+    _, _, _, settings, _, _ = cache
+    rules, child = tmp_path / 'rules.yar', tmp_path / 'child.yar'
+    rules.write_text('include "child.yar"\n')
+    child.write_text('rule first { condition: true }')
+    settings.yara_rules_path = str(rules)
+    plan = plan_for(settings, scanners=['yara'])
+    first = scanner_configuration_key(settings, plan, 'yara')
+    assert first
+    child.write_text('rule second { condition: false }')
+    assert scanner_configuration_key(settings, plan, 'yara') != first
+    child.write_text('include "missing.yar"\n')
+    assert scanner_configuration_key(settings, plan, 'yara') is None
+
+
+def test_unknown_effective_configuration_never_skips_unchanged_repo(cache, monkeypatch):
+    plan = plan_for(cache[3])
+    run(cache, plan)
+    monkeypatch.setattr('orgscan.repository_state.scanner_configuration_key', lambda *a: None)
+    for _ in range(2):
+        result = run(cache, plan)[0]
+        assert result.status == 'completed'
+        assert cache[2].get_scan_job(result.scan_job_id).scope_json['decision']['reason'] == 'configuration-not-fingerprintable'

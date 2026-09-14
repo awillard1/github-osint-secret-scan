@@ -8,7 +8,7 @@ import typer
 from orgscan.lifecycle import LifecycleState, lifecycle_fields
 
 from orgscan.cli.dependencies import _settings
-from orgscan.db import create_session_factory, init_db
+from orgscan.db import prepare_database, create_session_factory
 from orgscan.models import Finding
 from orgscan.services.finding_service import (
     FindingDecision,
@@ -182,7 +182,7 @@ def unsuppress(
 
 def _finding_service() -> FindingService:
     settings = _settings()
-    init_db(settings.database_url)
+    prepare_database(settings)
     return FindingService(create_session_factory(settings.database_url))
 
 

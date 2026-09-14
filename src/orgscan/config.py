@@ -18,6 +18,7 @@ class Settings(BaseSettings):
 
     app_name: str = "orgscan"
     app_env: str = "development"
+    auto_migrate: bool = True  # Development bootstrap only; never honored in production.
     log_level: str = "INFO"
     data_dir: Path = Field(default_factory=lambda: Path("./data"))
     database_url: str = "sqlite:///./data/orgscan.db"

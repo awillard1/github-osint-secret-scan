@@ -10,6 +10,6 @@ Rules may supply string metadata `title`, `category`, `description`, `severity`,
 
 Matched values become fully redacted indicators/snippets. Eligible complete-value and non-secret observations also receive SHA-256 digests for correlation. Raw matched values and source lines are not persisted by this adapter, including when multiple values occur on one line. Live output paths must remain inside the prepared target. Parsers remain fixture-testable without an installed binary.
 
-Limits: source-level include changes are not independently fingerprinted by the incremental cache (request a full scan after changing included rules), subprocess output remains buffered, and metadata describes trusted operator-authored rules rather than certifying detector quality. Live tool compatibility is not established by mocked unit tests.
+Limits: Phase 18 hashes bounded literal local include dependencies; ambiguous/missing includes or module imports disable unchanged-scan skipping. Captured subprocess output is bounded. Metadata describes trusted operator-authored rules rather than certifying detector quality. Live tool compatibility is not established by mocked unit tests.
 
 For cross-scanner correlation, custom rules must declare `secret_value = true` only when every emitted string is a complete credential value. Structural markers remain same-tool observations by default. Bundled GitHub/AWS token values are recognized directly; private-key headers never receive credential identity.

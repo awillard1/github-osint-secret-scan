@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import case, func, or_, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from orgscan.models import (
     QueueTask,
@@ -833,8 +833,14 @@ class Storage:
         risk_score_max: float | None = None,
         detected_after: datetime | None = None,
         detected_before: datetime | None = None,
+        tenant_keys: list[str] | None = None,
+        include_evidence: bool = False,
     ) -> Sequence[Finding]:
         query = select(Finding).order_by(Finding.detected_at.desc(), Finding.id.desc())
+        if tenant_keys is not None:
+            query = query.where(self.finding_tenant_scope(tenant_keys))
+        if include_evidence:
+            query = query.options(selectinload(Finding.evidence_items), selectinload(Finding.repository), selectinload(Finding.scan_job))
         if status:
             query = query.where(Finding.status == status)
         if lifecycle_state:
@@ -877,8 +883,26 @@ class Storage:
             return value
         return value.astimezone(UTC).replace(tzinfo=None)
 
+    @staticmethod
+    def finding_tenant_scope(tenant_keys):
+        from sqlalchemy import true
+        if tenant_keys is None:
+            return true()
+        orgs = select(Organization.id).where(Organization.tenant_key.in_(tenant_keys))
+        return or_(Finding.organization_id.in_(orgs),
+                   Finding.repository_id.in_(select(Repository.id).where(Repository.organization_id.in_(orgs))),
+                   Finding.domain_id.in_(select(Domain.id).where(Domain.organization_id.in_(orgs))),
+                   Finding.account_id.in_(select(Account.id).where(Account.organization_id.in_(orgs))))
+
+    def report_summary(self, *, tenant_keys=None):
+        from orgscan.storage.report_queries import report_summary
+        return report_summary(self, tenant_keys=tenant_keys)
+
     def get_finding(self, finding_id: int) -> Finding | None:
         return self.session.get(Finding, finding_id)
+
+    def get_scan_jobs_by_ids(self, identities):
+        return {job.id: job for job in self.session.scalars(select(ScanJob).where(ScanJob.id.in_(identities)))}
 
     def get_scan_job(self, scan_job_id: int) -> ScanJob | None:
         return self.session.get(ScanJob, scan_job_id)

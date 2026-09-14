@@ -41,12 +41,14 @@ def run_migrations(database_url: str) -> None:
 
 def current_db_revision(database_url: str) -> str | None:
     engine = create_engine_from_url(database_url)
-    inspector = inspect(engine)
-    if "alembic_version" not in inspector.get_table_names():
-        return None
-    with engine.connect() as connection:
-        row = connection.exec_driver_sql("SELECT version_num FROM alembic_version").first()
-    return str(row[0]) if row else None
+    try:
+        if "alembic_version" not in inspect(engine).get_table_names():
+            return None
+        with engine.connect() as connection:
+            rows = connection.exec_driver_sql("SELECT version_num FROM alembic_version").scalars().all()
+        return str(rows[0]) if len(rows) == 1 else None
+    finally:
+        engine.dispose()
 
 
 @contextmanager
@@ -61,3 +63,18 @@ def session_scope(database_url: str) -> Iterator[Session]:
         raise
     finally:
         session.close()
+
+
+def prepare_database(settings) -> None:
+    """Production startup checks only; migrations belong to a single deployment step.
+
+    Development/bootstrap remains ergonomic, with auto_migrate=False available
+    to exercise the production contract locally.
+    """
+    if settings.app_env == "development" and settings.auto_migrate:
+        init_db(settings.database_url)
+        return
+    from alembic.script import ScriptDirectory
+    head = ScriptDirectory.from_config(_alembic_config(settings.database_url)).get_current_head()
+    if current_db_revision(settings.database_url) != head:
+        raise RuntimeError("Database schema is not current; run orgscan migrate-db before starting services")

@@ -53,6 +53,10 @@ class DomainIntelligenceProvider:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings
 
+    def discover_context(self, storage: Storage, context) -> DomainProviderResult:
+        # Ownership has been validated and persisted before providers look up by name.
+        return self.discover(storage, context.name)
+
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
         raise NotImplementedError
 

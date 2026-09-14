@@ -68,6 +68,7 @@ def execute_scan(
         status="pending",
         parameters_json={
             "path": str(resolved_target),
+            "location_root": str(canonical_root or (resolved_target if resolved_target.is_dir() else resolved_target.parent)),
             "target_ref": target_ref,
             "target_type": target_type,
             **(parameters_json or {}),
@@ -286,12 +287,3 @@ def _persist_matches(
         )
         finding_ids.append(finding.id)
     return finding_ids
-
-
-def _scan_matches(scanner_impl: object, target_path: Path, *, target_ref: str | None, scope_json: dict[str, object]) -> list[ScanMatch]:
-    """Compatibility shim for callers of the old runner helper."""
-    metadata = getattr(scanner_impl, "metadata", None)
-    scanner_id = getattr(metadata, "scanner_id", None) or getattr(scanner_impl, "name", "scanner")
-    return ScannerAdapter(scanner_impl, scanner_id=scanner_id).scan(
-        ScanContext(ScanTarget(target_path, ref=target_ref), options=scope_json)
-    ).findings
