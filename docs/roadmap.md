@@ -10,7 +10,7 @@ The package now has `api/` (FastAPI, compatibility `OrgscanApiService`, artifact
 
 | Area | Implemented capability and evidence | Partial or missing scope |
 | --- | --- | --- |
-| Foundation and storage | Packaging, CLI entry point, environment configuration/redaction, bootstrap/readiness, SQLAlchemy `Storage`, canonical findings, evidence, risk scores, targets, jobs, relationships, suppressions, users/sessions, queue and rate-limit records. `db.py` supports explicit Alembic migration through `20260914_0010`; production startup checks the revision without applying migrations. Tests: `test_config.py`, `test_bootstrap.py`, `test_db.py`, `test_storage.py`, `test_schemas.py`. | SQLite fresh initialization and populated prior evidence-schema upgrades are exercised; PostgreSQL operation remains unverified. Phase 16 adds non-creating doctor and wheel resources; Phase 18 adds runtime-only clean-install CI and frozen historical migration inputs. Bootstrap offers installation guidance, not a complete external-binary installer. |
+| Foundation and storage | Packaging, CLI entry point, environment configuration/redaction, bootstrap/readiness, SQLAlchemy `Storage`, canonical findings, evidence, risk scores, targets, jobs, relationships, suppressions, users/sessions, queue and rate-limit records. `db.py` supports explicit Alembic migration through `20260914_0011`; production startup checks the revision without applying migrations. Tests: `test_config.py`, `test_bootstrap.py`, `test_db.py`, `test_storage.py`, `test_schemas.py`. | SQLite fresh initialization and populated prior evidence-schema upgrades are exercised; PostgreSQL operation remains unverified. Phase 16 adds non-creating doctor and wheel resources; Phase 18 adds runtime-only clean-install CI and frozen historical migration inputs. Bootstrap offers installation guidance, not a complete external-binary installer. |
 | Scanners and plugins | Ten registered scanners (Phase 7 adds heuristic-rules): custom-patterns, git-history-patterns, repo-governance, gitleaks, detect-secrets, semgrep, trufflehog, yara, ripgrep-heuristics, heuristic-rules. Registry factory and `orgscan.scanners` entry-point loading already exist, including report ingestion for supporting scanners. `runner.py` normalizes `ScanMatch` into stored `CanonicalFinding` and records ToolRuns. Phase 2 adds uniform metadata/readiness/context/result adapters, duplicate-ID rejection and registry-driven API/CLI inventory. Tests: `test_scanner.py`, `test_external_scanners.py`, `test_runner.py`, `test_cli.py`, `tests/scanners/`, `tests/api/test_scanner_registry.py`. | YARA versions and detect-secrets 1.5.x version/help compatibility are probed with bounds; other external versions remain unknown and runtime configuration is not certified; legacy plugins retain responsibility for execution safety. Mocked tests do not establish live tool compatibility. |
 | YARA and heuristics | YARA ships three token/key rules and accepts a configured rules file; its parser redacts matches. Ripgrep scans configurable internal suffixes and organization keywords. Tests: YARA/ripgrep parser cases in `test_scanner.py`; configuration cases in `test_config.py`. | Phase 6 maps local rule metadata and unknown rule IDs, detects versions, and fully redacts matched values/source snippets. Tests: `tests/scanners/test_yara_contract.py`. Phase 18 fingerprints bounded local includes and disables skipping for unresolved configuration. Phase 7 adds the opt-in heuristic-rules scanner with validated JSON, timed regex, stable digests and five starters. Existing ripgrep/custom definitions remain compatible. Tests: `tests/scanners/test_heuristic_rules.py`. |
 | Scan planning | Eight deterministic profiles, explicit overrides and versioned plans shared by CLI/API/scheduler/queues; job/schedule JSON preserves intent. Tests: `tests/services/test_scan_plan.py`, `tests/api/test_scan_profiles.py`. | Discovery profiles use existing domain providers; the dashboard scanner dropdown still supplies explicit scanner selection. Batches are sequential, with per-scanner commits. |
@@ -289,3 +289,16 @@ parity-tested sanitizer. Released migration 0009 is unchanged. Deployments must 
 explicit migration before production startup. Phase 1 remains **partial**; this phase
 adds no general architectural decomposition. See release readiness for validation
 and operational limits.
+
+
+## Phase 22 — escaped credential assignment hardening
+
+The final gate reproduced escaped JSON credential values surviving provider output,
+persistence, presentation and migration 0010. The shared parser now recognizes
+bounded escaped quote delimiters with the existing label vocabulary and carries
+encoded/decoded secret knowledge into sibling fields. No adapter-specific sanitizer
+or unrelated architecture, tenant, queue or scanner changes were introduced.
+
+Forward data repair `20260914_0011` follows 0010 using a new frozen parity-tested
+snapshot. Earlier migrations remain unchanged. See release readiness for validation
+and rollout status; architectural Phase 1 remains partial.

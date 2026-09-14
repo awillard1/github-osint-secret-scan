@@ -125,7 +125,7 @@ def test_forward_0008_repair_preserves_rows_and_is_repeatable(tmp_path, caplog):
         conn.execute(ScanJob.__table__.update().values(target_id=AWS, parameters_json={'indicator':'opaque-legacy', 'copy':['opaque-legacy']}))
         conn.execute(ToolRun.__table__.update().values(target=GH, stderr_log='Bearer opaque-bearer'))
     command.upgrade(config, 'head')
-    assert current_db_revision(url) == '20260914_0010'
+    assert current_db_revision(url) == '20260914_0011'
     with factory() as session:
         exposure = session.get(DomainExposure, exposure_id)
         job = session.get(ScanJob, job_id)

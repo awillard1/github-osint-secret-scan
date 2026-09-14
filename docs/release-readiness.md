@@ -55,18 +55,19 @@ Before upgrading an existing installation:
    separately, with restricted access. Test restoring to a separate location.
 3. Install the reviewed wheel in the intended virtual environment.
 4. Run `orgscan doctor --json`; an old schema should report an upgrade requirement.
-5. Run `orgscan init-db` explicitly, then doctor again. Head is `20260914_0010`.
+5. Run `orgscan init-db` explicitly, then doctor again. Head is `20260914_0011`.
    Migration 0006 adds evidence identity; 0007 maps lifecycle and records inferred
    legacy timestamps. Migration 0008 adds durable queue execution identities,
    quarantines duplicate legacy executions, and sanitizes legacy evidence/diagnostics.
    Migration 0009 repairs additional credential-bearing evidence and diagnostic fields,
    including domain summaries, nested plugin metadata and job targets.
    Migration 0010 repairs credential assignments and copied values missed by 0009.
+   Migration 0011 repairs escaped/copied assignments missed by 0010.
    Redaction is irreversible; these migrations do not reconstruct unavailable history.
 6. Validate authorized reads, a local test scan and reporting before restarting workers.
 
 Rollback should restore a tested matching backup and application version. Downgrading
-0010/0009/0008 cannot restore redacted data, and downgrading 0007 removes lifecycle/history fields; it is not a lossless rollback strategy.
+0011/0010/0009/0008 cannot restore redacted data, and downgrading 0007 removes lifecycle/history fields; it is not a lossless rollback strategy.
 
 ## Local smoke and validation
 
@@ -468,3 +469,55 @@ redacted and excessive sanitizer work raises a controlled error. PostgreSQL, liv
 Redis and absent external binaries retain their previously documented unverified
 status. Deployment disk/process quotas remain necessary. Phase 1 architectural
 decomposition remains partial; no unrelated cleanup was undertaken.
+
+
+## Phase 22 — escaped credential assignment hardening
+
+The post-Phase-21 gate reproduced one release blocker: escaped copied JSON keys
+bypassed assignment recognition. Synthetic credentials survived provider summaries,
+finding fields, nested copies, readiness diagnostics, HTTP/browser/report output and
+0010 repair. Standard unescaped assignments were already protected.
+
+The shared parser now recognizes literal/escaped quote delimiters using the existing
+credential vocabulary. Encoded and decoded values enter the same cross-field secret
+context. Value scanning advances monotonically; quote escaping is capped at eight
+copied JSON layers (255 backslashes), with bounded value decoding. Existing sanitizer
+budgets remain unchanged. Excessive escaping raises a controlled, input-free error.
+Ordinary escaped keys such as `token_count` and `password_policy` remain unchanged.
+No surface-specific redaction or unrelated tenant/queue/architecture changes were added.
+
+Forward data repair **20260914_0011** follows 0010. The new frozen sanitizer has parity
+tests against runtime behavior. Released migrations 0009 and 0010 and their snapshots
+are unchanged. Migration tests insert unsafe legacy rows at 0010, then verify removal,
+unchanged IDs/relationships, useful evidence locations, valid fingerprints and repeat
+upgrade behavior. Presentation tests separately retain unsafe legacy rows to prove
+that API/browser/report rendering itself protects them. Repair logs contain no values.
+
+Back up and explicitly run `orgscan migrate-db` before production startup. The
+configured database was not modified in this phase. Repair is irreversible and does
+not change historical backups. Oversized/deeply escaped legacy payloads stop repair
+for operator review rather than passing through unsafe values. Unlabelled opaque
+secrets still require known-secret context. Public response fields remain compatible;
+sensitive copied text is now redacted. Previously documented deployment limitations
+remain unchanged.
+
+
+### Phase 22 validation
+
+- Baseline: 63 existing sanitizer/presentation tests passed; escaped assignments
+  at one, three and seven backslashes reproduced the disclosure before editing.
+- Final complete suite: **642 passed, 6 skipped**, two existing dependency
+  deprecation warnings, **288.19 seconds**.
+- Final focused suite: **143 passed**, including **65 added cases**, with two
+  existing dependency deprecation warnings. Exact reported reproduction passed.
+- Five new adversarial performance shapes at 16/32/64/256 KB: **64 KB took
+  0.0055–0.0160 seconds; 256 KB took 0.0230–0.0643 seconds**. Growth stayed near
+  linear within conservative two-second test bounds. Existing performance tests
+  also passed. Quote/work-limit failures contain no input values.
+- Doctor on a disposable database explicitly upgraded from 0010 to **0011**:
+  **exit 0, ok=true, 17 warnings** for optional tools/providers and configuration.
+- Final wheel/sdist build and clean-install validation passed: fresh external
+  virtual environment, runtime dependencies only, `pip check`, migration, CLI,
+  API lifespan/health, inert local scan and JSON/SARIF reports.
+- Compile checks and `git diff --check` passed. Final review confirmed frozen
+  migration history is unchanged and no fixture credentials entered documentation.

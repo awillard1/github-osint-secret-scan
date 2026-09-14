@@ -173,3 +173,11 @@ API/browser/report presentation, provider persistence and repeatable 0009-to-001
 repair. Performance assertions use a conservative two-second ceiling and growth
 allowance, rather than exact machine-dependent timings. Legacy presentation tests
 verify the database remains unsafe, proving serialization itself supplies safety.
+
+
+Phase 22 adds `tests/security/test_phase22_escaped_assignments.py` and
+`tests/security/test_phase22_boundaries.py`: escaped quote levels, decoded sibling
+copies, negative labels, bounded failure, five 16/32/64/256 KB adversarial shapes,
+provider/plugin persistence, readiness, real HTTP handlers, legacy browser/report
+presentation and repeatable 0010-to-0011 repair. Migration parity tests compare the
+new frozen snapshot with runtime behavior; released snapshots are not edited.

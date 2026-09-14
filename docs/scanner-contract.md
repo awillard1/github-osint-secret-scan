@@ -203,3 +203,23 @@ string, 8,000,000 total input characters, 100,000 nodes, depth 30, 2,048 known s
 also bounded. Limit errors contain no input. These are independent of acquisition
 limits and may reject unusually large legitimate payloads; callers must not retry
 by returning unsanitized data. Migration 0010 freezes this policy with parity tests.
+
+
+### Escaped copied assignments (Phase 22)
+
+The same credential-label vocabulary also recognizes quotes escaped by copied JSON,
+including repeated serialization, single-quoted copied text and escaped `=` / `:`
+assignment values. Labels and delimiters are preserved; sensitive value spans and
+known encoded/decoded copies in sibling fields are removed. Ordinary names such as
+`token_count`, `secret_name`, `password_policy` and `access_tokenization` remain intact.
+
+Quote delimiters support up to eight copied JSON layers (255 backslashes). Decoding
+secret values allows the base JSON string layer plus eight copied layers, with one
+additional attempt solely to detect an exceeded bound. Excessive escaping fails
+closed with a controlled error. Existing string, node, depth and replacement-work
+limits remain in force. The parser advances through backslash runs without nested
+backtracking expressions and does not decode entire documents repeatedly.
+
+Migration 0011 freezes the corrected policy and repairs escaped legacy assignments;
+released 0009/0010 migrations and snapshots remain unchanged. Runtime adapters use
+the shared policy directly, with no browser/provider-specific escaped-secret rules.
