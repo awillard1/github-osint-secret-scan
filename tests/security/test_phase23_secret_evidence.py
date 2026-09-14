@@ -234,7 +234,7 @@ def test_forward_schema_keeps_legacy_evidence_and_does_not_recover_old_secrets(t
         row=Storage(session).create_finding(CanonicalFinding(source_tool='fixture',category='secret',title='Historical',description='<redacted>'))
         session.commit();identity=row.id
     command.upgrade(cfg,'head');command.upgrade(cfg,'head')
-    assert current_db_revision(url)=='20260914_0012'
+    assert current_db_revision(url)=='20260914_0013'
     with factory() as session:
         assert session.get(Finding,identity).description=='<redacted>'
         assert session.scalars(select(SecretEvidence)).all()==[]

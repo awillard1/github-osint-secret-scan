@@ -311,3 +311,13 @@ controls with Hide/automatic hiding. Ordinary APIs, reports, diagnostics and ini
 HTML remain redacted. Migration 0012 adds dedicated storage; older redacted secrets
 cannot be recovered. Remaining Phase 1 decomposition is still partial and unchanged.
 See release readiness for key provisioning, operational limits and validation results.
+
+## Phase 24 — secret capture/redaction pipeline correction
+
+Candidate knowledge now remains available through ordinary normalization and storage,
+closing the Phase 23 copied-plaintext leak without losing encrypted credentials.
+The original gate probe, SQL-column invariant, reader/analyst/report/audit matrix,
+imported results and both queue backends have regression coverage. Migration 0013
+performs keyless, conservative repair of affected ordinary records while retaining
+protected ciphertext and references. See release readiness for repair data loss and
+validation results. No reveal endpoint or permission expansion is introduced.

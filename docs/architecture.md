@@ -402,3 +402,20 @@ session scopes; use a single-tenant session for a grant limited to one tenant.
 Browser sessions inherit current parent permissions and existing CSRF protection.
 The dedicated API router and small browser adapter call this service. This does not
 claim completion of the remaining Phase 1 presentation decomposition.
+
+## Candidate-aware ingestion (Phase 24)
+
+`SecretCandidateContext` is a bounded, non-serializable ingestion scope. It retains
+exact candidate knowledge while ordinary fields are sanitized, including copied
+values in titles, descriptions, nested metadata, paths and encoded JSON strings.
+Batch normalization shares redaction knowledge across matches without assigning
+one match's protected candidates to another. Candidate objects remain private and
+available for subsequent encryption; generic presentation never decrypts them.
+
+Storage creation/update boundaries activate the same context for findings, evidence
+and domain exposures. The ORM safety guard also consumes its knowledge while those
+operations flush. Encryption may consume individual candidates, but the enclosing
+scope retains its private redaction knowledge until all ordinary writes are safe;
+exit discards that knowledge on success or failure. Source extraction precedes
+redaction, and encrypted evidence retains the exact original value. The dedicated
+reveal service, authorization checks, audit commit and response headers are unchanged.

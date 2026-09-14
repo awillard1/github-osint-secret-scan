@@ -261,10 +261,9 @@ def _persist_matches(
                 organization_id=organization_id,
                 repository_id=repository_id,
                 scan_job_id=scan_job_id,
-            )
+            ),
+            protected_candidates=match.protected_candidates,
         )
-        from orgscan.services.secret_evidence import persist
-        persist(storage.session, finding, match.protected_candidates)
         storage.upsert_scanner_evidence(
             finding_id=finding.id,
             observation_fingerprint=evidence_identity(finding.id, scanner_name, match),

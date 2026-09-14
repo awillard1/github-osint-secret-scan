@@ -197,3 +197,21 @@ ordinary ORM columns and audit events independently of masked serializers. Do no
 log keys or revealed credentials during validation. Clean-install validation continues
 to install only declared runtime dependencies in an external virtual environment;
 cryptography is a runtime requirement, not a development-only dependency.
+
+## Phase 24 candidate-copy regression
+
+Run `pytest tests/security/test_phase23_secret_evidence.py tests/security/test_phase24_candidate_context.py`.
+The original release-gate reproduction is permanent coverage: a masked indicator and
+snippet with a protected candidate and plaintext copies in title/description/nested
+metadata. Tests inspect SQL columns directly, then separately verify ciphertext,
+exact analyst reveal, reader denial, all five report formats, browser initial HTML,
+webhook payloads and zero audit events from ordinary reads. Explicit reveal creates
+one audit event with no secret value. Credential cases include spaces, apostrophes,
+quotes, backslashes, punctuation, Unicode, equals/colons, newlines and JSON escaping.
+
+Additional cases cover canonical/evidence/domain create and update, imported artifact
+results, DB/RQ execution, candidate lifetime/bounds, batch ownership, disabled
+preservation and encryption failure. The migration test seeds unsafe Phase 23-style
+SQL rows at 0012, upgrades without a key, repeats repair, compares protected columns
+byte-for-byte, verifies relationship IDs/lifecycle history, and successfully reveals
+the original value afterward. Existing sanitizer/presentation defenses remain tested.

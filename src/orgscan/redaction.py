@@ -309,7 +309,7 @@ def _copied_assignments(text):
                 pos += 1
 
 
-def redact(value, *, secrets_from=None, preserve_root_keys=False, _capture=None):
+def redact(value, *, secrets_from=None, preserve_root_keys=False, _capture=None, _known_values=()):
     known = set()
     nodes = characters = replacement_work = 0
     root_key_depth = 1 if isinstance(value, (list, tuple)) else 0
@@ -388,6 +388,19 @@ def redact(value, *, secrets_from=None, preserve_root_keys=False, _capture=None)
                     raise
                 except ValueError:
                     pass
+    # Explicit ingestion knowledge is not reinterpreted as an assignment. Keep
+    # exact values, including literal quotes/backslashes, available for copies.
+    for candidate in _known_values:
+        charge(candidate, 0)
+        remember(candidate)
+        for ascii_only in (True, False):
+            encoded = candidate
+            for _ in range(MAX_ESCAPE_LAYERS):
+                encoded = json.dumps(encoded, ensure_ascii=ascii_only)[1:-1]
+                charge(encoded, 0)
+                remember(encoded)
+                if encoded == candidate:
+                    break
     collect(value)
     collect(secrets_from)
     secrets = sorted(known, key=len, reverse=True)
@@ -494,7 +507,7 @@ def sanitize_matches(matches, source=None):
     from dataclasses import asdict, replace
     from hashlib import sha256
     prepared = []
-    from orgscan.services.secret_evidence import capture
+    from orgscan.services.secret_evidence import capture, SecretCandidateContext
     candidates = []
     for match in matches:
         # Capture each match separately; never attach a report's other secrets
@@ -506,6 +519,11 @@ def sanitize_matches(matches, source=None):
         if match.category == 'secret' and match.indicator and not match.indicator.startswith('<redacted') and '...' not in match.indicator:
             match = replace(match, metadata={**match.metadata, 'secret_digest': match.metadata.get('secret_digest') or sha256(match.indicator.encode()).hexdigest()})
         prepared.append(match)
-    cleaned = redact([asdict(match) for match in prepared], secrets_from=source, preserve_root_keys=True)
+    ordinary = [{key: value for key, value in asdict(match).items() if key != 'protected_candidates'}
+                for match in prepared]
+    # Candidates stay alive for encryption. Only this temporary view of their
+    # values is discarded after sanitizing the entire batch's ordinary fields.
+    with SecretCandidateContext((candidate for group in candidates for candidate in group), consume=False) as context:
+        cleaned = context.sanitize(ordinary, secrets_from=source, preserve_root_keys=True)
     return [replace(match, **{**values, 'protected_candidates': pending})
             for match, values, pending in zip(matches, cleaned, candidates)]

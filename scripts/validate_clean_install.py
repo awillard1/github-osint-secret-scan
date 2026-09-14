@@ -49,14 +49,15 @@ from orgscan.repositories import Storage
 from orgscan.schemas import CanonicalFinding
 from orgscan.models import SecretEvidence
 from orgscan.security_context import AuthContext
-from orgscan.services.secret_evidence import SecretEvidenceService
+from orgscan.services.secret_evidence import SecretEvidenceService, capture
 protected = Settings(preserve_secrets=True, secret_encryption_key=base64.urlsafe_b64encode(os.urandom(32)).decode())
 with create_session_factory(protected.database_url)() as session:
     session.info['secret_settings'] = protected
     storage = Storage(session)
     organization = storage.create_organization('Protected smoke', tenant_key='smoke')
     found = storage.create_finding(CanonicalFinding(source_tool='smoke', category='secret',
-        title='Credential', description='password="install-validation-value"', organization_id=organization.id))
+        title='Credential', description='Found install-validation-value', organization_id=organization.id),
+        protected_candidates=capture({'password':'install-validation-value'}, settings=protected))
     session.commit()
     evidence = session.scalars(select(SecretEvidence)).one()
     assert 'install-validation-value' not in found.description

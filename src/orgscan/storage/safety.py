@@ -1,12 +1,12 @@
 """Persistence guard for discovered evidence; authentication credentials excluded."""
 from sqlalchemy import event, inspect
 from sqlalchemy.orm import Session
-from orgscan.redaction import redact
 
 
 def install():
     @event.listens_for(Session, 'before_flush')
     def sanitize(session, flush_context, instances):
+        from orgscan.services.secret_evidence import sanitize_ordinary
         from orgscan.models import (Finding, Evidence, ToolRun, ScanJob, DomainExposure,
                                     IdentityCorrelation, Relationship, FindingHistory, Organization,
                                     Repository, Domain, Account, RiskScore, Suppression, ScheduledReport, QueueTask)
@@ -25,7 +25,7 @@ def install():
             values = {column.key: getattr(row, column.key) for column in inspect(row).mapper.columns
                       if isinstance(getattr(row, column.key), (str, dict, list))
                       and column.key != 'webhook_url'}
-            cleaned = redact(values, preserve_root_keys=True)
+            cleaned = sanitize_ordinary(values, preserve_root_keys=True)
             for field, value in cleaned.items():
                 if value != values[field]:
                     setattr(row,field,value)

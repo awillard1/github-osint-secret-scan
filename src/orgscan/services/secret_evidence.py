@@ -45,6 +45,78 @@ class _Candidate:
         return self
 
 
+_ACTIVE_CANDIDATES = ContextVar('secret_candidate_context', default=None)
+
+
+class SecretCandidateContext:
+    """Bounded, non-serializable ingestion knowledge; never an ORM/API value."""
+    __slots__ = ('_candidates', '_values', '_consume', '_token', '_closed')
+
+    def __init__(self, candidates=(), *, consume=True):
+        from orgscan.redaction import MAX_NODES, SanitizationLimitError
+        pending = []
+        for candidate in candidates:
+            if len(pending) >= MAX_NODES:
+                raise SanitizationLimitError('Secret candidate count limit exceeded')
+            if not isinstance(candidate, _Candidate) or candidate._value is None:
+                raise ValueError('Secret candidate is invalid or already consumed')
+            pending.append(candidate)
+        self._candidates = tuple(pending)
+        self._values = self._bounded_values(c._value for c in pending)
+        self._consume, self._token, self._closed = consume, None, False
+
+    @staticmethod
+    def _bounded_values(values):
+        from orgscan.redaction import MAX_KNOWN_SECRETS, MAX_STRING_CHARS, MAX_TOTAL_CHARS, SanitizationLimitError
+        unique, total = set(), 0
+        for value in values:
+            if value in unique:
+                continue
+            unique.add(value)
+            total += len(value)
+            if len(value) > MAX_STRING_CHARS or total > MAX_TOTAL_CHARS or len(unique) > MAX_KNOWN_SECRETS:
+                raise SanitizationLimitError('Secret candidate work limit exceeded')
+        return tuple(unique)
+
+    @classmethod
+    def from_source(cls, value, *, settings=None, candidates=()):
+        return cls((*candidates, *capture(value, settings=settings)))
+
+    def __repr__(self):
+        return '<private secret candidate context>'
+
+    def __enter__(self):
+        parent = _ACTIVE_CANDIDATES.get()
+        if parent is not None:
+            self._values = self._bounded_values((*parent._values, *self._values))
+        self._token = _ACTIVE_CANDIDATES.set(self)
+        return self
+
+    def __exit__(self, *exc):
+        _ACTIVE_CANDIDATES.reset(self._token)
+        self._values = ()
+        if self._consume:
+            for candidate in self._candidates:
+                candidate._value = None
+        self._candidates = ()
+        self._closed = True
+
+    def sanitize(self, value, **kwargs):
+        if self._closed:
+            raise ValueError('Secret candidate context is closed')
+        return redact(value, _known_values=self._values, **kwargs)
+
+    def persist(self, session, finding, *, settings=None, evidence_id=None):
+        settings = settings or session.info.get('secret_settings') or _SETTINGS.get() or Settings()
+        if settings.preserve_secrets:
+            persist(session, finding, self._candidates, settings=settings, evidence_id=evidence_id)
+
+
+def sanitize_ordinary(value, **kwargs):
+    context = _ACTIVE_CANDIDATES.get()
+    return context.sanitize(value, **kwargs) if context is not None else redact(value, **kwargs)
+
+
 def encryption_key(settings):
     try:
         raw = settings.secret_encryption_key.get_secret_value()
@@ -94,6 +166,29 @@ def _aad(row):
 
 
 def persist(session, finding, candidates, *, settings=None, evidence_id=None):
+    """Final guard: ciphertext cannot be added while this record retains copies."""
+    if not candidates:
+        return
+    from sqlalchemy import inspect
+    from orgscan.models import Evidence
+    settings = settings or session.info.get('secret_settings') or _SETTINGS.get() or Settings()
+    with SecretCandidateContext(candidates) as context:
+        records = [finding]
+        if evidence_id is not None:
+            records.append(session.get(Evidence, evidence_id))
+        for record in records:
+            if record is None:
+                raise ValueError('Protected evidence requires an existing finding/evidence')
+            values = {column.key: getattr(record, column.key) for column in inspect(record).mapper.columns
+                      if isinstance(getattr(record, column.key), (str, dict, list))}
+            for key, value in context.sanitize(values, preserve_root_keys=True).items():
+                setattr(record, key, value)
+        session.flush()
+        if settings.preserve_secrets:
+            _encrypt_candidates(session, finding, candidates, settings=settings, evidence_id=evidence_id)
+
+
+def _encrypt_candidates(session, finding, candidates, *, settings=None, evidence_id=None):
     if not candidates:
         return
     settings = settings or session.info.get('secret_settings') or _SETTINGS.get() or Settings()

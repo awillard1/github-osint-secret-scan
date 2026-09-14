@@ -55,7 +55,7 @@ Before upgrading an existing installation:
    separately, with restricted access. Test restoring to a separate location.
 3. Install the reviewed wheel in the intended virtual environment.
 4. Run `orgscan doctor --json`; an old schema should report an upgrade requirement.
-5. Run `orgscan init-db` explicitly, then doctor again. Head is `20260914_0012`.
+5. Run `orgscan init-db` explicitly, then doctor again. Head is `20260914_0013`.
    Migration 0006 adds evidence identity; 0007 maps lifecycle and records inferred
    legacy timestamps. Migration 0008 adds durable queue execution identities,
    quarantines duplicate legacy executions, and sanitizes legacy evidence/diagnostics.
@@ -64,6 +64,8 @@ Before upgrading an existing installation:
    Migration 0010 repairs credential assignments and copied values missed by 0009.
    Migration 0011 repairs escaped/copied assignments missed by 0010.
    Migration 0012 adds encrypted secret evidence and reveal audit tables.
+   Migration 0013 conservatively removes copied secrets from affected ordinary fields;
+   review the Phase 24 repair implications below before upgrading.
    Redaction is irreversible; these migrations do not reconstruct unavailable history.
 6. Validate authorized reads, a local test scan and reporting before restarting workers.
 
@@ -600,3 +602,49 @@ is enabled. Change the key ID when provisioning a different key. Copied JSON ext
 retains literal backslashes, quotes, Unicode and actual newlines without repeatedly
 decoding the original credential. Provider records containing recognized password
 fields are captured before adapters reduce them to redacted summaries.
+
+## Phase 24 — candidate-aware sanitization and keyless repair
+
+The Phase 23 gate reproduced encrypted evidence accompanied by plaintext copies in
+ordinary title/description/metadata and reader-facing APIs, browser HTML and reports.
+The fix retains bounded private candidate knowledge through batch normalization and
+all affected storage writes. Ordinary data is sanitized before flush; exact values
+remain available for encryption and the existing authorized reveal workflow. Generic
+serializers still never decrypt. Reader, tenant and audit policies are unchanged.
+
+### Upgrade implications
+
+Migration **20260914_0013**, after frozen 0012, repairs ordinary records associated
+with existing protected evidence. It does not read an encryption key, decrypt, create
+new protected evidence, or change any existing protected ciphertext, nonce, key ID,
+fingerprint or tenant binding. It uses a frozen deterministic repair helper, keyset
+batches of 100 rows, and emits no record values. Migrations 0009–0012 are unchanged.
+
+**This repair deliberately loses ordinary evidence text on affected records.**
+An unlabeled opaque copy cannot be distinguished reliably from useful prose without
+its original candidate context/key. The keyless migration therefore masks ambiguous
+free-text fields and clears JSON on affected findings, evidence, history, risk scores,
+suppressions, matching domain exposures and finding relationships. This includes
+otherwise useful titles, descriptions, scanner names, paths and metadata. Numeric
+IDs/references, timestamps, line numbers, valid identity digests and recognized
+severity/confidence/lifecycle states remain. Relationship labels receive deterministic
+masked hashes so distinct edges cannot collide. Unassociated records are untouched.
+Authorized reveal continues to recover the original protected credential afterward;
+re-scans can repopulate scanner evidence and metadata, while historical masked
+titles/descriptions remain masked.
+
+Stop writers, back up, and explicitly run `orgscan migrate-db` before deploying.
+The configured database was not changed during this implementation. Repeat repair is
+stable; downgrade cannot recover removed ordinary text. Existing restrictions on
+key provisioning, one active key version, trusted process memory, reverse-proxy
+response logging and deployment resource quotas remain applicable.
+
+Phase 24 validation: 204 focused tests passed; the complete suite passed with
+729 passed, 6 skipped and 2 dependency deprecation warnings. The 38 new tests cover
+candidate-copy persistence, exact authorized reveal, reader/tenant denial, ordinary
+database columns, all five report formats, API/dashboard, audit counts, queued/plugin
+ingestion, failure safety and keyless 0012-to-0013 repair. Doctor returned `ok: true`
+on an upgraded disposable database with preservation enabled. Distribution build,
+clean-install validation (including candidate-copy storage and exact reveal), compile
+checks and whitespace checks passed. Optional live tools and PostgreSQL/live Redis
+certification remain subject to the previously documented limitations.

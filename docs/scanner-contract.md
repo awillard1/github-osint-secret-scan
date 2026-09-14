@@ -244,3 +244,16 @@ must follow the same capture contract if they sanitize before returning their fi
 Source-less/tenant-less preservation fails closed rather than creating globally
 revealable secrets. Readiness warnings and scanner exceptions are diagnostics, not a
 secret retention channel, and stay redacted.
+
+Phase 24 makes `sanitize_matches` candidate-aware. A scanner can capture a password,
+mask its indicator/snippet and return copied context in other fields: the shared
+normalizer uses the captured value to redact every ordinary copy before persistence.
+It also handles bounded JSON-encoded copies. Do not consume candidates before
+normalization/storage finishes. Keep them out of raw payloads and generic metadata.
+
+Storage APIs accept opaque `protected_candidates` on finding/evidence/domain-exposure
+creation and scanner-evidence updates. Their private scope sanitizes ordinary fields
+before flush and retains candidate knowledge until encryption and related writes
+complete. A consumed candidate cannot be reused as if its raw value were available;
+retain separate capture objects for separate ingestion operations. Disabled
+preservation still redacts supplied candidate copies and does not encrypt them.

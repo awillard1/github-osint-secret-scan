@@ -89,7 +89,10 @@ exposed only through an explicit authorized, tenant-scoped, audited reveal opera
 They must not appear in ordinary findings, evidence, metadata, logs, diagnostics,
 initial browser HTML or bulk reports. Generic serializers must never decrypt.
 Capture recognized values before sanitization using the shared bounded parser;
-preserve ordinary redaction protections. Encryption keys stay outside the database.
+preserve ordinary redaction protections. Candidate knowledge must remain in a private,
+bounded scope until every ordinary field is sanitized and encrypted persistence is
+complete. Never discard that knowledge merely because encryption has occurred.
+Encryption keys stay outside the database.
 
 Prefer fingerprints, redacted indicators, metadata, and evidence references.
 
