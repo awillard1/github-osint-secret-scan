@@ -22,6 +22,7 @@ class GitHubRepositoryRecord:
     owner_login: str
     owner_type: str
     description: str | None = None
+    homepage: str | None = None
 
     @classmethod
     def from_api_payload(cls, payload: dict[str, object]) -> "GitHubRepositoryRecord":
@@ -36,6 +37,7 @@ class GitHubRepositoryRecord:
             owner_login=str(owner.get("login") or ""),
             owner_type=str(owner.get("type") or "User"),
             description=payload.get("description") if isinstance(payload.get("description"), str) else None,
+            homepage=payload.get("homepage") if isinstance(payload.get("homepage"), str) else None,
         )
 
 
@@ -84,6 +86,12 @@ class GitHubDiscoveryClient:
         if not isinstance(payload, list):
             raise DiscoveryError("Expected a list of forks from GitHub API")
         return [GitHubRepositoryRecord.from_api_payload(item) for item in payload if isinstance(item, dict)]
+
+    def fetch_repository_commits(self, full_name: str, limit: int = 20) -> list[dict]:
+        payload = self._request_json(f"/repos/{full_name}/commits?per_page={limit}")
+        if not isinstance(payload, list):
+            raise DiscoveryError("Expected a list of commits from GitHub API")
+        return [item for item in payload if isinstance(item, dict)]
 
     def _request_json(self, path: str) -> object:
         headers = {

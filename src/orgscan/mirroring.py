@@ -161,6 +161,7 @@ def _sync_repository_mirror(
     provider: str = "github",
     clone_url: str | None = None,
     refs: list[str] | None = None,
+    checkout_refs: bool = True,
 ) -> tuple[object, bool]:
     existing = storage.get_repository_by_full_name(repository_full_name)
     repository, created = storage.get_or_create_repository(
@@ -198,12 +199,12 @@ def _sync_repository_mirror(
     if not default_branch:
         raise MirrorError('Remote default branch is unavailable')
     resolved_refs = _normalize_refs(refs)
-    for ref_name in resolved_refs or [default_branch]:
+    for ref_name in (resolved_refs if checkout_refs else []) or [default_branch]:
         checkout_mirror_ref(target_path, ref_name)
     metadata = dict(repository.metadata_json or {})
     metadata["tracked_refs"] = resolved_refs
     metadata["available_refs"] = list_remote_refs(target_path)
-    metadata["current_ref"] = resolved_refs[-1] if resolved_refs else default_branch
+    metadata["current_ref"] = resolved_refs[-1] if resolved_refs and checkout_refs else default_branch
     repository.metadata_json = metadata
     repository.mirror_path = str(target_path)
     repository.last_mirrored_at = datetime.now(UTC)
@@ -245,23 +246,22 @@ def _scan_repository_mirror_refs(
     plan=None,
     manager: RepositoryMirrorManager,
 ):
-    from orgscan.runner import execute_scan
+    from dataclasses import asdict
+    from orgscan.runner import execute_scan, record_skipped_scan
+    from orgscan.scanners import get_registry
+    from orgscan.repository_state import RepositoryCheckpoint, scanner_configuration_key
+    from orgscan.services.scan_plan import resolve_scan_plan, validate_plan_scanners
+    from orgscan.services.incremental import decide_scan, select_refs
 
-    from orgscan.services.scan_plan import resolve_scan_plan
     plan = plan or resolve_scan_plan(target=repository_full_name, target_type="mirror", scanners=[scanner_name], refs=refs, settings=settings)
-    if plan.mode == "incremental" or plan.branch_policy == "all":
-        raise ValueError("Incremental/all-branch orchestration is not implemented yet")
-    resolved_refs = _normalize_refs(list(plan.refs))
+    validate_plan_scanners(plan, settings=settings)
+    if plan.target_type != "mirror" or plan.target != repository_full_name:
+        raise ValueError("Scan plan target does not match the repository")
     repository = storage.get_repository_by_full_name(repository_full_name)
+    tracked = _default_scan_refs(repository) if repository is not None and plan.branch_policy == 'tracked' else []
     if resync:
-        repository, _ = manager.sync(
-            storage,
-            provider=provider,
-            clone_url=clone_url,
-            refs=resolved_refs,
-        )
-    if repository is None:
-        repository = storage.get_repository_by_full_name(repository_full_name)
+        repository, _ = manager.sync(storage, provider=provider, clone_url=clone_url,
+                                     refs=list(plan.refs) or tracked, checkout_refs=False)
     if repository is None or not repository.mirror_path:
         raise MirrorError(f"Repository mirror is not configured for {repository_full_name}")
     mirror_path = Path(repository.mirror_path)
@@ -269,49 +269,70 @@ def _scan_repository_mirror_refs(
         raise MirrorError("Repository mirror path does not match managed cache")
     if not mirror_path.exists():
         raise MirrorError(f"Repository mirror path does not exist: {mirror_path}")
-    scan_refs = resolved_refs or _default_scan_refs(repository)
-    if not scan_refs:
-        scan_refs = [_current_mirror_ref(mirror_path)]
-    results = []
+    available = manager.inventory()
+    scan_refs = select_refs(plan, repository, available)
+    state = (repository.metadata_json or {}).get('repository_state', {})
+    previous = state.get('previous_refs', {})
+    known = set(previous) | {cp['ref'] for cp in state.get('checkpoints', {}).values()}
+    if plan.branch_policy == 'all':
+        scan_refs += sorted(ref for ref in previous if ref.startswith('refs/remotes/origin/') and ref not in available)
+    # Resolve the whole selection before running any scanner, so typos fail early.
+    targets = []
     for ref_name in scan_refs:
-        checkout_mirror_ref(mirror_path, ref_name)
-        metadata = dict(repository.metadata_json or {})
-        metadata["current_ref"] = ref_name
-        repository.metadata_json = metadata
-        storage.session.flush()
-        with manager.materialize(ref_name) as (worktree, qualified_ref, oid):
-            for scanner_name in plan.scanners:
-                result = execute_scan(
-                        storage,
-                        target_path=worktree,
-                        canonical_root=mirror_path,
-                        scanner_name=scanner_name,
-                        settings=settings,
-                        plan=plan,
-                        organization_id=repository.organization_id,
-                        repository_id=repository.id,
-                        target_type="mirror",
-                        target_id=repository.full_name,
-                        target_ref=ref_name,
-                        scope_json={
-                            "mode": "mirror",
-                            "history_mode": plan.history_policy,
-                            **plan.scope,
-                            "repository_full_name": repository.full_name,
-                            "mirror_path": str(mirror_path),
-                            "ref_name": ref_name,
-                            "qualified_ref": qualified_ref,
-                            "commit_oid": oid,
-                        },
-                        command_line=f"orgscan scan-mirror {repository.full_name} --scanner {scanner_name} --ref {ref_name}",
-                        tool_target=f"{repository.full_name}@{ref_name}",
-                    )
-                results.append(result)
-                from orgscan.repository_state import RepositoryCheckpoint, scanner_configuration_key
-                storage.record_repository_checkpoint(repository, RepositoryCheckpoint(
-                    qualified_ref, scanner_name, scanner_configuration_key(settings, plan, scanner_name), oid,
-                    result.scan_job_id, datetime.now(UTC).isoformat()))
-                storage.session.commit()
+        candidates = [ref_name] if ref_name.startswith('refs/') else [f'refs/remotes/origin/{ref_name}', f'refs/tags/{ref_name}']
+        qualified = next((ref for ref in candidates if ref in available), None)
+        if qualified is not None:
+            _, oid = manager.resolve_ref(qualified)
+        else:
+            qualified = next((ref for ref in candidates if ref in known), None)
+            if qualified is None:
+                raise MirrorError(f'Requested mirror ref is not available: {ref_name}')
+            oid = None
+        targets.append((ref_name, qualified, oid))
+
+    def is_ancestor(start, end):
+        completed = _git_process(['git', '-C', str(mirror_path), 'merge-base', '--is-ancestor', start, end], 'compare checkpoint ancestry')
+        if completed.returncode in (0, 1, 128):
+            return completed.returncode == 0
+        raise MirrorError('Could not compare checkpoint ancestry')
+
+    results = []
+    for ref_name, qualified_ref, oid in targets:
+        for scanner_name in plan.scanners:
+            metadata = get_registry().get(scanner_name, settings=settings).metadata
+            key = scanner_configuration_key(settings, plan, scanner_name)
+            checkpoint = storage.get_repository_checkpoint(repository, ref=qualified_ref, scanner=scanner_name, configuration_key=key)
+            decision = decide_scan(mode=plan.mode, checkpoint=checkpoint, oid=oid,
+                                   supports_history=metadata.supports_history, supports_incremental=metadata.supports_incremental,
+                                   is_ancestor=is_ancestor)
+            if decision.reason == 'unchanged' and checkpoint.ref_oid != available.get(qualified_ref):
+                from orgscan.services.incremental import RepositoryScanDecision
+                decision = RepositoryScanDecision('history' if metadata.supports_history else 'full',
+                                                  'ref-object-changed', checkpoint.oid, oid)
+            scope = {**plan.scope, 'mode': 'mirror', 'history_mode': plan.history_policy,
+                     'repository_full_name': repository.full_name, 'mirror_path': str(mirror_path),
+                     'ref_name': ref_name, 'qualified_ref': qualified_ref, 'commit_oid': oid, 'ref_oid': available.get(qualified_ref),
+                     'commit_range': decision.commit_range, 'decision': asdict(decision),
+                     'branch_policy': plan.branch_policy, 'configuration_key': key,
+                     'history_max_commits': None if decision.commit_range else settings.git_history_max_commits if metadata.supports_history else None,
+                     'coverage': 'none' if decision.action == 'skip' else 'commit-range' if decision.commit_range else 'history' if metadata.supports_history else 'tree'}
+            if decision.action == 'skip':
+                results.append(record_skipped_scan(storage, plan=plan, scanner_name=scanner_name, ref_name=ref_name,
+                                                    scope=scope, reason=decision.reason))
+                continue
+            with manager.materialize(qualified_ref) as (worktree, _, materialized_oid):
+                if materialized_oid != oid:
+                    raise MirrorError('Repository ref changed during preparation')
+                result = execute_scan(storage, target_path=worktree, canonical_root=mirror_path, scanner_name=scanner_name,
+                                      settings=settings, plan=plan, organization_id=repository.organization_id, repository_id=repository.id,
+                                      target_type='mirror', target_id=repository.full_name, target_ref=ref_name, scope_json=scope,
+                                      command_line=f'orgscan scan-mirror {repository.full_name} --scanner {scanner_name} --ref {ref_name}',
+                                      tool_target=f'{repository.full_name}@{ref_name}')
+            # Only advance after execution AND materialization cleanup succeed.
+            storage.record_repository_checkpoint(repository, RepositoryCheckpoint(qualified_ref, scanner_name, key, oid,
+                                                                                  result.scan_job_id, datetime.now(UTC).isoformat(), available[qualified_ref]))
+            storage.session.commit()
+            results.append(result)
     return results
 
 

@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import date
 
 from pydantic import BaseModel, Field
+from orgscan.lifecycle import LifecycleState
 
 
 class FindingUpdateRequest(BaseModel):
+    lifecycle_state: LifecycleState | None = None
     status: str | None = None
     triage_state: str | None = None
     triage_owner: str | None = None

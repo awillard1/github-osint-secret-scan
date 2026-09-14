@@ -120,6 +120,11 @@ def test_timeout_diagnostic_persisted_without_raw_scanner_output(monkeypatch, tm
     import subprocess
 
     database_url = f"sqlite:///{tmp_path / 'timeout.db'}"
+    rules = tmp_path / "semgrep-rules.json"
+    rules.write_text('{"rules": []}')
+    monkeypatch.setenv("ORGSCAN_SEMGREP_RULES_PATH", str(rules))
+    from orgscan.config import get_settings
+    get_settings.cache_clear()
     monkeypatch.setattr("orgscan.scanners.registry.shutil.which", lambda command: command)
 
     def timeout(command, **kwargs):
@@ -137,3 +142,4 @@ def test_timeout_diagnostic_persisted_without_raw_scanner_output(monkeypatch, tm
         assert job.status == run.status == "failed"
         assert "private-token" not in run.stderr_log
         assert storage.list_findings() == []
+    get_settings.cache_clear()

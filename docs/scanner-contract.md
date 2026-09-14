@@ -30,7 +30,7 @@ class ScannerPlugin(Protocol):
 
 Use `get_registry().get(scanner_id, settings=settings)` for a contract adapter. Native plugins implement the interface above and may accept `settings` in their constructor. Legacy classes declaring `name`, `source_class` and `scan_path(path)` remain supported; optional `scan_path_with_context(path, target_ref=..., scope_json=...)` receives the existing scope. Legacy metadata is synthesized and readiness explicitly warns about its limited checks. `get_scanner()` still returns the underlying instance for compatibility, and existing `get_scanner_class()`, `available_scanner_names()` and `load_report()` imports remain available.
 
-The runner dispatches through the adapter, validates result identity/type/status, and preserves existing canonical persistence. A plugin can optionally expose `load_report(path)` returning `list[ScanMatch]`; saved-report ingestion does not require an installed executable.
+The runner dispatches through the adapter, validates result identity/type/status, and preserves existing canonical persistence. Phase 5 uses history/incremental capability flags for range dispatch. The built-in git-history adapter accepts generated `commit_oid`/`commit_range` context options; native plugins declaring both flags must honor those scope limits. Content scanners otherwise fall back to full-tree execution on change. A plugin can optionally expose `load_report(path)` returning `list[ScanMatch]`; saved-report ingestion does not require an installed executable.
 
 ## Registry and discovery
 

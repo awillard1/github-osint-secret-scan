@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     data_dir: Path = Field(default_factory=lambda: Path("./data"))
     database_url: str = "sqlite:///./data/orgscan.db"
+    api_auth_required: bool = False
+    browser_cookie_secure: bool = False
+    browser_session_seconds: int = Field(default=28800, ge=60, le=86400)
     github_api_base_url: str = "https://api.github.com"
     crtsh_base_url: str = "https://crt.sh"
     github_token: str | None = None
@@ -51,10 +54,14 @@ class Settings(BaseSettings):
     scanner_timeout_seconds: float = Field(default=300, gt=0, allow_inf_nan=False)
     detect_secrets_binary: str = "detect-secrets"
     semgrep_binary: str = "semgrep"
+    semgrep_rules_path: str | None = None
+    semgrep_metrics: bool = False
     trufflehog_binary: str = "trufflehog"
     yara_binary: str = "yara"
     yara_rules_path: str | None = None
     rg_binary: str = "rg"
+    heuristic_rules_path: str | None = None
+    heuristic_match_timeout_seconds: float = Field(default=0.05, gt=0, le=5, allow_inf_nan=False)
     heuristic_terms: str = ""
     internal_hostname_suffixes: str = "corp,internal,local,lan"
     git_history_max_commits: int = 250
@@ -118,7 +125,10 @@ def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
         "ORGSCAN_SCAN_QUEUE_LEASE_SECONDS": 300,
         "ORGSCAN_SCAN_QUEUE_POLL_INTERVAL_SECONDS": 5,
         "ORGSCAN_SCAN_QUEUE_WORKER_ID": "",
-        'ORGSCAN_API_TOKENS_JSON': '[{"name":"viewer","token":"change-me","role":"reader","tenants":["*"]}]',
+        "ORGSCAN_API_AUTH_REQUIRED": False,
+        "ORGSCAN_BROWSER_COOKIE_SECURE": False,
+        "ORGSCAN_BROWSER_SESSION_SECONDS": 28800,
+        "ORGSCAN_API_TOKENS_JSON": "",
         "ORGSCAN_HIBP_BASE_URL": "https://haveibeenpwned.com/api/v3",
         "ORGSCAN_HIBP_API_KEY": "",
         "ORGSCAN_DEHASHED_BASE_URL": "https://api.dehashed.com/search",
@@ -129,8 +139,12 @@ def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
         "ORGSCAN_GITLEAKS_BINARY": "gitleaks",
         "ORGSCAN_SCANNER_TIMEOUT_SECONDS": 300,
         "ORGSCAN_GIT_TIMEOUT_SECONDS": 300,
+        "ORGSCAN_HEURISTIC_RULES_PATH": "",
+        "ORGSCAN_HEURISTIC_MATCH_TIMEOUT_SECONDS": 0.05,
         "ORGSCAN_DETECT_SECRETS_BINARY": "detect-secrets",
         "ORGSCAN_SEMGREP_BINARY": "semgrep",
+        "ORGSCAN_SEMGREP_RULES_PATH": "",
+        "ORGSCAN_SEMGREP_METRICS": False,
         "ORGSCAN_TRUFFLEHOG_BINARY": "trufflehog",
         "ORGSCAN_YARA_BINARY": "yara",
         "ORGSCAN_YARA_RULES_PATH": "",

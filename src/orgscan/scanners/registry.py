@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from inspect import Parameter, signature
 from pathlib import Path
@@ -16,6 +16,7 @@ from orgscan.scanners.base import (
     ScanMatch,
     ScanResult,
     ScannerExecutionError,
+    ScannerReadinessError,
     ScannerMetadata,
     ScannerReadiness,
     ScanTarget,
@@ -117,9 +118,12 @@ class ScannerAdapter:
         if not readiness.ready:
             if readiness.status == "missing_binary":
                 raise not_installed_error(self.configured_binary or self.metadata.scanner_id)
-            raise ScannerExecutionError(
-                f"Scanner {self.metadata.scanner_id} is not ready: {', '.join(readiness.missing_requirements) or readiness.status}"
-            )
+            from orgscan.redaction import redact
+            raise ScannerReadinessError(redact(
+                f"Scanner {self.metadata.scanner_id} is not ready: {', '.join(readiness.missing_requirements) or readiness.status}",
+                secrets_from=self.settings.as_dict(include_secrets=True) if self.settings else None))
+        if readiness.version:
+            self.metadata = replace(self.metadata, version=readiness.version)
         started_at = datetime.now(UTC)
         try:
             with execution_context(context):

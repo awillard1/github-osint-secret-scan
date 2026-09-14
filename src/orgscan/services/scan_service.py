@@ -5,6 +5,7 @@ from orgscan.config import Settings
 from orgscan.repositories import Storage
 from orgscan.runner import ScanExecutionResult, execute_scan
 from orgscan.services.scan_plan import ScanPlan, validate_plan_scanners
+from orgscan.services.job_policy import classify_failure, ClassifiedJobError
 
 
 def execute_plan(storage: Storage, plan: ScanPlan, *, settings: Settings | None = None, **execution) -> list[ScanExecutionResult]:
@@ -17,16 +18,21 @@ def execute_plan(storage: Storage, plan: ScanPlan, *, settings: Settings | None 
         storage.mark_tool_run_running(run)
         storage.session.commit()
         try:
-            get_domain_provider(plan.discovery_provider, settings).discover(storage, plan.target)
+            outcome = get_domain_provider(plan.discovery_provider, settings).discover(storage, plan.target)
+            if getattr(outcome, "failure", None):
+                # Keep partial observations/request provenance before a deferred retry.
+                storage.session.commit()
+                raise ClassifiedJobError(outcome.failure)
             storage.mark_scan_job_completed(job)
             storage.mark_tool_run_completed(run)
             storage.session.commit()
-        except Exception:
+        except Exception as exc:
+            failure = classify_failure(exc)
             storage.session.rollback()
             storage.mark_scan_job_failed(job, 'Domain discovery failed')
             storage.mark_tool_run_failed(run, stderr_log='Domain discovery failed')
             storage.session.commit()
-            raise ValueError('Domain discovery failed') from None
+            raise ClassifiedJobError(failure) from None
         return [ScanExecutionResult(job.id, plan.discovery_provider, plan.target, 0, [], run.id)]
     if plan.target_type == 'mirror':
         from orgscan.mirroring import scan_repository_mirror_refs

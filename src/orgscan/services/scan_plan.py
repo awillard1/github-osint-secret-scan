@@ -36,7 +36,7 @@ class ScanPlan(BaseModel):
     profile: str | None = None
     scanners: tuple[str, ...] = ()
     refs: tuple[str, ...] = ()
-    branch_policy: Literal['default-only', 'selected', 'all'] = 'default-only'
+    branch_policy: Literal['default-only', 'selected', 'all', 'tracked'] = 'default-only'
     history_policy: Literal['all', 'current-ref'] = 'all'
     mode: Literal['full', 'incremental', 'history'] = 'full'
     discovery_provider: str | None = None
@@ -81,7 +81,7 @@ def resolve_scan_plan(*, target: str, target_type: str = 'path', profile: str | 
                   scanners=tuple(dict.fromkeys(scanners)) if scanners is not None else defaults.scanners,
                   discovery_provider=defaults.discovery_provider, history_policy=defaults.history_policy,
                   timeout_seconds=settings.scanner_timeout_seconds if settings else 300,
-                  refs=tuple(dict.fromkeys(refs or ())), branch_policy='selected' if refs else 'default-only',
+                  refs=tuple(dict.fromkeys(refs or ())), branch_policy='selected' if refs else 'tracked' if target_type == 'mirror' and profile is None else 'default-only',
                   mode='history' if profile == 'history' else 'full')
     values.update({key: value for key, value in overrides.items() if value is not None})
     plan = ScanPlan(**values)

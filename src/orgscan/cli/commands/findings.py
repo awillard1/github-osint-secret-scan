@@ -5,6 +5,7 @@ from datetime import date, datetime
 from enum import StrEnum
 
 import typer
+from orgscan.lifecycle import LifecycleState, lifecycle_fields
 
 from orgscan.cli.dependencies import _settings
 from orgscan.db import create_session_factory, init_db
@@ -28,6 +29,7 @@ class FindingWorkflowStatus(StrEnum):
 def _serialize_finding(finding: Finding) -> dict[str, object]:
     return {
         "id": finding.id,
+        **lifecycle_fields(finding),
         "category": finding.category,
         "severity": finding.severity,
         "confidence": finding.confidence,
@@ -68,6 +70,7 @@ def _parse_datetime(value: str | None, *, option_name: str) -> datetime | None:
 
 def findings(
     limit: int = typer.Option(50, "--limit", min=1, help="Maximum number of findings to display."),
+    lifecycle_state: LifecycleState | None = typer.Option(None, "--lifecycle-state"),
     status: str | None = typer.Option(None, "--status", help="Optional finding status filter."),
     category: str | None = typer.Option(None, "--category", help="Optional finding category filter."),
     severity: str | None = typer.Option(None, "--severity", help="Optional finding severity filter."),
@@ -88,7 +91,7 @@ def findings(
     detected_after_value = _parse_datetime(detected_after, option_name="--detected-after")
     detected_before_value = _parse_datetime(detected_before, option_name="--detected-before")
     rows = service.list_findings(FindingQuery(
-        limit=limit, status=status, category=category, severity=severity, confidence=confidence,
+        limit=limit, lifecycle_state=lifecycle_state, status=status, category=category, severity=severity, confidence=confidence,
         source_tool=source_tool, triage_state=triage_state, organization_id=organization_id,
         domain_id=domain_id, repository_id=repository_id, scan_job_id=scan_job_id,
         risk_score_min=risk_score_min, risk_score_max=risk_score_max,
@@ -181,3 +184,12 @@ def _finding_service() -> FindingService:
     settings = _settings()
     init_db(settings.database_url)
     return FindingService(create_session_factory(settings.database_url))
+
+
+def transition_finding(finding_id: int, state: LifecycleState, note: str | None = typer.Option(None, "--note")) -> None:
+    """Record an explicit lifecycle decision, preserving existing owner and notes."""
+    try:
+        finding = _finding_service().update_triage(finding_id, TriageUpdate(lifecycle_state=state.value, triage_notes=note))
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(json.dumps(_serialize_finding(finding), default=str))

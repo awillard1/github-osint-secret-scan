@@ -126,8 +126,10 @@ def test_broken_entry_point_is_reported_without_exception_contents(install_plugi
     "semgrep", "trufflehog", "yara", "ripgrep-heuristics",
 ])
 def test_builtin_metadata_and_readiness_do_not_execute_scans(monkeypatch, name):
-    def unexpected(*args, **kwargs):
-        pytest.fail("Readiness must not execute a process")
+    def unexpected(command, **kwargs):
+        if command[-1] == "--version":
+            return SimpleNamespace(returncode=0, stdout="4.5.0")
+        pytest.fail("Readiness must not execute a scan")
 
     monkeypatch.setattr("orgscan.scanners.registry.shutil.which", lambda command: f"/fake/{command}")
     monkeypatch.setattr("orgscan.scanners.execution.subprocess.run", unexpected)
@@ -211,3 +213,10 @@ def test_scanner_timeouts_must_be_finite_and_positive(timeout):
         ScanContext(ScanTarget(Path("target")), timeout_seconds=timeout)
     with pytest.raises(ValueError):
         Settings(scanner_timeout_seconds=timeout)
+
+
+@pytest.fixture(autouse=True)
+def configured_local_semgrep_rules(monkeypatch, tmp_path):
+    rules = tmp_path / 'semgrep-rules.json'
+    rules.write_text('{"rules": []}')
+    monkeypatch.setenv('ORGSCAN_SEMGREP_RULES_PATH', str(rules))

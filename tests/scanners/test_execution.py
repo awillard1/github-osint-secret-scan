@@ -31,6 +31,8 @@ def test_external_execution_uses_context_and_safe_errors(monkeypatch, tmp_path, 
     reports = []
 
     def run(command, **kwargs):
+        if command[-1] == "--version":
+            return subprocess.CompletedProcess(command, 0, stdout="4.5.0", stderr="")
         assert isinstance(command, list)
         assert kwargs["timeout"] == 7.5
         assert kwargs["cwd"] == Path.cwd()
@@ -122,3 +124,10 @@ def test_execution_context_is_restored_after_failure(monkeypatch, tmp_path):
     assert captured[0]["env"]["TEST_SCANNER_ENV"] == "private-value"
     assert captured[1]["timeout"] == 300
     assert "env" not in captured[1]
+
+
+@pytest.fixture(autouse=True)
+def configured_local_semgrep_rules(monkeypatch, tmp_path):
+    rules = tmp_path / 'semgrep-rules.json'
+    rules.write_text('{"rules": []}')
+    monkeypatch.setenv('ORGSCAN_SEMGREP_RULES_PATH', str(rules))

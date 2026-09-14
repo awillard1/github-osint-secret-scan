@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import re
+from hashlib import sha256
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from orgscan import __version__
+from orgscan.scanners.files import iter_files, read_text
 from orgscan.models import ConfidenceLevel, SeverityLevel
 from orgscan.scanners.base import ScanMatch, ScannerMetadata
 
@@ -104,16 +106,14 @@ class CustomPatternScanner:
         return matches
 
     def _iter_files(self, target: Path) -> list[Path]:
-        if target.is_file():
-            return [target]
-        return sorted(path for path in target.rglob("*") if path.is_file())
+        return iter_files(target)
 
     def _scan_file(self, file_path: Path) -> list[ScanMatch]:
         if file_path.stat().st_size > self.max_file_bytes:
             return []
         try:
-            content = file_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
+            content = read_text(file_path, file_path.parent, self.max_file_bytes)
+        except (OSError, UnicodeError):
             return []
         if "\x00" in content:
             return []
@@ -145,6 +145,7 @@ class CustomPatternScanner:
                             metadata={
                                 "path": str(file_path),
                                 "pattern": pattern.name,
+                                **({"secret_digest":sha256((_extract_assigned_secret(value) or value).encode()).hexdigest()} if pattern.name != "private-key" else {}),
                             },
                         )
                     )
@@ -158,7 +159,7 @@ class CustomPatternScanner:
 
     @classmethod
     def _redact_in_line(cls, line: str, value: str, pattern_name: str) -> str:
-        return line.replace(value, f"<redacted:{pattern_name}>")
+        return f"<redacted:{pattern_name}>"
 
 
 def should_skip_pattern_match(pattern_name: str, matched_value: str) -> bool:

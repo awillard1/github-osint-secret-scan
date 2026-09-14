@@ -30,6 +30,10 @@ class ScannerExecutionError(RuntimeError):
     """A scanner failure whose message is safe for operator diagnostics."""
 
 
+class ScannerReadinessError(ScannerExecutionError):
+    """Pre-execution configuration diagnostic, sanitized by the registry."""
+
+
 def not_installed_error(name: str) -> ScannerExecutionError:
     return ScannerExecutionError(
         f"{name} is not installed; run orgscan verify-deps and review docs/open-source-tooling-gaps.md for installation guidance."

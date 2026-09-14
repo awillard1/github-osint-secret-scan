@@ -10,7 +10,7 @@ The manager supplies sync, ref inventory, resolution, materialization and cleanu
 - `default_branch` and `observed_at`: successful sync observation;
 - `checkpoints`: successful scanner/ref/configuration checkpoints containing peeled commit OID, job ID and completion time.
 
-Fetch observations do not advance scan checkpoints. Each successful scanner run records its own checkpoint; a failed later scanner leaves earlier successful runs intact. Configuration keys hash settings and scope rather than storing credential values. Configuration changes conservatively invalidate reuse. Phase 5 consumes this state for incremental decisions; Phase 4 always executes the requested scans.
+Fetch observations do not advance scan checkpoints. Each successful scanner run records its own checkpoint; a failed later scanner leaves earlier successful runs intact. Configuration keys hash settings and scope rather than storing credential values. Configuration changes conservatively invalidate reuse. Phase 5 now consumes this state for [incremental decisions](incremental-scans.md); explicit full/history modes still execute scans.
 
 These additions reuse existing JSON and default-branch columns, so no SQL schema change or Alembic migration is required. Existing metadata is preserved and old records acquire state at the next successful sync. A regression test covers updating/reloading legacy JSON.
 

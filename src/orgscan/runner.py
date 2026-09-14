@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from orgscan.redaction import redact, safe_error
+
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -9,7 +11,7 @@ from orgscan.repositories import Storage
 from orgscan.scoring import calculate_risk_score
 from orgscan.schemas import CanonicalFinding
 from orgscan.scanners import get_scanner
-from orgscan.scanners.base import ScanContext, ScanMatch, ScanTarget
+from orgscan.scanners.base import ScanContext, ScanMatch, ScanTarget, ScannerExecutionError
 from orgscan.scanners.registry import ScannerAdapter
 
 
@@ -21,6 +23,8 @@ class ScanExecutionResult:
     findings: int
     finding_ids: list[int]
     tool_run_id: int
+    status: str = "completed"
+    skip_reason: str | None = None
 
 
 def execute_scan(
@@ -91,11 +95,13 @@ def execute_scan(
             timeout_seconds=plan.timeout_seconds,
             options=effective_scope,
         ))
+        tool_run.tool_version = scanner_impl.metadata.version
         matches = result.findings
         if canonical_root is not None:
+            source_root = resolved_target if resolved_target.is_dir() else resolved_target.parent
             def stable(value):
-                if isinstance(value, str) and (value == str(resolved_target) or value.startswith(str(resolved_target) + '/')):
-                    return str(canonical_root) + value[len(str(resolved_target)):]
+                if isinstance(value, str) and (value == str(source_root) or value.startswith(str(source_root) + '/')):
+                    return str(canonical_root) + value[len(str(source_root)):]
                 if isinstance(value, dict):
                     return {key: stable(item) for key, item in value.items()}
                 if isinstance(value, list):
@@ -117,10 +123,12 @@ def execute_scan(
         storage.mark_tool_run_completed(tool_run, stdout_log=f"findings={len(matches)}")
         storage.session.commit()
     except Exception as exc:
-        storage.mark_scan_job_failed(scan_job, str(exc))
-        storage.mark_tool_run_failed(tool_run, stderr_log=str(exc))
+        message = safe_error(exc)
+        storage.session.rollback()
+        storage.mark_scan_job_failed(scan_job, message)
+        storage.mark_tool_run_failed(tool_run, stderr_log=message)
         storage.session.commit()
-        raise
+        raise ScannerExecutionError(message) from None
 
     return ScanExecutionResult(
         scan_job_id=scan_job.id,
@@ -130,6 +138,17 @@ def execute_scan(
         finding_ids=finding_ids,
         tool_run_id=tool_run.id,
     )
+
+
+def record_skipped_scan(storage: Storage, *, plan, scanner_name: str, ref_name: str, scope: dict, reason: str) -> ScanExecutionResult:
+    from datetime import UTC, datetime
+    now = datetime.now(UTC)
+    job = storage.create_scan_job('mirror', plan.target, scanner_name, target_ref=ref_name, status='skipped',
+                                  parameters_json={'scan_plan': plan.serialized()}, scope_json=scope, completed_at=now)
+    run = storage.create_tool_run(scanner_name, f'{plan.target}@{ref_name}', scan_job_id=job.id,
+                                   status='skipped', stdout_log=reason, completed_at=now)
+    storage.session.commit()
+    return ScanExecutionResult(job.id, scanner_name, run.target, 0, [], run.id, 'skipped', reason)
 
 
 def record_scan_results(
@@ -176,10 +195,12 @@ def record_scan_results(
         storage.mark_tool_run_completed(tool_run, stdout_log=f"findings={len(matches)}")
         storage.session.commit()
     except Exception as exc:
-        storage.mark_scan_job_failed(scan_job, str(exc))
-        storage.mark_tool_run_failed(tool_run, stderr_log=str(exc))
+        message = safe_error(exc)
+        storage.session.rollback()
+        storage.mark_scan_job_failed(scan_job, message)
+        storage.mark_tool_run_failed(tool_run, stderr_log=message)
         storage.session.commit()
-        raise
+        raise ScannerExecutionError(message) from None
 
     return ScanExecutionResult(
         scan_job_id=scan_job.id,
@@ -201,10 +222,18 @@ def _persist_matches(
     organization_id: int | None = None,
     repository_id: int | None = None,
 ) -> list[int]:
+    from orgscan.services.correlation import finding_identity, evidence_identity, detector_id
     finding_ids: list[int] = []
     for match in matches:
-        finding = storage.create_finding(
+        safe = redact({"title":match.title,"description":match.description,"raw_payload":match.raw_payload,"metadata":match.metadata,"snippet":match.snippet,"indicator":match.indicator,"remediation_hint":match.remediation_hint})
+        match = replace(match, **safe)
+        identity = finding_identity(
+            match, scanner_name, organization_id=organization_id, repository_id=repository_id
+        )
+        finding = storage.upsert_correlated_finding(
             CanonicalFinding(
+                normalized_hash=identity,
+                fingerprint=identity,
                 source_tool=scanner_name,
                 source_name=scanner_name,
                 category=match.category,
@@ -226,8 +255,14 @@ def _persist_matches(
                 scan_job_id=scan_job_id,
             )
         )
-        storage.create_evidence(
+        storage.upsert_scanner_evidence(
             finding_id=finding.id,
+            observation_fingerprint=evidence_identity(finding.id, scanner_name, match),
+            metadata_json={
+                "detector_id": detector_id(match), "scanner_metadata": match.metadata,
+                "last_scan_job_id": scan_job_id, "severity": str(match.severity),
+                "confidence": str(match.confidence), "title": match.title,
+            },
             source=scanner_name,
             repository_path=str(match.path),
             commit_sha=match.metadata.get("commit_sha"),

@@ -2,19 +2,19 @@
 
 The caller supplies the existing session factory after database initialization.
 Each mutation owns one transaction, including its suppression record. Access is
-currently local/unscoped, matching the existing adapters; HTTP authorization is
-a separate migration, not inferred from a finding filter.
+provided by the session factory. HTTP sessions derive the request AuthContext
+and enforce tenant reads/writes in storage; local CLI sessions remain trusted.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
-from orgscan.models import Evidence, Finding, RiskScore
+from orgscan.models import Evidence, Finding, FindingHistory, RiskScore
 from orgscan.repositories import Storage
 
 
@@ -31,6 +31,7 @@ class FindingQuery:
     severity: str | None = None
     confidence: str | None = None
     source_tool: str | None = None
+    lifecycle_state: str | None = None
     triage_state: str | None = None
     organization_id: int | None = None
     domain_id: int | None = None
@@ -49,6 +50,7 @@ class FindingQuery:
 class TriageUpdate:
     # None preserves the stored value, as in Storage.update_finding_triage.
     status: str | None = None
+    lifecycle_state: str | None = None
     triage_state: str | None = None
     triage_owner: str | None = None
     triage_notes: str | None = None
@@ -68,6 +70,7 @@ class FindingDetail:
     finding: Finding
     evidence: Sequence[Evidence]
     risk_scores: Sequence[RiskScore]
+    history: Sequence[FindingHistory]
 
 
 def high_signal_findings(
@@ -82,7 +85,7 @@ def high_signal_findings(
 
 
 class FindingService:
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+    def __init__(self, session_factory: Callable[[], Session]) -> None:
         self.session_factory = session_factory
 
     def list_findings(self, query: FindingQuery) -> list[Finding]:
@@ -107,6 +110,7 @@ class FindingService:
             return FindingDetail(
                 finding=finding,
                 evidence=storage.list_finding_evidence(finding_id),
+                history=storage.list_finding_history(finding_id),
                 risk_scores=storage.list_risk_scores(finding_id=finding_id),
             )
 

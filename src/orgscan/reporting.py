@@ -1,4 +1,5 @@
 from __future__ import annotations
+from orgscan.lifecycle import lifecycle_fields, is_actionable_high_risk
 
 import csv
 import html
@@ -9,10 +10,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
-
 from orgscan.config import Settings
+from orgscan.reports.redaction import redact
 from orgscan.repositories import Storage
 
 
@@ -123,6 +122,7 @@ def build_summary(storage: Storage, *, tenant_keys: list[str] | None = None) -> 
     category_breakdown: dict[str, int] = {}
     source_tool_breakdown: dict[str, int] = {}
     workflow_breakdown: dict[str, int] = {}
+    lifecycle_breakdown: dict[str, int] = {}
     evidence_count = 0
     risk_score_count = 0
     for finding in findings:
@@ -131,6 +131,7 @@ def build_summary(storage: Storage, *, tenant_keys: list[str] | None = None) -> 
         severity_breakdown[finding.severity] = severity_breakdown.get(finding.severity, 0) + 1
         category_breakdown[finding.category] = category_breakdown.get(finding.category, 0) + 1
         source_tool_breakdown[finding.source_tool] = source_tool_breakdown.get(finding.source_tool, 0) + 1
+        lifecycle_breakdown[finding.lifecycle_state] = lifecycle_breakdown.get(finding.lifecycle_state, 0) + 1
         workflow_breakdown[finding.status] = workflow_breakdown.get(finding.status, 0) + 1
         evidence_count += len(finding.evidence_items)
         if finding.risk_score is not None:
@@ -161,6 +162,8 @@ def build_summary(storage: Storage, *, tenant_keys: list[str] | None = None) -> 
         "category_breakdown": category_breakdown,
         "source_tool_breakdown": source_tool_breakdown,
         "workflow_breakdown": workflow_breakdown,
+        "lifecycle_breakdown": lifecycle_breakdown,
+        "actionable_high_risk_count": sum(is_actionable_high_risk(finding) for finding in findings),
         "organizations": [org.name for org in scope["organizations"]],
         "repositories": list(repositories.values()),
         "accounts": [account.username for account in scope["accounts"]],
@@ -240,6 +243,7 @@ def finding_rows(
     return [
         {
             "id": finding.id,
+            **lifecycle_fields(finding),
             "title": finding.title,
             "description": finding.description,
             "category": finding.category,
@@ -336,6 +340,7 @@ def relationship_graph(storage: Storage, limit: int = 200, *, tenant_keys: list[
                 "relation_type": relationship.relation_type,
                 "confidence": relationship.confidence,
                 "source": relationship.source or "",
+                "provenance": relationship.metadata_json,
             }
         )
         from_id = f"{relationship.from_entity_type}:{relationship.from_entity_id}"
@@ -430,19 +435,28 @@ def write_csv(output_path: Path, rows: list[dict[str, Any]]) -> Path:
     with output_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
+        for row in redact(rows):
+            values = {key: json.dumps(value, sort_keys=True) if isinstance(value, (dict, list)) else value for key, value in row.items()}
+            writer.writerow({key: "'" + value if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")) else value for key, value in values.items()})
     return output_path
 
 
 def write_export(output_path: Path, export_format: str, summary: dict[str, Any], rows: list[dict[str, Any]]) -> Path:
     normalized = export_format.lower()
+    summary, rows = redact(summary), redact(rows)
     if normalized == "json":
         return write_json(output_path, {"summary": summary, "findings": rows})
     if normalized == "csv":
         return write_csv(output_path, rows)
-    if normalized == "pdf":
-        return write_pdf(output_path, summary, rows)
-    return write_html(output_path, summary, rows)
+    if normalized == "sarif":
+        from orgscan.reports.sarif import build_sarif
+        return write_json(output_path, build_sarif(rows))
+    if normalized in {"pdf", "pdf-executive", "pdf-technical"}:
+        from orgscan.reports.pdf import write_pdf_report
+        return write_pdf_report(output_path, summary, rows, variant="technical" if normalized == "pdf-technical" else "executive")
+    if normalized == "html":
+        return write_html(output_path, summary, rows)
+    raise ValueError("Unsupported report format")
 
 
 def scheduled_reports_directory(settings: Settings) -> Path:
@@ -455,7 +469,7 @@ def scheduled_report_output_path(settings: Settings, *, schedule_id: int, export
     if configured_path:
         return Path(configured_path)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return scheduled_reports_directory(settings) / f"scheduled-report-{schedule_id}-{timestamp}.{export_format.lower()}"
+    return scheduled_reports_directory(settings) / f"scheduled-report-{schedule_id}-{timestamp}.{'pdf' if export_format.startswith('pdf') else export_format.lower()}"
 
 
 def deliver_report_webhook(webhook_url: str, *, timeout: int, payload: dict[str, Any]) -> None:
@@ -482,6 +496,7 @@ def render_dashboard_html(
     graph: dict[str, Any] | None = None,
     filters: dict[str, Any] | None = None,
     live: bool = False,
+    operations: dict[str, Any] | None = None,
     artifact_scan_result: dict[str, Any] | None = None,
     artifact_scan_error: str | None = None,
     finding_action_result: dict[str, Any] | None = None,
@@ -686,8 +701,10 @@ def render_dashboard_html(
         f"{item['username'] or 'unknown'} / {item['email'] or 'unknown'} ({item['relation_type']})"
         for item in summary["identity_correlations"]
     ]
+    from orgscan.web.operator_dashboard import render_operator_queues
+    operator_overview = render_operator_queues(operations) if operations else ""
     open_findings = summary["workflow_breakdown"].get("open", 0)
-    high_risk_findings = sum(1 for row in summary["top_risky_findings"] if float(row.get("risk_score", 0) or 0) >= 70)
+    high_risk_findings = operations["queues"]["high-risk"]["count"] if operations else summary.get("actionable_high_risk_count", 0)
     critical_findings = summary["severity_breakdown"].get("critical", 0)
     live_header = """
     <section>
@@ -747,7 +764,7 @@ def render_dashboard_html(
         days=html.escape(str((filters or {}).get("days", 30))),
         scanner_select=scanner_select,
     ) if live else ""
-    return f"""<!doctype html>
+    page = f"""<!doctype html>
 <html lang=\"en\">
   <head>
     <meta charset=\"utf-8\">
@@ -793,6 +810,7 @@ def render_dashboard_html(
     {artifact_result_banner}
     {finding_result_banner}
     {access_context_banner}
+    {operator_overview}
     {live_header}
     <div class=\"hero\">
       {metric_card("Findings", summary['counts'].get('findings', 0), "critical")}
@@ -908,6 +926,8 @@ def render_dashboard_html(
 </html>
 """
 
+    return _browser_html(page, full_page=True) if live else page
+
 
 def write_html(
     output_path: Path,
@@ -930,7 +950,22 @@ def write_html(
     return output_path
 
 
+def _browser_html(body: str, *, full_page: bool = False) -> str:
+    import re
+    from orgscan.security_context import current_auth, current_csrf
+    auth, csrf = current_auth.get(), current_csrf.get()
+    if auth is not None and auth.authenticated:
+        users = "<a href='/dashboard/users'>Users</a> · " if auth.allows_role("admin") and "*" in auth.tenants else ""
+        navigation = f"<nav><a href='/dashboard'>Dashboard</a> · {users}{html.escape(auth.name)}<form method='post' action='/logout'><button>Sign out</button></form></nav>"
+        body = body.replace("<main>", "<main>"+navigation, 1) if full_page else navigation+body
+    if csrf:
+        hidden = f'<input type="hidden" name="csrf_token" value="{html.escape(csrf, quote=True)}">'
+        body = re.sub(r"(<form\b[^>]*\bmethod=['\"]post['\"][^>]*>)", lambda match: match[0] + hidden, body, flags=re.IGNORECASE)
+    return body
+
+
 def _render_html_page(title: str, body: str) -> str:
+    body = _browser_html(body)
     return f"""<!doctype html>
 <html lang="en">
   <head>
@@ -994,6 +1029,9 @@ def render_finding_detail_html(payload: dict[str, Any]) -> str:
     <div class="grid">
       <section>
         <h2>Workflow</h2>
+        <p>Lifecycle: {html.escape(str(finding.get("lifecycle_state", "NEW")))}</p>
+        <pre>{html.escape(json.dumps({key: finding.get(key) for key in ("first_seen_at", "last_seen_at", "remediated_at", "regressed_at")}, indent=2))}</pre>
+        <h3>Transition history</h3><pre>{html.escape(json.dumps(payload.get("history", []), indent=2))}</pre>
         <ul>
           <li>Status: {html.escape(str(finding['status']))}</li>
           <li>Triage: {html.escape(str(finding['triage_state']))}</li>
@@ -1060,6 +1098,7 @@ def render_scan_job_detail_html(payload: dict[str, Any]) -> str:
         for item in findings
     ) or "<tr><td colspan='5'>No findings recorded for this scan job.</td></tr>"
     parameters = json.dumps(scan_job.get("parameters_json") or {}, indent=2, sort_keys=True)
+    scope = json.dumps(scan_job.get("scope_json") or {}, indent=2, sort_keys=True)
     body = f"""
     <p><a href="/dashboard">← Back to dashboard</a></p>
     <section>
@@ -1083,6 +1122,8 @@ def render_scan_job_detail_html(payload: dict[str, Any]) -> str:
       <section>
         <h2>Parameters</h2>
         <pre>{html.escape(parameters)}</pre>
+        <h2>Scope and request history</h2>
+        <pre>{html.escape(scope)}</pre>
       </section>
     </div>
     <section>
@@ -1092,6 +1133,18 @@ def render_scan_job_detail_html(payload: dict[str, Any]) -> str:
     {tool_sections}
     """
     return _render_html_page(f"Scan job {scan_job['id']}", body)
+
+
+def _relationship_provenance_html(metadata: dict[str, Any]) -> str:
+    items = []
+    for observation in metadata.get("provenance", []):
+        reason = html.escape(str(observation.get("reason", "Observed association")))
+        endpoint = html.escape(str(observation.get("endpoint", "")))
+        commit = html.escape(str(observation.get("commit_sha", "")))
+        details = f"{endpoint} · commit {commit}" if commit else endpoint
+        items.append(f"<li>{reason}<br><small>{details}</small></li>")
+    observed = html.escape(str(metadata.get("last_observed_at", "")))
+    return ("<ul>" + "".join(items) + f"</ul><small>Last observed: {observed}</small>") if items else "No recorded provenance"
 
 
 def render_graph_html(graph: dict[str, Any]) -> str:
@@ -1105,9 +1158,11 @@ def render_graph_html(graph: dict[str, Any]) -> str:
         f"<td>{html.escape(str(edge['relation_type']))}</td>"
         f"<td>{html.escape(str(edge['to']))}</td>"
         f"<td>{html.escape(str(edge['confidence']))}</td>"
+        f"<td>{html.escape(str(edge.get('source', '')))}</td>"
+        f"<td>{_relationship_provenance_html(edge.get('provenance') or {})}</td>"
         "</tr>"
         for edge in graph.get("edges", [])
-    ) or "<tr><td colspan='4'>No relationships available.</td></tr>"
+    ) or "<tr><td colspan='6'>No relationships available.</td></tr>"
     body = f"""
     <p><a href="/dashboard">← Back to dashboard</a></p>
     <section>
@@ -1125,50 +1180,13 @@ def render_graph_html(graph: dict[str, Any]) -> str:
     </section>
     <section>
       <h2>Relationships</h2>
-      <table><thead><tr><th>From</th><th>Relation</th><th>To</th><th>Confidence</th></tr></thead><tbody>{edge_rows}</tbody></table>
+      <table><thead><tr><th>From</th><th>Relation</th><th>To</th><th>Confidence</th><th>Source</th><th>Why associated</th></tr></thead><tbody>{edge_rows}</tbody></table>
     </section>
     """
     return _render_html_page("Relationship graph", body)
 
 
 def write_pdf(output_path: Path, summary: dict[str, Any], findings: list[dict[str, Any]]) -> Path:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    pdf = canvas.Canvas(str(output_path), pagesize=letter)
-    width, height = letter
-    y = height - 40
-
-    def line(text: str, *, indent: int = 0) -> None:
-        nonlocal y
-        if y < 50:
-            pdf.showPage()
-            y = height - 40
-        pdf.drawString(40 + indent, y, text[:110])
-        y -= 14
-
-    pdf.setTitle("orgscan report")
-    pdf.setFont("Helvetica-Bold", 16)
-    line("orgscan report")
-    pdf.setFont("Helvetica", 10)
-    line("")
-    line("Counts")
-    for key, value in summary.get("counts", {}).items():
-        line(f"{key}: {value}", indent=12)
-    line("")
-    line("Organization comparison")
-    for row in summary.get("organization_comparison", []):
-        line(
-            f"{row['organization']}: findings={row['findings']} critical_high={row['critical_high']} "
-            f"open={row['open_findings']} avg_risk={row['average_risk_score']}",
-            indent=12,
-        )
-    line("")
-    line("Remediation suggestions")
-    for row in summary.get("remediation_suggestions", []):
-        line(f"{row['category']}: {row['suggestion']}", indent=12)
-    line("")
-    line("Recent findings")
-    for finding in findings[:30]:
-        line(f"#{finding['id']} [{finding['severity']}] {finding['title']}", indent=12)
-
-    pdf.save()
-    return output_path
+    """Compatibility entry point for the executive PDF adapter."""
+    from orgscan.reports.pdf import write_pdf_report
+    return write_pdf_report(output_path, summary, findings)

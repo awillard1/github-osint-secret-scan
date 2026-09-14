@@ -37,6 +37,8 @@ Responsibilities:
 
 Not responsible for core workflow decisions.
 
+The live [operator dashboard](operator-dashboard.md) consumes `DashboardService` queues over authorized storage; templates do not classify risk or lifecycle states.
+
 ### 2. Application services
 
 Services model use cases.
@@ -186,6 +188,8 @@ RepositoryService
            +--> cleanup()
 ```
 
+Phase 5 uses that state for [incremental decisions](incremental-scans.md), pinned history ranges, and explicit skip/deletion records. Content scanners without incremental semantics conservatively scan the full changed tree.
+
 Persist enough state to distinguish:
 
 - never scanned;
@@ -232,7 +236,7 @@ Profiles are configuration, not duplicated code paths.
 
 ## Finding correlation
 
-Multiple scanners may report the same underlying issue.
+Multiple scanners may report the same underlying issue. Phase 8 implements conservative [finding correlation](finding-correlation.md) in the shared runner, with storage-owned evidence upserts and scanner provenance.
 
 Target model:
 
@@ -265,11 +269,11 @@ ACCEPTED_RISK
 SUPPRESSED
 ```
 
-Retain history so regression can be detected.
+Phase 12 implements [lifecycle policy and retained history](finding-lifecycle.md) through shared storage/service operations; only later scan-job observations trigger regression. Legacy statuses remain compatible.
 
 ## OSINT relationship graph
 
-Relationships should carry provenance and confidence.
+Relationships should carry provenance and confidence. Phase 9 shares GitHub ingestion/expansion in `services/relationship_service.py`, retaining the old expansion imports and exposing stored provenance through existing graph/reporting adapters. See [GitHub relationships](github-relationships.md).
 
 Examples:
 
@@ -284,7 +288,7 @@ A relationship is more valuable when orgscan can explain why it exists.
 
 ## Authentication
 
-Use a common `AuthContext` for authorization decisions.
+Use a common `AuthContext` for authorization decisions. Phase 11 implements [token-backed browser authentication](browser-auth.md), shared auth services and request-owned storage authorization for all HTTP adapters. Local CLI/worker storage remains trusted.
 
 Browser authentication and API token authentication should both produce the same authorization context.
 
@@ -315,13 +319,13 @@ Classify jobs by logical type:
 - DOMAIN_ENRICH
 - REPORT
 
-Retry only transient failures.
+Phase 14 applies the shared [job reliability policy](job-reliability.md), preserving both backends. Retry only transient failures.
 
 Rate-limit responses should defer rather than hammer an upstream service.
 
 ## Reporting
 
-Reporting adapters consume canonical stored data.
+Reporting adapters consume canonical stored data through the shared [report query service](reporting.md); CLI, HTTP and scheduled exports use the same query and redaction boundary.
 
 Outputs:
 
@@ -346,6 +350,8 @@ infrastructure -> implements interfaces
 ```
 
 Avoid services importing FastAPI or Typer.
+
+Release diagnostics and installed migration resources are documented in [release readiness](release-readiness.md). Doctor performs reads; initialization/upgrades remain explicit operations.
 
 ## Migration strategy
 

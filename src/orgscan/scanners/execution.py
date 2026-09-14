@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-import subprocess
+from orgscan import processes as subprocess
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -39,5 +39,7 @@ def run_scanner_process(command: list[str], **kwargs) -> subprocess.CompletedPro
     except subprocess.TimeoutExpired:
         # TimeoutExpired can contain raw stdout/stderr; never surface it.
         raise ScannerExecutionError(f"Scanner process timed out after {timeout:g} seconds") from None
+    except subprocess.OutputLimitExceeded:
+        raise ScannerExecutionError("Scanner process output exceeded the allowed limit") from None
     except OSError:
         raise ScannerExecutionError("Scanner process could not be started") from None

@@ -40,6 +40,7 @@ class ScanJobStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 class QueueTaskStatus(StrEnum):
@@ -177,6 +178,10 @@ class Finding(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default=FindingStatus.OPEN.value)
+    lifecycle_state: Mapped[str] = mapped_column(String(32), default="NEW", index=True)
+    remediated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    regressed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    regression_count: Mapped[int] = mapped_column(Integer, default=0)
     triage_state: Mapped[str] = mapped_column(String(32), default="new")
     triage_owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
     triage_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -196,6 +201,20 @@ class Finding(TimestampMixin, Base):
     evidence_items: Mapped[list[Evidence]] = relationship(back_populates="finding")
     risk_scores: Mapped[list[RiskScore]] = relationship(back_populates="finding")
     suppressions: Mapped[list[Suppression]] = relationship(back_populates="finding")
+
+
+class FindingHistory(Base):
+    __tablename__ = "finding_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    finding_id: Mapped[int] = mapped_column(ForeignKey("findings.id"), index=True)
+    from_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    to_state: Mapped[str] = mapped_column(String(32))
+    actor: Mapped[str] = mapped_column(String(255))
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scan_job_id: Mapped[int | None] = mapped_column(ForeignKey("scan_jobs.id"), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class Evidence(TimestampMixin, Base):
@@ -218,6 +237,8 @@ class Evidence(TimestampMixin, Base):
     related_entity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_class: Mapped[str] = mapped_column(String(32), default=SourceClass.INTERNAL.value)
     query_used: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    observation_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     finding: Mapped[Finding] = relationship(back_populates="evidence_items")
 
@@ -285,6 +306,8 @@ class ToolRun(TimestampMixin, Base):
 
 class ScheduledScan(TimestampMixin, Base):
     __tablename__ = "scheduled_scans"
+
+    queue_execution_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     target_type: Mapped[str] = mapped_column(String(64), index=True)
@@ -359,6 +382,8 @@ class UserSession(TimestampMixin, Base):
 
 class QueueTask(TimestampMixin, Base):
     __tablename__ = "queue_tasks"
+
+    execution_key: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     scheduled_scan_id: Mapped[int] = mapped_column(ForeignKey("scheduled_scans.id"), index=True)
@@ -443,3 +468,7 @@ class Suppression(TimestampMixin, Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     finding: Mapped[Finding] = relationship(back_populates="suppressions")
+
+
+from orgscan.storage.safety import install as _install_evidence_safety
+_install_evidence_safety()

@@ -27,9 +27,11 @@ def init_db(database_url: str) -> None:
 
 def _alembic_config(database_url: str) -> Config:
     repo_root = Path(__file__).resolve().parents[2]
-    config = Config(str(repo_root / "alembic.ini"))
-    config.set_main_option("script_location", str(repo_root / "migrations"))
-    config.set_main_option("sqlalchemy.url", database_url)
+    source_checkout = (repo_root / "alembic.ini").is_file() and (repo_root / "migrations").is_dir()
+    resource_root = repo_root if source_checkout else Path(__file__).resolve().parent
+    config = Config(str(resource_root / "alembic.ini"))
+    config.set_main_option("script_location", str(resource_root / ("migrations" if source_checkout else "_migrations")))
+    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
     return config
 
 

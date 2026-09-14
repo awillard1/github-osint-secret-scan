@@ -17,7 +17,9 @@ from orgscan.db import create_session_factory, current_db_revision, init_db
 from orgscan.discovery import DiscoveryError, GitHubDiscoveryClient
 from orgscan.expansion import GitHubExpansionEngine
 from orgscan.cli.dependencies import _settings
+from orgscan.lifecycle import LifecycleState
 from orgscan.cli.commands.findings import (
+    transition_finding,
     FindingWorkflowStatus,
     _parse_datetime,
     _parse_due_date,
@@ -72,6 +74,9 @@ class ExportFormat(StrEnum):
     CSV = "csv"
     HTML = "html"
     PDF = "pdf"
+    SARIF = "sarif"
+    PDF_EXECUTIVE = "pdf-executive"
+    PDF_TECHNICAL = "pdf-technical"
 
 
 class ScanCadence(StrEnum):
@@ -312,7 +317,10 @@ def grant_tenant_role(
         user = storage.get_user_by_username(username)
         if user is None:
             raise typer.BadParameter(f"Unknown user: {username}")
-        membership = storage.grant_tenant_membership(user.id, tenant_key, role)
+        try:
+            membership = storage.grant_tenant_membership(user.id, tenant_key, role)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from None
         session.commit()
     typer.echo(f"Granted {membership.role} on {tenant_key} to {username}")
 
@@ -336,7 +344,7 @@ def create_session_token(
             username=username,
             session_name=session_name,
             role=role,
-            tenants=list(tenant),
+            tenants=list(tenant) or None,
             expires_at=_parse_expiration(expires_in_hours),
         )
         session.commit()
@@ -408,6 +416,25 @@ def discover(
         discovered_domain_exposures: list[str] = []
         discovered_identity_correlations: list[str] = []
 
+        if target_type == DiscoverTargetType.ORGANIZATION and provider == "github-search":
+            try:
+                search_provider = get_domain_provider(provider, settings)
+                result = search_provider.search_target(storage, value, target_type="organization", tenant_key=tenant_key)
+                session.commit()
+            except (DomainProviderError, ValueError) as exc:
+                typer.echo(f"GitHub search failed: {exc}", err=True)
+                raise typer.Exit(code=1) from exc
+            payload = {"target_type": target_type.value, "value": value,
+                       "references": result.exposures, "accounts": result.identity_correlations,
+                       "warnings": result.warnings or []}
+            if json_output:
+                typer.echo(json.dumps(payload, indent=2))
+            else:
+                typer.echo(f"Found {len(result.exposures)} public reference(s) for {value}.")
+                for warning in result.warnings or []:
+                    typer.echo(f"warning: {warning}")
+            return
+
         if target_type == DiscoverTargetType.DOMAIN:
             try:
                 domain_provider = get_domain_provider(provider, settings)
@@ -451,67 +478,15 @@ def discover(
 
     with session_factory() as session:
         storage = Storage(session)
-        discovered_repositories = []
-        discovered_accounts = []
-        organization_names = set()
-
-        for record in records:
-            organization_id = None
-            owner_account = None
-            if record.owner_type.lower() == "organization":
-                organization_record, _ = storage.get_or_create_organization(
-                    record.owner_login,
-                    tenant_key=tenant_key,
-                    github_handle=record.owner_login,
-                )
-                organization_id = organization_record.id
-                organization_names.add(organization_record.name)
-                storage.get_or_create_account(
-                    record.owner_login,
-                    organization_id=organization_id,
-                    provider="github",
-                    account_type="organization",
-                )
-            else:
-                owner_account, _ = storage.get_or_create_account(
-                    record.owner_login,
-                    provider="github",
-                    account_type="user",
-                )
-                discovered_accounts.append(owner_account.username)
-
-            repository_record, _ = storage.get_or_create_repository(
-                record.full_name,
-                organization_id=organization_id,
-                provider="github",
-                url=record.html_url,
-                default_branch=record.default_branch,
-                is_private=record.private,
-                metadata_json={"description": record.description} if record.description else {},
-            )
-            discovered_repositories.append(repository_record.full_name)
-
-            if record.owner_type.lower() == "organization" and organization_id is not None:
-                storage.get_or_create_relationship(
-                    "organization",
-                    str(organization_id),
-                    "repository",
-                    str(repository_record.id),
-                    "owns",
-                    confidence="verified",
-                    source="github-api",
-                )
-            else:
-                if owner_account is not None:
-                    storage.get_or_create_relationship(
-                        "account",
-                        str(owner_account.id),
-                        "repository",
-                        str(repository_record.id),
-                        "owns",
-                        confidence="verified",
-                        source="github-api",
-                    )
+        discovered = GitHubExpansionEngine(client, storage).ingest_repository_records(
+            records,
+            endpoint=(f"/repos/{value}" if target_type == DiscoverTargetType.REPOSITORY
+                      else f"/orgs/{value}/repos?per_page={limit}"),
+            tenant_key=tenant_key,
+        )
+        discovered_repositories = discovered["repositories"]
+        discovered_accounts = discovered["accounts"]
+        organization_names = discovered["organizations"]
         session.commit()
 
     result = {
@@ -573,6 +548,7 @@ def expand(
 
 
 app.command("triage")(triage)
+app.command("transition-finding")(transition_finding)
 app.command("suppress")(suppress)
 app.command("accept-risk")(accept_risk)
 app.command("unsuppress")(unsuppress)
@@ -761,6 +737,8 @@ def schedule_mirror_scan(
     scanner: str | None = typer.Option(None, "--scanner", help="Scanner to schedule against the repository mirror."),
     profile: str | None = typer.Option(None, "--profile", help="Scan profile; explicit --scanner overrides its scanner list."),
     cadence: ScanCadence = typer.Option(ScanCadence.DAILY, "--cadence", help="How often to rerun the mirror scan."),
+    branch_policy: str | None = typer.Option(None, "--branch-policy", help="default-only, selected, all, or legacy tracked refs."),
+    mode: str | None = typer.Option(None, "--mode", help="full, incremental, or history."),
     ref: list[str] = typer.Option([], "--ref", help="Specific branch or tag refs to scan; repeat for multiple refs."),
     provider: str = typer.Option("github", "--provider", help="Repository provider name."),
     clone_url: str | None = typer.Option(None, "--clone-url", help="Optional explicit clone URL."),
@@ -777,7 +755,7 @@ def schedule_mirror_scan(
         repository_id = repository_record.id if repository_record else None
         try:
             plan = resolve_scan_plan(target=repository, target_type="mirror", profile=profile,
-                                     scanners=[scanner] if scanner else None, refs=list(ref), settings=settings,
+                                     scanners=[scanner] if scanner else None, refs=list(ref), settings=settings, branch_policy=branch_policy, mode=mode,
                                      organization_id=organization_id, repository_id=repository_id, tenant_key=tenant_key)
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
@@ -1006,6 +984,8 @@ def scan_mirror(
     repository: str = typer.Argument(..., help="Repository full name, such as owner/name."),
     scanner: str | None = typer.Option(None, "--scanner", help="Scanner implementation to run against the mirror."),
     profile: str | None = typer.Option(None, "--profile", help="Scan profile; explicit --scanner overrides its scanner list."),
+    branch_policy: str | None = typer.Option(None, "--branch-policy", help="default-only, selected, all, or legacy tracked refs."),
+    mode: str | None = typer.Option(None, "--mode", help="full, incremental, or history."),
     ref: list[str] = typer.Option([], "--ref", help="Specific branch or tag refs to scan from the mirror; repeat for multiple refs."),
     resync: bool = typer.Option(False, "--resync/--no-resync", help="Refresh the mirror before scanning."),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable output."),
@@ -1017,7 +997,7 @@ def scan_mirror(
         storage = Storage(session)
         try:
             plan = resolve_scan_plan(target=repository, target_type="mirror", profile=profile,
-                                     scanners=[scanner] if scanner else None, refs=list(ref), settings=settings)
+                                     scanners=[scanner] if scanner else None, refs=list(ref), settings=settings, branch_policy=branch_policy, mode=mode)
             results = scan_repository_mirror_refs(
                 storage,
                 settings=settings,
@@ -1039,6 +1019,9 @@ def scan_mirror(
         "results": [
             {
                 "target": result.target,
+                "scanner": result.scanner,
+                "status": result.status,
+                "skip_reason": result.skip_reason,
                 "scan_job_id": result.scan_job_id,
                 "tool_run_id": result.tool_run_id,
                 "findings": result.findings,
@@ -1131,6 +1114,8 @@ def jobs(
                 "target_id": job.target_id,
                 "target_ref": job.target_ref,
                 "status": job.status,
+                "parameters_json": job.parameters_json,
+                "scope_json": job.scope_json,
             }
             for job in scan_jobs
         ],
@@ -1204,6 +1189,7 @@ def jobs(
 def export(
     output_path: Path,
     export_format: ExportFormat = typer.Option(ExportFormat.JSON, "--format", help="Output format."),
+    lifecycle_state: LifecycleState | None = typer.Option(None, "--lifecycle-state"),
     limit: int = typer.Option(500, "--limit", min=1, help="Maximum number of findings to export."),
 ) -> None:
     settings = _settings()
@@ -1211,8 +1197,9 @@ def export(
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
-        summary = build_summary(storage)
-        rows = finding_rows(storage, limit=limit)
+        from orgscan.services.report_service import query_report
+        payload = query_report(storage, limit=limit, lifecycle_state=lifecycle_state)
+        summary, rows = payload["summary"], payload["findings"]
 
     output = _write_export(output_path, export_format, summary, rows)
     typer.echo(f"Wrote {export_format.value} export to {output}")
@@ -1229,8 +1216,9 @@ def dashboard(
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
-        summary = build_summary(storage)
-        rows = finding_rows(storage, limit=limit)
+        from orgscan.services.report_service import query_report
+        payload = query_report(storage, limit=limit)
+        summary, rows = payload["summary"], payload["findings"]
 
     output = write_html(output_path, summary, rows, tooling={"optional_tools": tooling["optional_tools"]})
     typer.echo(f"Wrote dashboard HTML to {output}")
@@ -1240,10 +1228,15 @@ def dashboard(
 def serve_api_command(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind host."),
     port: int = typer.Option(8000, "--port", min=1, max=65535, help="Bind port."),
+    unsafe_allow_unauthenticated_network: bool = typer.Option(False, "--unsafe-allow-unauthenticated-network", help="UNSAFE development only: expose unrestricted access."),
 ) -> None:
     settings = _settings()
     typer.echo(f"Serving API and dashboard on http://{host}:{port}")
-    serve_api(settings.database_url, host=host, port=port)
+    try:
+        serve_api(settings.database_url, host=host, port=port, unsafe_allow_unauthenticated_network=unsafe_allow_unauthenticated_network)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from None
 
 
 @app.command("verify-deps")
@@ -1303,3 +1296,30 @@ def scan_plan_command(plan_file: Path, dry_run: bool = typer.Option(False, "--dr
         typer.echo(json.dumps(payload, indent=2, default=str))
     except (ValueError, OSError, ScannerExecutionError, MirrorError) as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+
+@app.command("recover-stale-jobs")
+def recover_stale_jobs(apply: bool = typer.Option(False, "--apply", help="Quarantine expired DB leases and disable their schedules; stop affected workers first.")) -> None:
+    """Inspect expired DB queue leases; apply only after verifying the worker stopped."""
+    from orgscan.services.job_recovery import recover_stale_tasks
+    typer.echo(json.dumps(recover_stale_tasks(_settings(), apply=apply), indent=2))
+
+
+@app.command("doctor")
+def doctor_command(json_output: bool = typer.Option(False, "--json"),
+                   require_queue: bool = typer.Option(False, "--require-queue", help="Treat unavailable RQ connectivity as a required failure.")) -> None:
+    """Inspect readiness without creating directories, installing tools or migrating."""
+    from orgscan.services.doctor_service import doctor
+    try:
+        # _settings/get_settings intentionally create data directories elsewhere.
+        result = doctor(Settings(), require_queue=require_queue)
+    except Exception:
+        result = {"ok":False,"checks":[{"name":"configuration","status":"error","message":"Unable to load/check configuration; values omitted"}],"warnings":0}
+    if json_output:
+        typer.echo(json.dumps(result,indent=2))
+    else:
+        for check in result['checks']:
+            version = f" (version {check['version']})" if 'version' in check else ''
+            typer.echo(f"[{check['status'].upper()}] {check['name']}: {check['message']}{version}")
+        typer.echo(f"Required checks: {'passed' if result['ok'] else 'failed'}; warnings: {result['warnings']}")
+    raise typer.Exit(0 if result['ok'] else 1)

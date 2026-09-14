@@ -14,6 +14,7 @@ from orgscan.scanners.git_history import GitHistoryPatternScanner
 from orgscan.scanners.ripgrep_heuristics import RipgrepHeuristicScanner
 from orgscan.scanners.repo_governance import RepositoryGovernanceScanner
 from orgscan.scanners.yara_scanner import YaraScanner
+from orgscan.scanners.heuristic_rules import HeuristicRuleScanner
 from orgscan.scanners.registry import DuplicateScannerError, ScannerRegistry, scanner_id_for, supports_settings
 
 if TYPE_CHECKING:
@@ -34,6 +35,7 @@ BUILTIN_SCANNERS: dict[str, ScannerClass] = {
     SemgrepScanner.name: SemgrepScanner,
     TruffleHogScanner.name: TruffleHogScanner,
     YaraScanner.name: YaraScanner,
+    HeuristicRuleScanner.name: HeuristicRuleScanner,
 }
 
 

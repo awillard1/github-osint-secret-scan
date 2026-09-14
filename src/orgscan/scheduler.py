@@ -7,7 +7,7 @@ from pathlib import Path
 from orgscan.config import Settings
 from orgscan.mirroring import scan_repository_mirror_refs
 from orgscan.repositories import Storage
-from orgscan.reporting import build_summary, deliver_report_webhook, finding_rows, scheduled_report_output_path, write_export
+from orgscan.reporting import deliver_report_webhook, scheduled_report_output_path, write_export
 from orgscan.runner import ScanExecutionResult, execute_scan
 
 
@@ -70,8 +70,9 @@ def run_due_reports(storage: Storage, limit: int = 10, *, settings: Settings) ->
     due_reports = storage.list_due_scheduled_reports()[:limit]
     for scheduled in due_reports:
         tenant_keys = [scheduled.target_value] if scheduled.target_type == "tenant" and scheduled.target_value else None
-        summary = build_summary(storage, tenant_keys=tenant_keys)
-        rows = finding_rows(storage, limit=500, tenant_keys=tenant_keys)
+        from orgscan.services.report_service import query_report
+        payload = query_report(storage, limit=500, tenant_keys=tenant_keys)
+        summary, rows = payload["summary"], payload["findings"]
         output_path = scheduled_report_output_path(
             settings,
             schedule_id=scheduled.id,
@@ -90,6 +91,7 @@ def run_due_reports(storage: Storage, limit: int = 10, *, settings: Settings) ->
         storage.session.commit()
         delivered = False
         metadata = dict(scheduled.metadata_json or {})
+        metadata["job_type"] = "REPORT"
         try:
             write_export(output_path, scheduled.output_format, summary, rows)
             if scheduled.webhook_url:
@@ -135,16 +137,19 @@ def run_due_reports(storage: Storage, limit: int = 10, *, settings: Settings) ->
                 )
             )
         except Exception as exc:
+            from orgscan.redaction import safe_error
+            message = safe_error(exc)
+            storage.session.rollback()
             metadata.update(
                 {
                     "last_output_path": str(output_path),
                     "last_delivery_status": "failed",
-                    "last_error": str(exc),
+                    "last_error": message,
                     "last_run_at": datetime.now(UTC).isoformat(),
                 }
             )
             scheduled.metadata_json = metadata
-            storage.mark_tool_run_failed(tool_run, stderr_log=str(exc))
+            storage.mark_tool_run_failed(tool_run, stderr_log=message)
             storage.session.commit()
-            raise
+            raise RuntimeError(message) from None
     return results

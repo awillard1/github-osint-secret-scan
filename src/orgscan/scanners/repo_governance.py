@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from fnmatch import fnmatchcase
+from orgscan.scanners.files import iter_files, read_text
 from pathlib import Path
 
 from orgscan import __version__
@@ -187,11 +189,11 @@ class RepositoryGovernanceScanner:
 
     def _check_unpinned_actions(self, root: Path) -> list[ScanMatch]:
         matches: list[ScanMatch] = []
-        workflow_files = sorted({path for glob in WORKFLOW_GLOBS for path in root.glob(glob)})
+        workflow_files = [path for path in iter_files(root) if any(fnmatchcase(path.relative_to(root).as_posix(), pattern) for pattern in WORKFLOW_GLOBS)]
         for workflow_file in workflow_files:
             try:
-                lines = workflow_file.read_text(encoding="utf-8").splitlines()
-            except UnicodeDecodeError:
+                lines = read_text(workflow_file, root).splitlines()
+            except (OSError, UnicodeError):
                 continue
             for index, line in enumerate(lines, start=1):
                 matched = USES_LINE.match(line)
@@ -223,11 +225,11 @@ class RepositoryGovernanceScanner:
 
     def _check_pull_request_target(self, root: Path) -> list[ScanMatch]:
         matches: list[ScanMatch] = []
-        workflow_files = sorted({path for glob in WORKFLOW_GLOBS for path in root.glob(glob)})
+        workflow_files = [path for path in iter_files(root) if any(fnmatchcase(path.relative_to(root).as_posix(), pattern) for pattern in WORKFLOW_GLOBS)]
         for workflow_file in workflow_files:
             try:
-                lines = workflow_file.read_text(encoding="utf-8").splitlines()
-            except UnicodeDecodeError:
+                lines = read_text(workflow_file, root).splitlines()
+            except (OSError, UnicodeError):
                 continue
             for index, line in enumerate(lines, start=1):
                 if not PULL_REQUEST_TARGET_LINE.match(line):
@@ -253,11 +255,11 @@ class RepositoryGovernanceScanner:
 
     def _check_broad_write_permissions(self, root: Path) -> list[ScanMatch]:
         matches: list[ScanMatch] = []
-        workflow_files = sorted({path for glob in WORKFLOW_GLOBS for path in root.glob(glob)})
+        workflow_files = [path for path in iter_files(root) if any(fnmatchcase(path.relative_to(root).as_posix(), pattern) for pattern in WORKFLOW_GLOBS)]
         for workflow_file in workflow_files:
             try:
-                lines = workflow_file.read_text(encoding="utf-8").splitlines()
-            except UnicodeDecodeError:
+                lines = read_text(workflow_file, root).splitlines()
+            except (OSError, UnicodeError):
                 continue
             in_permissions_block = False
             for index, line in enumerate(lines, start=1):
@@ -312,11 +314,11 @@ class RepositoryGovernanceScanner:
 
     def _check_missing_workflow_permissions(self, root: Path) -> list[ScanMatch]:
         matches: list[ScanMatch] = []
-        workflow_files = sorted({path for glob in WORKFLOW_GLOBS for path in root.glob(glob)})
+        workflow_files = [path for path in iter_files(root) if any(fnmatchcase(path.relative_to(root).as_posix(), pattern) for pattern in WORKFLOW_GLOBS)]
         for workflow_file in workflow_files:
             try:
-                lines = workflow_file.read_text(encoding="utf-8").splitlines()
-            except UnicodeDecodeError:
+                lines = read_text(workflow_file, root).splitlines()
+            except (OSError, UnicodeError):
                 continue
             if any(PERMISSIONS_BLOCK_LINE.match(line) for line in lines):
                 continue
@@ -341,11 +343,11 @@ class RepositoryGovernanceScanner:
 
     def _check_self_hosted_runners(self, root: Path) -> list[ScanMatch]:
         matches: list[ScanMatch] = []
-        workflow_files = sorted({path for glob in WORKFLOW_GLOBS for path in root.glob(glob)})
+        workflow_files = [path for path in iter_files(root) if any(fnmatchcase(path.relative_to(root).as_posix(), pattern) for pattern in WORKFLOW_GLOBS)]
         for workflow_file in workflow_files:
             try:
-                lines = workflow_file.read_text(encoding="utf-8").splitlines()
-            except UnicodeDecodeError:
+                lines = read_text(workflow_file, root).splitlines()
+            except (OSError, UnicodeError):
                 continue
             for index, line in enumerate(lines, start=1):
                 matched = RUNS_ON_LINE.match(line)

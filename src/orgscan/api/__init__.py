@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from orgscan.redaction import safe_output, redact
+from orgscan.api.limits import RequestBodyLimit, read_upload
+from orgscan.archive_limits import tar_stream, check_zip_directory
+from hashlib import sha256
+
 import tarfile
 import tempfile
 import zipfile
@@ -44,6 +49,9 @@ from orgscan.api.schemas import (
     FindingUpdateRequest,
 )
 from orgscan.api.routes.findings import create_finding_router
+from orgscan.api.routes.dashboard import create_operator_router
+from orgscan.api.routes.reports import create_report_router
+from orgscan.services.dashboard_service import DashboardService
 from orgscan.scanners import get_registry
 from orgscan.services.scanner_service import artifact_scanner_options, scanner_inventory
 from orgscan.services.scan_plan import resolve_scan_plan
@@ -55,9 +63,14 @@ MAX_ARTIFACT_EXTRACTED_BYTES = 25_000_000
 MAX_ARTIFACT_EXTRACTED_FILES = 2_000
 
 
+from orgscan.lifecycle import lifecycle_fields, history_row
+
+
+@safe_output
 def _serialize_finding(finding, *, include_detail: bool = False) -> dict[str, Any]:
     payload = {
         "id": finding.id,
+        **lifecycle_fields(finding),
         "title": finding.title,
         "description": finding.description,
         "category": finding.category,
@@ -93,6 +106,7 @@ def _serialize_finding(finding, *, include_detail: bool = False) -> dict[str, An
     return payload
 
 
+@safe_output
 def _serialize_evidence(evidence) -> dict[str, Any]:
     return {
         "id": evidence.id,
@@ -111,9 +125,12 @@ def _serialize_evidence(evidence) -> dict[str, Any]:
         "related_entity_id": evidence.related_entity_id,
         "source_class": evidence.source_class,
         "query_used": evidence.query_used,
+        "metadata": evidence.metadata_json,
+        "observation_fingerprint": evidence.observation_fingerprint,
     }
 
 
+@safe_output
 def _serialize_relationship(relationship) -> dict[str, Any]:
     return {
         "id": relationship.id,
@@ -125,9 +142,11 @@ def _serialize_relationship(relationship) -> dict[str, Any]:
         "confidence": relationship.confidence,
         "source": relationship.source,
         "evidence_summary": relationship.evidence_summary,
+        "metadata": relationship.metadata_json,
     }
 
 
+@safe_output
 def _serialize_risk_score(risk_score) -> dict[str, Any]:
     return {
         "id": risk_score.id,
@@ -142,6 +161,7 @@ def _serialize_risk_score(risk_score) -> dict[str, Any]:
     }
 
 
+@safe_output
 def _serialize_scan_job(scan_job: ScanJob) -> dict[str, Any]:
     return {
         "id": scan_job.id,
@@ -150,12 +170,14 @@ def _serialize_scan_job(scan_job: ScanJob) -> dict[str, Any]:
         "scanner_name": scan_job.scanner_name,
         "status": scan_job.status,
         "parameters_json": scan_job.parameters_json,
+        "scope_json": scan_job.scope_json,
         "error_message": scan_job.error_message,
         "started_at": scan_job.started_at.isoformat() if scan_job.started_at else None,
         "completed_at": scan_job.completed_at.isoformat() if scan_job.completed_at else None,
     }
 
 
+@safe_output
 def _serialize_tool_run(tool_run: ToolRun) -> dict[str, Any]:
     return {
         "id": tool_run.id,
@@ -188,13 +210,14 @@ def _safe_extract_destination(root: Path, member_name: str) -> Path:
     normalized = Path(member_name.lstrip("/"))
     destination = (root / normalized).resolve()
     if destination != root and root not in destination.parents:
-        raise ValueError(f"Unsafe archive entry: {member_name}")
+        raise ValueError("Unsafe archive entry")
     return destination
 
 
 def _extract_zip_artifact(artifact_path: Path, destination_root: Path) -> int:
     file_count = 0
     total_bytes = 0
+    check_zip_directory(artifact_path, MAX_ARTIFACT_EXTRACTED_FILES)
     with zipfile.ZipFile(artifact_path) as archive:
         for member in archive.infolist():
             if member.is_dir():
@@ -214,8 +237,11 @@ def _extract_zip_artifact(artifact_path: Path, destination_root: Path) -> int:
 def _extract_tar_artifact(artifact_path: Path, destination_root: Path) -> int:
     file_count = 0
     total_bytes = 0
-    with tarfile.open(artifact_path) as archive:
-        for member in archive.getmembers():
+    with tar_stream(artifact_path, MAX_ARTIFACT_EXTRACTED_BYTES + MAX_ARTIFACT_EXTRACTED_FILES * 4096) as stream, tarfile.open(fileobj=stream, mode="r|") as archive:
+        for entry_count, member in enumerate(archive, 1):
+            if entry_count > MAX_ARTIFACT_EXTRACTED_FILES:
+                raise ValueError("Uploaded archive contains too many entries")
+            archive.members.clear()
             if member.isdir():
                 continue
             if not member.isfile():
@@ -236,18 +262,20 @@ def _extract_tar_artifact(artifact_path: Path, destination_root: Path) -> int:
 
 
 class OrgscanApiService:
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, settings: Settings | None = None) -> None:
         self.database_url = database_url
         init_db(self.database_url)
-        self.session_factory = create_session_factory(self.database_url)
-        self.settings = get_settings()
+        from orgscan.storage.authorization import authorized_session_factory
+        self.session_factory = authorized_session_factory(create_session_factory(self.database_url))
+        self.settings = (settings or get_settings()).model_copy(update={"database_url": database_url})
         self.finding_service = FindingService(self.session_factory)
 
     def _access_context_note(self) -> str:
-        return (
-            "The HTML dashboard is currently local-first and does not yet enforce tenant-scoped authentication. "
-            "Use API token controls separately until a dedicated tenant-aware dashboard session flow is added."
-        )
+        from orgscan.security_context import current_auth
+        auth = current_auth.get()
+        if auth is not None and auth.authenticated:
+            return f"Signed in as {auth.name} ({auth.role}); tenant scope: {', '.join(auth.tenants)}."
+        return "Local development mode: authentication is not configured."
 
     def _artifact_scanner_options(self, *, selected: str = "custom-patterns") -> list[dict[str, Any]]:
         return artifact_scanner_options(self.settings, selected=selected)
@@ -276,6 +304,7 @@ class OrgscanApiService:
         category: str | None = None,
         confidence: str | None = None,
         source_tool: str | None = None,
+        lifecycle_state: str | None = None,
         triage_state: str | None = None,
         organization_id: int | None = None,
         domain_id: int | None = None,
@@ -291,7 +320,7 @@ class OrgscanApiService:
     ) -> dict[str, object]:
         findings = self.finding_service.list_findings(FindingQuery(
             limit=limit, status=status, severity=severity, category=category,
-            confidence=confidence, source_tool=source_tool, triage_state=triage_state,
+            confidence=confidence, source_tool=source_tool, triage_state=triage_state, lifecycle_state=lifecycle_state,
             organization_id=organization_id, domain_id=domain_id, repository_id=repository_id,
             account_id=account_id, scan_job_id=scan_job_id, risk_score_min=risk_score_min,
             risk_score_max=risk_score_max, detected_after=detected_after, detected_before=detected_before,
@@ -323,6 +352,8 @@ class OrgscanApiService:
             updated = self.finding_service.update_triage(finding_id, TriageUpdate(**payload.model_dump()))
         except FindingNotFound:
             return None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"finding": _serialize_finding(updated, include_detail=True)}
 
     def _apply_finding_decision(
@@ -357,6 +388,16 @@ class OrgscanApiService:
         repository: str | None,
         provider: str,
     ) -> tuple[int | None, int | None]:
+        from orgscan.security_context import AuthorizationError, current_auth
+        auth = current_auth.get()
+        if auth is not None and "*" not in auth.tenants:
+            org = storage.get_organization_by_name(organization) if organization else None
+            repo = storage.get_repository_by_full_name(repository) if repository else None
+            if (organization and org is None) or (repository and repo is None) or (org is None and repo is None):
+                raise AuthorizationError("Select an existing organization or repository in your tenant scope")
+            if org is not None and repo is not None and repo.organization_id != org.id:
+                raise AuthorizationError("Repository and organization scopes do not match")
+            return org.id if org is not None else repo.organization_id, repo.id if repo is not None else None
         organization_id = None
         repository_id = None
         if organization:
@@ -427,6 +468,7 @@ class OrgscanApiService:
                     results = execute_plan(
                         storage, plan, settings=self.settings,
                         target_label=artifact_name,
+                        canonical_root=Path("/orgscan-artifacts") / sha256(artifact_name.encode()).hexdigest(),
                         command_line=f"api artifact scan {artifact_name} --scanners {','.join(plan.scanners)}",
                         parameters_json={
                             "artifact_name": artifact_name,
@@ -781,6 +823,7 @@ class OrgscanApiService:
         return {
             "finding": _serialize_finding(detail.finding, include_detail=True),
             "evidence": [_serialize_evidence(evidence) for evidence in detail.evidence],
+            "history": [history_row(event) for event in detail.history],
             "risk_scores": [_serialize_risk_score(score) for score in detail.risk_scores],
         }
 
@@ -882,6 +925,7 @@ class OrgscanApiService:
             return render_dashboard_html(
                 summary,
                 filtered_rows,
+                operations=DashboardService(self.session_factory).overview(days=days),
                 trends=finding_trends(storage, days=days),
                 graph=relationship_graph(storage, limit=200),
                 filters={
@@ -1051,9 +1095,17 @@ class OrgscanApiService:
         return 404, {"error": f"Unknown route: {route}"}
 
 
-def create_app(database_url: str) -> FastAPI:
-    service = OrgscanApiService(database_url)
+def create_app(database_url: str, settings: Settings | None = None) -> FastAPI:
+    from orgscan.api.authentication import AuthenticationMiddleware
+    from orgscan.api.routes.auth import create_auth_router
+    from orgscan.services.auth_service import AuthService
+    service = OrgscanApiService(database_url, settings=settings)
     app = FastAPI(title="orgscan", version="0.1.0")
+    auth_service = AuthService(service.settings)
+    app.state.auth_service = auth_service
+    app.add_middleware(AuthenticationMiddleware, auth_service=auth_service)
+    app.add_middleware(RequestBodyLimit)
+    app.include_router(create_auth_router(auth_service))
 
     @app.get("/", include_in_schema=False)
     def root() -> RedirectResponse:
@@ -1072,6 +1124,8 @@ def create_app(database_url: str) -> FastAPI:
         return service._tooling_payload()
 
     app.include_router(create_finding_router(service))
+    app.include_router(create_operator_router(service.session_factory))
+    app.include_router(create_report_router(service.session_factory))
 
     @app.get("/organizations")
     def organizations(
@@ -1188,7 +1242,7 @@ def create_app(database_url: str) -> FastAPI:
     ) -> dict[str, object]:
         return service._scan_uploaded_artifact(
             filename=artifact.filename,
-            content=await artifact.read(),
+            content=await read_upload(artifact),
             scanner_name=scanner,
             profile=profile,
             organization=organization,
@@ -1239,6 +1293,13 @@ def create_app(database_url: str) -> FastAPI:
             raise HTTPException(status_code=404, detail="Finding not found")
         return HTMLResponse(render_finding_detail_html(payload))
 
+    @app.get("/scan-jobs/{scan_job_id}")
+    def scan_job_detail(scan_job_id: int) -> dict[str, object]:
+        payload = service._scan_job_payload(scan_job_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Scan job not found")
+        return payload
+
     @app.get("/dashboard/scan-jobs/{scan_job_id}", response_class=HTMLResponse)
     def dashboard_scan_job_detail(scan_job_id: int) -> HTMLResponse:
         payload = service._scan_job_payload(scan_job_id)
@@ -1262,7 +1323,7 @@ def create_app(database_url: str) -> FastAPI:
         try:
             result = service._scan_uploaded_artifact(
                 filename=artifact.filename,
-                content=await artifact.read(),
+                content=await read_upload(artifact),
                 scanner_name=scanner,
                 profile=profile,
                 organization=organization,
@@ -1285,5 +1346,9 @@ def create_app(database_url: str) -> FastAPI:
     return app
 
 
-def serve_api(database_url: str, host: str = "127.0.0.1", port: int = 8000) -> None:
-    uvicorn.run(create_app(database_url), host=host, port=port, log_level="info")
+def serve_api(database_url: str, host: str = "127.0.0.1", port: int = 8000, *, unsafe_allow_unauthenticated_network: bool = False) -> None:
+    from orgscan.services.server_safety import validate_bind
+    app = create_app(database_url)
+    validate_bind(host, authenticated=app.state.auth_service.enabled(),
+                  unsafe_override=unsafe_allow_unauthenticated_network)
+    uvicorn.run(app, host=host, port=port, log_level="info")

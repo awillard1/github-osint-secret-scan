@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from hashlib import sha256
 import shutil
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,7 @@ from orgscan import __version__
 from orgscan.config import Settings
 from orgscan.scanners.execution import run_scanner_process
 from orgscan.scanners.base import ScanMatch, ScannerMetadata
-from orgscan.scanners.custom_patterns import DEFAULT_PATTERNS, CustomPatternScanner, PatternDefinition, should_skip_pattern_match
+from orgscan.scanners.custom_patterns import DEFAULT_PATTERNS, CustomPatternScanner, PatternDefinition, should_skip_pattern_match, _extract_assigned_secret
 from orgscan.scanners.external import ScannerExecutionError, _not_installed_error
 
 HUNK_HEADER = re.compile(r"^@@ -(?P<old>\d+)(?:,\d+)? \+(?P<new>\d+)(?:,\d+)? @@")
@@ -25,6 +26,7 @@ class GitHistoryPatternScanner:
         version=__version__,
         binary="git",
         supports_history=True,
+        supports_incremental=True,
     )
 
     def __init__(
@@ -61,13 +63,14 @@ class GitHistoryPatternScanner:
             str(repository_root),
             "log",
             *self._revision_args(target_ref=target_ref, scope_json=scope_json),
-            "--format=commit:%H",
+            "--format=commit:%H:%ct",
             "--patch",
             "--unified=0",
             "--no-ext-diff",
+            "--no-textconv",
             "--no-color",
         ]
-        if self.max_commits is not None:
+        if self.max_commits is not None and not (scope_json or {}).get("commit_range"):
             command.append(f"--max-count={self.max_commits}")
         command.extend(["--", relative_target])
 
@@ -80,6 +83,7 @@ class GitHistoryPatternScanner:
     def parse_output(self, output: str, *, repo_root: Path, ref_name: str = "all") -> list[ScanMatch]:
         matches: list[ScanMatch] = []
         commit_sha: str | None = None
+        commit_timestamp: int | None = None
         old_path: Path | None = None
         new_path: Path | None = None
         old_line = 1
@@ -87,7 +91,9 @@ class GitHistoryPatternScanner:
 
         for line in output.splitlines():
             if line.startswith("commit:"):
-                commit_sha = line.removeprefix("commit:").strip() or None
+                parts = line.removeprefix("commit:").strip().split(":",1)
+                commit_sha = parts[0] or None
+                commit_timestamp = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else None
                 old_path = None
                 new_path = None
                 old_line = 1
@@ -123,6 +129,7 @@ class GitHistoryPatternScanner:
                         line_number=new_line,
                         commit_sha=commit_sha,
                         change_type="added",
+                        commit_timestamp=commit_timestamp,
                         ref_name=ref_name,
                     )
                 )
@@ -137,6 +144,7 @@ class GitHistoryPatternScanner:
                         line_number=old_line,
                         commit_sha=commit_sha,
                         change_type="removed",
+                        commit_timestamp=commit_timestamp,
                         ref_name=ref_name,
                     )
                 )
@@ -156,6 +164,7 @@ class GitHistoryPatternScanner:
         commit_sha: str,
         change_type: str,
         ref_name: str,
+        commit_timestamp: int | None = None,
     ) -> list[ScanMatch]:
         results: list[ScanMatch] = []
         for pattern, compiled in self._patterns:
@@ -183,6 +192,7 @@ class GitHistoryPatternScanner:
                             "commit": commit_sha,
                             "commit_sha": commit_sha,
                             "change_type": change_type,
+                            "commit_timestamp": commit_timestamp,
                         },
                         metadata={
                             "path": str(path),
@@ -190,7 +200,9 @@ class GitHistoryPatternScanner:
                             "commit": commit_sha,
                             "commit_sha": commit_sha,
                             "change_type": change_type,
+                            "commit_timestamp": commit_timestamp,
                             "ref_name": ref_name,
+                            **({"secret_digest": sha256((_extract_assigned_secret(value) or value).encode()).hexdigest()} if pattern.name != "private-key" else {}),
                         },
                     )
                 )
@@ -228,7 +240,20 @@ class GitHistoryPatternScanner:
 
     @staticmethod
     def _revision_args(*, target_ref: str | None, scope_json: dict[str, Any] | None) -> list[str]:
+        scope = scope_json or {}
+        if scope.get("commit_range"):
+            value = str(scope["commit_range"])
+            if not re.fullmatch(r"[0-9a-f]{40,64}\.\.[0-9a-f]{40,64}", value):
+                raise ScannerExecutionError("Invalid history commit range")
+            return [value]
+        if scope.get("commit_oid"):
+            value = str(scope["commit_oid"])
+            if not re.fullmatch(r"[0-9a-f]{40,64}", value):
+                raise ScannerExecutionError("Invalid history commit OID")
+            return [value]
         if target_ref and target_ref != "workspace":
+            if target_ref.startswith('-'):
+                raise ScannerExecutionError("Invalid history target ref")
             return [target_ref]
         history_mode = str((scope_json or {}).get("history_mode") or "").strip().lower()
         if history_mode == "current-ref":

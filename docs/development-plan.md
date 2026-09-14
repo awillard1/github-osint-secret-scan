@@ -106,6 +106,8 @@ Exit:
 
 ## Phase 5 — Incremental branch/history orchestration
 
+Status: implemented; see [incremental scans](incremental-scans.md) for policies, exact coverage and conservative fallback behavior.
+
 Goal: efficiently select what needs scanning.
 
 Deliverables:
@@ -121,6 +123,8 @@ Exit:
 - a scan can explain exactly what refs/range it covered.
 
 ## Phase 6 — YARA scanner
+
+Status: implemented; see [YARA](yara.md) for metadata, redaction and readiness limits.
 
 Goal: add signature-based content detection through the common scanner contract.
 
@@ -139,6 +143,8 @@ Exit:
 
 ## Phase 7 — Rule-driven heuristic scanner
 
+Status: implemented; see [heuristic rules](heuristic-rules.md).
+
 Goal: move organization-specific detection logic into validated data-driven rules.
 
 Deliverables:
@@ -156,6 +162,8 @@ Exit:
 
 ## Phase 8 — Finding correlation and evidence deduplication
 
+Status: implemented; see [finding correlation](finding-correlation.md) for identity rules and legacy upgrade limits.
+
 Goal: one issue with multiple evidence sources instead of duplicate issues.
 
 Deliverables:
@@ -171,6 +179,8 @@ Exit:
 - repeated scans and multiple tools do not inflate finding counts incorrectly.
 
 ## Phase 9 — GitHub relationship intelligence
+
+Status: implemented for bounded GitHub API observations; see [relationship intelligence](github-relationships.md).
 
 Goal: make discovered users/repos/forks/commits explainable relationships.
 
@@ -188,6 +198,8 @@ Exit:
 
 ## Phase 10 — GitHub public search intelligence
 
+Status: implemented for bounded literal queries; see [GitHub public search](github-search.md).
+
 Goal: discover organization-linked public exposure outside owned repositories.
 
 Deliverables:
@@ -203,6 +215,8 @@ Exit:
 - search results feed the same graph/finding model, not a side database.
 
 ## Phase 11 — Interactive authentication and user administration
+
+Status: implemented using existing tokens and user/session tables; see [browser authentication](browser-auth.md).
 
 Goal: complete browser authentication using existing authorization concepts.
 
@@ -222,6 +236,8 @@ Exit:
 
 ## Phase 12 — Finding lifecycle and regression detection
 
+Status: implemented; see [finding lifecycle](finding-lifecycle.md).
+
 Goal: preserve remediation history.
 
 Deliverables:
@@ -237,6 +253,8 @@ Exit:
 - first seen / last seen / remediated / regressed are explainable.
 
 ## Phase 13 — Operator dashboard redesign
+
+Status: implemented; see [operator dashboard](operator-dashboard.md).
 
 Goal: optimize for decisions, not database browsing.
 
@@ -254,6 +272,8 @@ Avoid a frontend framework rewrite unless the server-rendered approach demonstra
 
 ## Phase 14 — Job reliability
 
+Status: implemented with conservative recovery limits; see [job reliability](job-reliability.md).
+
 Goal: reliable long-running scheduled/queued execution.
 
 Deliverables:
@@ -270,6 +290,8 @@ Retain the existing RQ and database queue backends until requirements justify a 
 
 ## Phase 15 — Reporting
 
+Status: implemented; see [reporting](reporting.md).
+
 Deliverables:
 
 - SARIF;
@@ -279,6 +301,8 @@ Deliverables:
 - report adapters consume canonical findings/evidence.
 
 ## Phase 16 — Doctor and release hardening
+
+Status: implemented diagnostics and packaging hardening; [release readiness](release-readiness.md) lists unverified deployment/security requirements. This does not declare a 1.0 release.
 
 Add:
 

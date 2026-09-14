@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
+from orgscan import processes as subprocess
 import tempfile
 from base64 import b64encode
 from dataclasses import dataclass
@@ -17,6 +17,7 @@ import dns.exception
 import dns.resolver
 
 from orgscan.config import Settings
+from orgscan.services.job_policy import Failure, classify_failure
 from orgscan.rate_limit import wait_for_rate_limit
 from orgscan.repositories import Storage
 
@@ -26,10 +27,24 @@ class DomainProviderResult:
     exposures: list[str]
     identity_correlations: list[str]
     warnings: list[str] | None = None
+    failure: Failure | None = None
 
 
 class DomainProviderError(RuntimeError):
-    pass
+    def __init__(self, message, *, failure=None):
+        self.failure = failure
+        super().__init__(failure.message if failure is not None else message)
+
+
+def _run_provider_process(command, **kwargs):
+    try:
+        return subprocess.run(command, **kwargs)
+    except subprocess.TimeoutExpired:
+        raise DomainProviderError('Provider process timed out', failure=Failure('process_timeout',True,'Provider process timed out')) from None
+    except subprocess.OutputLimitExceeded:
+        raise DomainProviderError('Provider process output exceeded the allowed limit') from None
+    except OSError:
+        raise DomainProviderError('Provider process could not be started') from None
 
 
 class DomainIntelligenceProvider:
@@ -65,22 +80,37 @@ def _request_json(
     data: bytes | None = None,
     timeout: int = 15,
     expected: type[list[Any]] | type[dict[str, Any]] | None = None,
+    response_metadata: dict[str, Any] | None = None,
 ) -> object:
     request = Request(url, headers=headers or {}, method=method, data=data)
     try:
         wait_for_rate_limit(settings, scope)
         with urlopen(request, timeout=timeout) as response:
+            if response_metadata is not None:
+                response_metadata.update(_response_metadata(response))
             payload = json.loads(response.read().decode("utf-8") or "null")
     except HTTPError as exc:
-        raise DomainProviderError(f"request failed with status {exc.code}") from exc
+        if response_metadata is not None:
+            response_metadata.update(_response_metadata(exc))
+        raise DomainProviderError(f"request failed with status {exc.code}", failure=classify_failure(exc)) from None
     except URLError as exc:
-        raise DomainProviderError(f"request failed: {exc.reason}") from exc
+        raise DomainProviderError(f"request failed: {exc.reason}", failure=classify_failure(exc)) from None
     except json.JSONDecodeError as exc:
-        raise DomainProviderError("provider returned invalid JSON output") from exc
+        raise DomainProviderError("provider returned invalid JSON output", failure=classify_failure(exc)) from None
     if expected is not None and not isinstance(payload, expected):
         expected_name = "array" if expected is list else "object"
         raise DomainProviderError(f"provider response must be a JSON {expected_name}")
     return payload
+
+
+def _response_metadata(response) -> dict[str, Any]:
+    headers = getattr(response, "headers", {})
+    selected = ("X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "Retry-After")
+    return {
+        "http_status": getattr(response, "status", getattr(response, "code", 200)),
+        "rate_limit": {key.lower(): headers.get(key) for key in selected if headers.get(key) is not None},
+        "has_next": 'rel="next"' in headers.get("Link", ""),
+    }
 
 
 class LocalMetadataDomainProvider(DomainIntelligenceProvider):
@@ -150,14 +180,15 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
         if binary is None:
             raise DomainProviderError("subfinder is not installed; configure ORGSCAN_SUBFINDER_BINARY or install the ProjectDiscovery binary.")
 
-        completed = subprocess.run(
+        completed = _run_provider_process(
             [binary, "-d", domain_name, "-silent", "-oJ"],
             check=False,
             capture_output=True,
             text=True,
+            timeout=settings.http_timeout_seconds,
         )
         if completed.returncode != 0:
-            raise DomainProviderError(completed.stderr.strip() or "subfinder execution failed")
+            raise DomainProviderError("subfinder execution failed; review provider readiness")
 
         results: list[dict[str, Any]] = []
         for line in completed.stdout.splitlines():
@@ -166,7 +197,7 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
             try:
                 item = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise DomainProviderError("subfinder produced invalid JSON output") from exc
+                raise DomainProviderError("subfinder produced invalid JSON output", failure=classify_failure(exc)) from None
             if isinstance(item, dict):
                 results.append(item)
         return results
@@ -183,16 +214,17 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
             handle.write("\n".join(hosts) + "\n")
             input_path = Path(handle.name)
         try:
-            completed = subprocess.run(
+            completed = _run_provider_process(
                 [binary, "-silent", "-json", "-l", str(input_path)],
                 check=False,
                 capture_output=True,
                 text=True,
+                timeout=settings.http_timeout_seconds,
             )
         finally:
             input_path.unlink(missing_ok=True)
         if completed.returncode != 0:
-            raise DomainProviderError(completed.stderr.strip() or "httpx execution failed")
+            raise DomainProviderError("httpx execution failed; review provider readiness")
 
         results: list[dict[str, Any]] = []
         for line in completed.stdout.splitlines():
@@ -201,7 +233,7 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
             try:
                 item = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise DomainProviderError("httpx produced invalid JSON output") from exc
+                raise DomainProviderError("httpx produced invalid JSON output", failure=classify_failure(exc)) from None
             if isinstance(item, dict):
                 results.append(item)
         return results
@@ -298,11 +330,11 @@ class CrtShDomainProvider(DomainIntelligenceProvider):
             with urlopen(request, timeout=settings.http_timeout_seconds) as response:
                 payload = json.loads(response.read().decode("utf-8") or "[]")
         except HTTPError as exc:
-            raise DomainProviderError(f"crt.sh request failed with status {exc.code}") from exc
+            raise DomainProviderError(f"crt.sh request failed with status {exc.code}", failure=classify_failure(exc)) from None
         except URLError as exc:
-            raise DomainProviderError(f"crt.sh request failed: {exc.reason}") from exc
+            raise DomainProviderError(f"crt.sh request failed: {exc.reason}", failure=classify_failure(exc)) from None
         except json.JSONDecodeError as exc:
-            raise DomainProviderError("crt.sh returned invalid JSON output") from exc
+            raise DomainProviderError("crt.sh returned invalid JSON output", failure=classify_failure(exc)) from None
 
         if not isinstance(payload, list):
             raise DomainProviderError("crt.sh response must be a JSON array")
@@ -368,14 +400,15 @@ class WhoisDomainProvider(DomainIntelligenceProvider):
         binary = _resolve_binary(settings.whois_binary)
         if binary is None:
             raise DomainProviderError("whois is not installed; configure ORGSCAN_WHOIS_BINARY or install the whois client.")
-        completed = subprocess.run(
+        completed = _run_provider_process(
             [binary, domain_name],
             check=False,
             capture_output=True,
             text=True,
+            timeout=settings.http_timeout_seconds,
         )
         if completed.returncode != 0:
-            raise DomainProviderError(completed.stderr.strip() or "whois execution failed")
+            raise DomainProviderError("whois execution failed; review provider readiness")
         return completed.stdout
 
     @staticmethod
@@ -543,9 +576,9 @@ class SecurityTxtDomainProvider(DomainIntelligenceProvider):
             except HTTPError as exc:
                 if exc.code == 404:
                     continue
-                raise DomainProviderError(f"security.txt request failed with status {exc.code}") from exc
+                raise DomainProviderError(f"security.txt request failed with status {exc.code}", failure=classify_failure(exc)) from None
             except URLError as exc:
-                raise DomainProviderError(f"security.txt request failed: {exc.reason}") from exc
+                raise DomainProviderError(f"security.txt request failed: {exc.reason}", failure=classify_failure(exc)) from None
         return None, None
 
     @staticmethod
@@ -644,14 +677,19 @@ class GitHubSearchDomainProvider(DomainIntelligenceProvider):
             "Accept": "application/vnd.github+json",
         }
         if settings.github_token:
-            headers["Authorization"] = f"******"
+            headers["Authorization"] = f"Bearer {settings.github_token}"
+        self.last_response_metadata = {}
+        paced_settings = settings.model_copy(update={
+            "outbound_min_interval_seconds": max(7.0, settings.outbound_min_interval_seconds),
+        })
         return _request_json(
             f"{settings.github_api_base_url.rstrip('/')}{path}",
-            settings=settings,
-            scope="github-api",
+            settings=paced_settings,
+            scope="github-search",
             headers=headers,
             timeout=settings.http_timeout_seconds,
             expected=expected,
+            response_metadata=self.last_response_metadata,
         )
 
     def _search_repositories(self, domain_name: str) -> list[dict[str, Any]]:
@@ -672,109 +710,17 @@ class GitHubSearchDomainProvider(DomainIntelligenceProvider):
         items = payload.get("items") if isinstance(payload, dict) else None
         return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
 
+    def search_target(self, storage: Storage, value: str, *, target_type: str = "domain", tenant_key: str | None = None) -> DomainProviderResult:
+        from orgscan.services.github_search import GitHubSearchService
+        service = GitHubSearchService(
+            self._require_settings(), self._github_request_json,
+            lambda: getattr(self, "last_response_metadata", {}),
+        )
+        result = service.search(storage, value, target_type=target_type, tenant_key=tenant_key)
+        return DomainProviderResult(result.exposures, result.accounts, result.warnings, result.failure)
+
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
-        domain_record, _ = storage.get_or_create_domain(domain_name)
-        exposures: list[str] = []
-        identity_correlations: list[str] = []
-
-        existing_sources = set(domain_record.discovery_sources)
-        existing_sources.add("github-search")
-        domain_record.discovery_sources = sorted(existing_sources)
-
-        for item in self._search_repositories(domain_name):
-            full_name = str(item.get("full_name") or "unknown/repository").strip()
-            description = str(item.get("description") or "").strip()
-            owner = item.get("owner") if isinstance(item.get("owner"), dict) else {}
-            owner_login = str(owner.get("login") or "").strip()
-            summary = f"GitHub repository mentions {domain_name}: {full_name}"
-            if description:
-                summary = f"{summary} description={description}"
-            storage.create_domain_exposure(
-                domain_record.id,
-                source="github-search",
-                source_name=self.name,
-                result_summary=summary,
-                normalized_hash=self._hash("github-repo", domain_name, full_name),
-                source_class="free",
-                confidence="likely",
-                severity="low",
-                query_used=domain_name,
-                evidence_url=str(item.get("html_url") or "") or None,
-            )
-            exposures.append(summary)
-            if owner_login:
-                storage.create_identity_correlation(
-                    domain_record.id,
-                    source="github-search",
-                    relation_type="github-repository-domain-reference",
-                    username=owner_login,
-                    confidence="heuristic",
-                    evidence_reference=full_name,
-                )
-                identity_correlations.append(owner_login)
-
-        for item in self._search_code(domain_name):
-            repository = item.get("repository") if isinstance(item.get("repository"), dict) else {}
-            full_name = str(repository.get("full_name") or "unknown/repository").strip()
-            owner = repository.get("owner") if isinstance(repository.get("owner"), dict) else {}
-            owner_login = str(owner.get("login") or "").strip()
-            path = str(item.get("path") or "unknown").strip()
-            summary = f"GitHub code search match for {domain_name}: {full_name}:{path}"
-            storage.create_domain_exposure(
-                domain_record.id,
-                source="github-search",
-                source_name=self.name,
-                result_summary=summary,
-                normalized_hash=self._hash("github-code", domain_name, full_name, path),
-                source_class="free",
-                confidence="likely",
-                severity="medium",
-                query_used=f'"{domain_name}" in:file',
-                evidence_url=str(item.get("html_url") or "") or None,
-            )
-            exposures.append(summary)
-            if owner_login:
-                storage.create_identity_correlation(
-                    domain_record.id,
-                    source="github-search",
-                    relation_type="github-code-domain-reference",
-                    username=owner_login,
-                    confidence="heuristic",
-                    evidence_reference=f"{full_name}:{path}",
-                )
-                identity_correlations.append(owner_login)
-
-        for item in self._search_issues(domain_name):
-            title = str(item.get("title") or "untitled issue").strip()
-            state = str(item.get("state") or "open").strip()
-            user = item.get("user") if isinstance(item.get("user"), dict) else {}
-            user_login = str(user.get("login") or "").strip()
-            summary = f"GitHub issue mentions {domain_name}: {title} state={state}"
-            storage.create_domain_exposure(
-                domain_record.id,
-                source="github-search",
-                source_name=self.name,
-                result_summary=summary,
-                normalized_hash=self._hash("github-issue", domain_name, title, state),
-                source_class="free",
-                confidence="heuristic",
-                severity="low",
-                query_used=f'"{domain_name}" type:issue',
-                evidence_url=str(item.get("html_url") or "") or None,
-            )
-            exposures.append(summary)
-            if user_login:
-                storage.create_identity_correlation(
-                    domain_record.id,
-                    source="github-search",
-                    relation_type="github-issue-domain-reference",
-                    username=user_login,
-                    confidence="heuristic",
-                    evidence_reference=title,
-                )
-                identity_correlations.append(user_login)
-
-        return DomainProviderResult(exposures=exposures, identity_correlations=identity_correlations, warnings=[])
+        return self.search_target(storage, domain_name)
 
 
 class HaveIBeenPwnedDomainProvider(DomainIntelligenceProvider):
@@ -1021,7 +967,7 @@ class DnsDomainProvider(DomainIntelligenceProvider):
         ):
             return []
         except dns.exception.DNSException as exc:
-            raise DomainProviderError(f"dns lookup failed for {name} {record_type}: {exc}") from exc
+            raise DomainProviderError(f"dns lookup failed for {name} {record_type}: {exc}", failure=classify_failure(exc)) from None
 
         results: list[str] = []
         for answer in answers:

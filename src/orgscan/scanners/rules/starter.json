@@ -1,0 +1,88 @@
+[
+  {
+    "id": "internal-hostname",
+    "category": "infrastructure-exposure",
+    "severity": "medium",
+    "confidence": "heuristic",
+    "regex": "\\b(?:[a-zA-Z][a-zA-Z0-9-]*\\.)+(?:corp|internal)\\b",
+    "title": "Internal hostname reference",
+    "description": "Internal hostname reference found in an artifact.",
+    "remediation": "Review whether internal service names should be public.",
+    "include": [
+      "*"
+    ],
+    "exclude": [
+      "*.min.js",
+      "*.lock"
+    ]
+  },
+  {
+    "id": "credential-connection-string",
+    "category": "secret",
+    "severity": "high",
+    "confidence": "heuristic",
+    "regex": "\\b(?:postgres(?:ql)?|mysql|mongodb(?:\\+srv)?)://[^\\s:/]+:(?P<value>[^\\s@]{8,})@[^\\s/]+",
+    "title": "Credential-bearing connection string",
+    "description": "Credential-bearing connection string found in an artifact.",
+    "remediation": "Rotate embedded credentials and use a managed secret reference.",
+    "include": [
+      "*"
+    ],
+    "exclude": [
+      "*.min.js",
+      "*.lock"
+    ]
+  },
+  {
+    "id": "private-key-config",
+    "category": "secret",
+    "severity": "high",
+    "confidence": "heuristic",
+    "regex": "-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----",
+    "title": "Private key material",
+    "description": "Private key material found in an artifact.",
+    "remediation": "Rotate the complete key and remove it from public artifacts.",
+    "include": [
+      "*"
+    ],
+    "exclude": [
+      "*.min.js",
+      "*.lock"
+    ]
+  },
+  {
+    "id": "cloud-account-resource",
+    "category": "infrastructure-exposure",
+    "severity": "medium",
+    "confidence": "heuristic",
+    "regex": "\\barn:aws:[a-z0-9-]+:[a-z0-9-]*:\\d{12}:[A-Za-z0-9_:/.-]+",
+    "title": "Cloud account resource identifier",
+    "description": "Cloud account resource identifier found in an artifact.",
+    "remediation": "Review whether account resource identifiers should be public.",
+    "include": [
+      "*"
+    ],
+    "exclude": [
+      "*.min.js",
+      "*.lock"
+    ]
+  },
+  {
+    "id": "privileged-deployment",
+    "category": "configuration",
+    "severity": "medium",
+    "confidence": "heuristic",
+    "regex": "(?i)^\\s*privileged\\s*:\\s*true\\s*(?:#.*)?$",
+    "title": "Privileged deployment configuration",
+    "description": "Privileged deployment configuration found in an artifact.",
+    "remediation": "Review whether privileged container execution is required.",
+    "include": [
+      "*.yaml",
+      "*.yml"
+    ],
+    "exclude": [
+      "*.min.js",
+      "*.lock"
+    ]
+  }
+]
