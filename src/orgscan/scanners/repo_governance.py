@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from fnmatch import fnmatchcase
 from orgscan.scanners.files import iter_files, read_text
+from dataclasses import replace
 from pathlib import Path
 
 from orgscan import __version__
@@ -53,7 +54,8 @@ class RepositoryGovernanceScanner:
         matches.extend(self._check_broad_write_permissions(root))
         matches.extend(self._check_missing_workflow_permissions(root))
         matches.extend(self._check_self_hosted_runners(root))
-        return matches
+        # These observations need rule/location metadata, not workflow source lines.
+        return [replace(match, snippet="<redacted:governance>") for match in matches]
 
     def _check_codeowners(self, root: Path) -> list[ScanMatch]:
         if any((root / location).exists() for location in CODEOWNERS_LOCATIONS):

@@ -341,7 +341,7 @@ class Storage:
             incoming_job = self.get_scan_job(finding.scan_job_id) if finding.scan_job_id else None
             observed = incoming_job.started_at or incoming_job.created_at if incoming_job else None
             if (existing.lifecycle_state == "REMEDIATED" and existing.remediated_at and observed
-                    and self._regression_evidence_is_new(existing, finding)
+                    and self._regression_evidence_is_new(existing, finding, incoming_job)
                     and finding.scan_job_id != previous_job_id
                     and self._normalize_datetime_filter(observed) > self._normalize_datetime_filter(existing.remediated_at)):
                 self._transition(existing, "REGRESSED", automatic=True, scan_job_id=finding.scan_job_id,
@@ -364,10 +364,17 @@ class Storage:
         self.session.flush()
         return record
 
-    def _regression_evidence_is_new(self, existing, finding):
+    def _regression_evidence_is_new(self, existing, finding, incoming_job=None):
+        # Import time is not observation time; saved reports cannot prove that
+        # remediation failed, even when their original timestamp is absent.
+        if incoming_job and (incoming_job.parameters_json or {}).get('ingested'):
+            return False
         metadata = finding.metadata
-        commit = metadata.get('commit_sha') or metadata.get('commit')
+        commit = (metadata.get('commit_sha') or metadata.get('commit')
+                  or finding.raw_payload.get('commit_sha') or finding.raw_payload.get('commit'))
         if not commit:
+            if finding.source_tool == 'git-history-patterns':
+                return False
             return True  # Current tree observation, subject to job chronology.
         if metadata.get('change_type') != 'added':
             return False

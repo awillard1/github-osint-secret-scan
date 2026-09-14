@@ -12,6 +12,7 @@ from typing import Any
 
 from orgscan.config import Settings
 from orgscan.scanners.execution import run_scanner_process
+from orgscan.scanners.files import read_report, validate_scan_target
 from orgscan.models import ConfidenceLevel, SeverityLevel
 from orgscan.scanners.base import ScanMatch, ScannerMetadata, ScannerReadiness, ScannerExecutionError, not_installed_error as _not_installed_error
 
@@ -52,6 +53,7 @@ class GitleaksScanner:
         self.binary = settings.gitleaks_binary if settings is not None else self.name
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
+        target = validate_scan_target(target, external=True)
         if not shutil.which(self.binary):
             raise _not_installed_error(self.binary)
 
@@ -71,13 +73,14 @@ class GitleaksScanner:
                     "--report-path",
                     str(report_path),
                 ],
+                output_files=(report_path,),
                 check=False,
                 capture_output=True,
                 text=True,
             )
             if completed.returncode not in (0, 1):
                 raise ScannerExecutionError(f"gitleaks execution failed (exit status {completed.returncode})")
-            content = report_path.read_text(encoding="utf-8").strip() or "[]"
+            content = read_report(report_path).strip() or "[]"
             return self.parse_output(json.loads(content))
         finally:
             report_path.unlink(missing_ok=True)
@@ -118,7 +121,7 @@ class GitleaksScanner:
     @classmethod
     def load_report(cls, report_path: Path) -> list[ScanMatch]:
         try:
-            payload = json.loads(report_path.read_text(encoding="utf-8").strip() or "[]")
+            payload = json.loads(read_report(report_path).strip() or "[]")
         except json.JSONDecodeError as exc:
             raise ScannerExecutionError("gitleaks report contained invalid JSON") from exc
         if not isinstance(payload, list):
@@ -143,6 +146,7 @@ class DetectSecretsScanner:
         self.binary = settings.detect_secrets_binary if settings is not None else self.name
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
+        target = validate_scan_target(target, external=True)
         if not shutil.which(self.binary):
             raise _not_installed_error(self.binary)
 
@@ -207,7 +211,7 @@ class DetectSecretsScanner:
     @classmethod
     def load_report(cls, report_path: Path) -> list[ScanMatch]:
         try:
-            payload = json.loads(report_path.read_text(encoding="utf-8").strip() or "{}")
+            payload = json.loads(read_report(report_path).strip() or "{}")
         except json.JSONDecodeError as exc:
             raise ScannerExecutionError("detect-secrets report contained invalid JSON") from exc
         if not isinstance(payload, dict):
@@ -247,6 +251,7 @@ class SemgrepScanner:
                                 warnings=('Local rules configured; runtime rule compatibility is not certified',))
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
+        target = validate_scan_target(target, external=True)
         if not shutil.which(self.binary):
             raise _not_installed_error(self.binary)
 
@@ -313,7 +318,7 @@ class SemgrepScanner:
     @classmethod
     def load_report(cls, report_path: Path) -> list[ScanMatch]:
         try:
-            payload = json.loads(report_path.read_text(encoding="utf-8").strip() or "{}")
+            payload = json.loads(read_report(report_path).strip() or "{}")
         except json.JSONDecodeError as exc:
             raise ScannerExecutionError("semgrep report contained invalid JSON") from exc
         if not isinstance(payload, dict):
@@ -338,6 +343,7 @@ class TruffleHogScanner:
         self.binary = settings.trufflehog_binary if settings is not None else self.name
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
+        target = validate_scan_target(target, external=True)
         if not shutil.which(self.binary):
             raise _not_installed_error(self.binary)
 
@@ -395,7 +401,7 @@ class TruffleHogScanner:
     @classmethod
     def load_report(cls, report_path: Path) -> list[ScanMatch]:
         results: list[dict[str, Any]] = []
-        for line in report_path.read_text(encoding="utf-8").splitlines():
+        for line in read_report(report_path).splitlines():
             if not line.strip():
                 continue
             try:

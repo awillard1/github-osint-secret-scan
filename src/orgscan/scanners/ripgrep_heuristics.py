@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orgscan.config import Settings
+from orgscan.redaction import redact
+from orgscan.scanners.files import validate_scan_target
 from orgscan.scanners.execution import run_scanner_process
 from orgscan.models import ConfidenceLevel, SeverityLevel
 from orgscan.scanners.base import ScanMatch, ScannerMetadata
@@ -43,6 +45,7 @@ class RipgrepHeuristicScanner:
         self.binary = settings.rg_binary if settings is not None else "rg"
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
+        target = validate_scan_target(target, external=True)
         if not shutil.which(self.binary):
             raise _not_installed_error(self.binary)
 
@@ -140,6 +143,7 @@ class RipgrepHeuristicScanner:
             for submatch in submatches:
                 match_info = submatch.get("match") if isinstance(submatch, dict) else {}
                 match_text = str(match_info.get("text") or "").strip()
+                match_text = redact(match_text, secrets_from={"source_line": line})
                 results.append(
                     ScanMatch(
                         path=path,
@@ -151,7 +155,7 @@ class RipgrepHeuristicScanner:
                         severity=definition.severity,
                         confidence=definition.confidence,
                         indicator=match_text or definition.name,
-                        snippet=line,
+                        snippet="<redacted:ripgrep>",
                         remediation_hint=definition.remediation_hint,
                         raw_payload={"heuristic": definition.name, "match": match_text},
                         metadata={"path": str(path), "heuristic": definition.name},

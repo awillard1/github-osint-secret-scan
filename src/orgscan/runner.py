@@ -48,7 +48,8 @@ def execute_scan(
 ) -> ScanExecutionResult:
     scanner = get_scanner(scanner_name, settings=settings) if settings is not None else get_scanner(scanner_name)
     scanner_impl = ScannerAdapter(scanner, scanner_id=scanner_name, settings=settings)
-    resolved_target = target_path.resolve()
+    from orgscan.scanners.files import validate_scan_target
+    resolved_target = validate_scan_target(target_path)
     effective_target_id = target_id or target_label or str(resolved_target)
     effective_scope = scope_json or {"mode": target_type}
     effective_command_line = command_line or f"orgscan scan path {resolved_target} --scanner {scanner_name}"
@@ -225,7 +226,7 @@ def _persist_matches(
     from orgscan.services.correlation import finding_identity, evidence_identity, detector_id
     finding_ids: list[int] = []
     for match in matches:
-        safe = redact({"title":match.title,"description":match.description,"raw_payload":match.raw_payload,"metadata":match.metadata,"snippet":match.snippet,"indicator":match.indicator,"remediation_hint":match.remediation_hint})
+        safe = redact({"path":match.path,"title":match.title,"description":match.description,"raw_payload":match.raw_payload,"metadata":match.metadata,"snippet":match.snippet,"indicator":match.indicator,"remediation_hint":match.remediation_hint})
         match = replace(match, **safe)
         identity = finding_identity(
             match, scanner_name, organization_id=organization_id, repository_id=repository_id

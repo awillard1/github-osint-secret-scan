@@ -52,6 +52,8 @@ class GitHistoryPatternScanner:
         target_ref: str | None = None,
         scope_json: dict[str, Any] | None = None,
     ) -> list[ScanMatch]:
+        from orgscan.scanners.files import validate_scan_target
+        target = validate_scan_target(target)
         if not shutil.which(self.git_binary):
             raise _not_installed_error(self.git_binary)
 

@@ -55,13 +55,15 @@ Before upgrading an existing installation:
    separately, with restricted access. Test restoring to a separate location.
 3. Install the reviewed wheel in the intended virtual environment.
 4. Run `orgscan doctor --json`; an old schema should report an upgrade requirement.
-5. Run `orgscan init-db` explicitly, then doctor again. Head is `20260911_0007`.
+5. Run `orgscan init-db` explicitly, then doctor again. Head is `20260911_0008`.
    Migration 0006 adds evidence identity; 0007 maps lifecycle and records inferred
-   legacy timestamps. Neither reconstructs unavailable historical evidence.
+   legacy timestamps. Migration 0008 adds durable queue execution identities,
+   quarantines duplicate legacy executions, and sanitizes legacy evidence/diagnostics.
+   Redaction is irreversible; these migrations do not reconstruct unavailable history.
 6. Validate authorized reads, a local test scan and reporting before restarting workers.
 
 Rollback should restore a tested matching backup and application version. Downgrading
-0007 removes lifecycle/history fields; it is not a lossless rollback strategy.
+0008 cannot restore redacted data, and downgrading 0007 removes lifecycle/history fields; it is not a lossless rollback strategy.
 
 ## Local smoke and validation
 
@@ -97,12 +99,18 @@ Phase 16 validation: **309 tests passed**, with two existing dependency deprecat
   For RQ, run doctor with `--require-queue`, restrict Redis access and protect its serialized
   worker configuration. Validate scheduled retries against the actual Redis deployment.
 - [ ] Validate live scanner/provider versions, token permissions, quota behavior and
-  custom rule updates. Semgrep auto configuration with metrics disabled is a known
-  runtime compatibility risk; doctor warns without silently enabling telemetry.
-- [ ] Review existing provider subprocess timeout coverage and raw upstream diagnostics.
-  Built-in scanner execution is bounded, but older enrichment adapters still need hardening.
-- [ ] Complete adversarial archive/symlink/upload coverage, large-data limits and concurrent
-  tenant/lifecycle/queue race testing. POSIX cache locks are local, not distributed leases.
+  custom rule updates. Semgrep requires `ORGSCAN_SEMGREP_RULES_PATH` pointing to a
+  local rules file and no longer uses `--config auto`; telemetry stays off unless
+  `ORGSCAN_SEMGREP_METRICS` is explicitly enabled. Runtime rule compatibility still
+  needs validation against the installed binary.
+- [x] Legacy WHOIS/subfinder/httpx processes use finite time/output limits and safe
+  diagnostic messages. JSON/crt.sh/security.txt transport and decoding failures are
+  normalized without raw exception messages; timeout failures retain retryability.
+- [x] Adversarial upload/archive, no-follow file reads, output-flood, evidence,
+  rediscovery ownership, historical regression and queue publication/replay tests.
+- [ ] Validate production-scale resource use and deployment concurrency. External scanner
+  preflight assumes targets are not concurrently modified by another local process.
+  POSIX cache locks are local, not distributed leases.
 - [ ] Validate PostgreSQL, full Unicode PDF fonts and target code-scanning-host SARIF ingestion.
 - [ ] Add password/MFA/SSO or login-abuse controls if required by the deployment threat model.
 - [ ] Review dependencies/security advisories and run deployment-specific security testing
@@ -111,3 +119,67 @@ Phase 16 validation: **309 tests passed**, with two existing dependency deprecat
 Review legacy findings/free-form operator text before sharing reports. Raw source
 material is excluded from new reports, but arbitrary secrets in third-party metadata
 cannot be recognized reliably. See phase-specific documents for additional limits.
+
+
+## Post-Phase-16 recovery audit (2026-09-14)
+
+Recovery started on `codex/architecture-foundation` at `03cc9fa` (`fix`), with no
+modified or untracked files and empty staged/unstaged diffs. The interrupted fixes
+were already committed in that commit; their presence did not establish completion.
+The recovery report was presented before implementation. Baseline: 91 focused tests
+and 360 full-suite tests passed; `git diff --check` passed. Synthetic probes then
+reproduced gaps in items 1, 3, 4, 5 and 8, which are the only implementations changed
+by this recovery. Completed ownership, artifact identity, queue, Semgrep and server
+bind work was retained. No MEDIUM/LOW findings were addressed.
+
+The following statuses describe implementation of the ten scoped audit fixes, not
+production certification. `recovery` below means
+`tests/security/test_release_recovery.py`; other test names are under
+`tests/security/` unless noted.
+
+| Item | Recovery status | Final implementation | Changed files in this recovery | Coverage | Remaining risk |
+| --- | --- | --- | --- | --- | --- |
+| 1. Raw scanner evidence | PARTIALLY IMPLEMENTED | COMPLETE | `redaction.py`, `runner.py`; scanners `ripgrep_heuristics.py`, `repo_governance.py`, `yara_scanner.py` | `recovery`: copied/nested source values, credential-bearing paths and neighboring credentials; `test_evidence_and_tenancy.py`; `test_failures_and_upgrade.py`; report tests | Arbitrary unlabelled operator/plugin text cannot be reliably classified as secret. Review legacy exports/backups; masking does not rotate exposed credentials. |
+| 2. Rediscovery tenant reassignment | COMPLETE | COMPLETE, preserved | None | `test_evidence_and_tenancy.py`: conflicting org/repository rediscovery and tenant reads; `tests/storage/test_authorized_storage.py` | PostgreSQL and deployment-scale race behavior remain unverified. Trusted raw SQL is outside ORM guards. |
+| 3. Direct-path containment | IMPLEMENTED BUT INCORRECT | COMPLETE | `scanners/files.py`, external/history/YARA/ripgrep adapters; `runner.py`; `cli/__init__.py` | `recovery`: parent traversal, root/nested symlinks, YARA and saved-report reads; `test_execution_and_paths.py` | Descriptor-relative Python reads reject symlinks. External preflight cannot prevent another local process changing a target after validation; use private/quiescent scan roots. |
+| 4. Resource limits | PARTIALLY IMPLEMENTED | COMPLETE | `processes.py`; scanners `files.py`, `external.py`, `yara_scanner.py` | `recovery`: saved/live report caps, cleanup, YARA bounds, file floods with open/closed pipes; `test_execution_and_paths.py`: upload/archive/output/timeouts | File-output polling can transiently overshoot the threshold. These limits are not an OS disk quota or CPU/memory sandbox for external binaries. |
+| 5. Historical false regression | IMPLEMENTED BUT INCORRECT | COMPLETE | `repositories.py` | `recovery`: imports, raw-payload commits, unknown history; `test_lifecycle_artifacts.py`: removed/old/novel/current-tree observations | Imports cannot independently establish regression; a fresh scan is required. Git commit timestamps are source-provided, not trusted wall-clock attestations. |
+| 6. Temporary artifact identity | COMPLETE | COMPLETE, preserved | None | `test_lifecycle_artifacts.py`: repeated custom/governance uploads retain finding/evidence IDs | Legacy temporary-path identities are not automatically merged; third-party path conventions need contract validation. |
+| 7. Queue atomicity and replay | COMPLETE | COMPLETE, preserved | None | `test_queue_atomicity.py`: producer races, fast worker, replay, publication failure, crash after claim | Crashed claimed tasks require review. Durable IDs prevent blind replay, but Redis/DB are not a distributed transaction and partial scan work may have committed. |
+| 8. Legacy provider failures | PARTIALLY IMPLEMENTED | COMPLETE | `providers.py` | `recovery`: JSON/crt.sh/security.txt timeout/decoding errors; `test_execution_and_paths.py`: WHOIS/subfinder/httpx errors | Live upstream behavior and deployment network policy remain unverified. |
+| 9. Semgrep auto configuration | COMPLETE | COMPLETE, preserved | None | `test_execution_and_paths.py`: local rules/readiness/metrics arguments; scanner contract tests | Local rule compatibility requires an installed-version smoke test. |
+| 10. Unauthenticated non-loopback serving | COMPLETE | COMPLETE, preserved | None | `test_execution_and_paths.py`: loopback/authenticated/refused/unsafe override bind policy; browser-auth API tests | The explicit unsafe development override remains dangerous; deployments must use the guarded entry point and configure HTTPS/authentication. |
+
+### Resource and compatibility details
+
+Saved reports are capped at 8,000,000 bytes and read through no-follow file
+descriptors. Gitleaks' temporary report contributes to the subprocess's combined
+8,000,000-byte output budget, monitored while running and checked after exit; its
+existing `finally` cleanup is retained. YARA location reads share the 1,000,000-byte
+content cap. External filesystem scanners reject trees containing symlinks or special
+files before launch and cap preflight traversal at 100,000 entries. CLI scan/schedule
+paths retain original components until runner validation; `..` and symlink target
+components are rejected rather than silently resolved. No new schema is needed.
+
+### Local deployment diagnostic
+
+The recovery `orgscan doctor` run found read-only DB connectivity working but exited
+1: the configured database remains at `20260911_0007`, while the application expects
+`20260911_0008`. The existing database was not upgraded during code recovery.
+Follow the backup/upgrade procedure above before serving or starting workers.
+Other diagnostics reported 17 warnings, including unavailable Redis, optional
+scanners/provider credentials, absent GitHub token, unconfigured local authentication
+and non-Secure browser cookies. This checkout is not certified deployment-ready.
+
+
+### Final recovery validation
+
+- Focused security/scanner/lifecycle/correlation suite: **192 passed**.
+- Full `.venv/bin/python -m pytest`: **398 passed**, two existing Starlette/AnyIO
+  deprecation warnings, in 129.03 seconds outside the sandbox.
+- Added **38 adversarial cases**; existing tests were not weakened or changed.
+- `orgscan doctor`: **exit 1**, schema 0007 versus expected 0008; 17 warnings,
+  detailed above. This is an existing deployment-state issue, not a passing check.
+- Compilation, tracked/new-file whitespace checks and `git diff --check` passed;
+  the full diff was inspected. No static checker is configured.
+- No new migration, commit, deployment or production database modification was made.

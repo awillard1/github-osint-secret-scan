@@ -599,7 +599,7 @@ def scan(
     settings = _settings()
     init_db(settings.database_url)
     session_factory = create_session_factory(settings.database_url)
-    resolved_target = target.resolve()
+    resolved_target = target.absolute()
 
     with session_factory() as session:
         storage = Storage(session)
@@ -709,14 +709,14 @@ def schedule_scan(
             tenant_key=tenant_key,
         )
         try:
-            plan = resolve_scan_plan(target=str(target.resolve()), target_type="path", profile=profile,
+            plan = resolve_scan_plan(target=str(target.absolute()), target_type="path", profile=profile,
                                      scanners=[scanner] if scanner else None, refs=None, settings=settings,
                                      organization_id=organization_id, repository_id=repository_id, tenant_key=tenant_key)
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
         scheduled = storage.create_scheduled_scan(
             "path",
-            str(target.resolve()),
+            str(target.absolute()),
             plan.scanners[0],
             next_run_from_cadence(cadence.value),
             cadence=cadence.value,

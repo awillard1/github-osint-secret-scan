@@ -93,8 +93,8 @@ def _request_json(
         if response_metadata is not None:
             response_metadata.update(_response_metadata(exc))
         raise DomainProviderError(f"request failed with status {exc.code}", failure=classify_failure(exc)) from None
-    except URLError as exc:
-        raise DomainProviderError(f"request failed: {exc.reason}", failure=classify_failure(exc)) from None
+    except (OSError, UnicodeError) as exc:
+        raise DomainProviderError("Provider transport or decoding failure", failure=classify_failure(exc)) from None
     except json.JSONDecodeError as exc:
         raise DomainProviderError("provider returned invalid JSON output", failure=classify_failure(exc)) from None
     if expected is not None and not isinstance(payload, expected):
@@ -331,8 +331,8 @@ class CrtShDomainProvider(DomainIntelligenceProvider):
                 payload = json.loads(response.read().decode("utf-8") or "[]")
         except HTTPError as exc:
             raise DomainProviderError(f"crt.sh request failed with status {exc.code}", failure=classify_failure(exc)) from None
-        except URLError as exc:
-            raise DomainProviderError(f"crt.sh request failed: {exc.reason}", failure=classify_failure(exc)) from None
+        except (OSError, UnicodeError) as exc:
+            raise DomainProviderError("crt.sh transport or decoding failure", failure=classify_failure(exc)) from None
         except json.JSONDecodeError as exc:
             raise DomainProviderError("crt.sh returned invalid JSON output", failure=classify_failure(exc)) from None
 
@@ -577,8 +577,8 @@ class SecurityTxtDomainProvider(DomainIntelligenceProvider):
                 if exc.code == 404:
                     continue
                 raise DomainProviderError(f"security.txt request failed with status {exc.code}", failure=classify_failure(exc)) from None
-            except URLError as exc:
-                raise DomainProviderError(f"security.txt request failed: {exc.reason}", failure=classify_failure(exc)) from None
+            except (OSError, UnicodeError) as exc:
+                raise DomainProviderError("security.txt transport or decoding failure", failure=classify_failure(exc)) from None
         return None, None
 
     @staticmethod

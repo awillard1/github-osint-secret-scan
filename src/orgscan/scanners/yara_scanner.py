@@ -10,6 +10,7 @@ from pathlib import Path
 
 from orgscan.config import Settings
 from orgscan.scanners.execution import run_scanner_process
+from orgscan.scanners.files import read_text, validate_scan_target
 from orgscan.models import ConfidenceLevel, SeverityLevel
 from orgscan.scanners.base import ScanMatch, ScannerMetadata, ScannerReadiness
 from orgscan.scanners.external import ScannerExecutionError, _not_installed_error
@@ -137,6 +138,7 @@ class YaraScanner:
             handle.close()
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
+        target = validate_scan_target(target, external=True)
         if not shutil.which(self.binary):
             raise _not_installed_error(self.binary)
 
@@ -251,10 +253,10 @@ class YaraScanner:
         if not value:
             return 1, ""
         try:
-            content = path.read_text(encoding="utf-8")
+            content = read_text(path, path.parent)
         except (OSError, UnicodeDecodeError):
             return 1, f"<redacted:yara:{path.name}>"
         for line_number, line in enumerate(content.splitlines(), start=1):
             if value in line:
-                return line_number, _redact_in_line(line, value, "yara")
+                return line_number, "<redacted:yara>"
         return 1, f"<redacted:yara:{path.name}>"

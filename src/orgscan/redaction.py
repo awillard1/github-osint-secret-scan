@@ -5,6 +5,7 @@ are removed across the whole object, including copies under unrelated nested key
 """
 import re
 from functools import wraps
+from pathlib import PurePath
 
 REDACTED = '<redacted>'
 _DIAGNOSTICS = {'stdout_log','stderr_log','error_message','last_error'}
@@ -28,18 +29,18 @@ _USERINFO = re.compile(r'([A-Za-z][A-Za-z0-9+.-]*://)([^\s/@]+:[^\s/@]+)@')
 
 def redact(value, *, secrets_from=None):
     known = set()
-    def collect(item, depth=0, source=False):
+    def collect(item, depth=0, source=False, sensitive=False):
         if depth > 30:
             return
         if isinstance(item, dict):
             for key, child in item.items():
-                if str(key).lower() not in {'snippet','extracted_indicator','lines','content','body'} and _SENSITIVE.fullmatch(str(key)) and isinstance(child, str) and child and (source or not (child.startswith('<redacted') or re.fullmatch(r'.{1,4}\.\.\..{1,4}',child))):
-                    known.add(child)
-                collect(child, depth+1, source)
+                collect(child, depth+1, source, sensitive or bool(_SENSITIVE.fullmatch(str(key))))
         elif isinstance(item, (list, tuple)):
             for child in item:
-                collect(child, depth+1, source)
+                collect(child, depth+1, source, sensitive)
         elif isinstance(item, str):
+            if sensitive and item and (source or not (item.startswith('<redacted') or re.fullmatch(r'.{1,4}\.\.\..{1,4}',item))):
+                known.add(item)
             known.update(m.group(1) or m.group(2) for m in _ASSIGNMENT.finditer(item))
             known.update(m.group(1) for m in _AUTH.finditer(item))
             known.update(m.group(2) for m in _USERINFO.finditer(item))
@@ -54,6 +55,8 @@ def redact(value, *, secrets_from=None):
                     for key, child in item.items()}
         if isinstance(item, (list, tuple)):
             return [clean(child,depth+1) for child in item]
+        if isinstance(item, PurePath):
+            return type(item)(clean(str(item), depth+1))
         if not isinstance(item, str):
             return item
         for secret in known:
@@ -88,4 +91,5 @@ def safe_error(exc):
 
 def sanitize_matches(matches, source=None):
     from dataclasses import asdict, replace
-    return [replace(match, **redact(asdict(match), secrets_from=source)) for match in matches]
+    cleaned = redact([asdict(match) for match in matches], secrets_from=source)
+    return [replace(match, **values) for match, values in zip(matches, cleaned)]

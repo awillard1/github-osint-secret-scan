@@ -10,7 +10,7 @@ The package now has `api/` (FastAPI, compatibility `OrgscanApiService`, artifact
 
 | Area | Implemented capability and evidence | Partial or missing scope |
 | --- | --- | --- |
-| Foundation and storage | Packaging, CLI entry point, environment configuration/redaction, bootstrap/readiness, SQLAlchemy `Storage`, canonical findings, evidence, risk scores, targets, jobs, relationships, suppressions, users/sessions, queue and rate-limit records. `db.py` runs Alembic through `20260911_0007`. Tests: `test_config.py`, `test_bootstrap.py`, `test_db.py`, `test_storage.py`, `test_schemas.py`. | SQLite fresh initialization and populated prior evidence-schema upgrades are exercised; PostgreSQL operation remains unverified. Phase 16 adds non-creating doctor, wheel migration resources and installed-package smoke coverage. Bootstrap offers installation guidance, not a complete external-binary installer. |
+| Foundation and storage | Packaging, CLI entry point, environment configuration/redaction, bootstrap/readiness, SQLAlchemy `Storage`, canonical findings, evidence, risk scores, targets, jobs, relationships, suppressions, users/sessions, queue and rate-limit records. `db.py` runs Alembic through `20260911_0008`. Tests: `test_config.py`, `test_bootstrap.py`, `test_db.py`, `test_storage.py`, `test_schemas.py`. | SQLite fresh initialization and populated prior evidence-schema upgrades are exercised; PostgreSQL operation remains unverified. Phase 16 adds non-creating doctor, wheel migration resources and installed-package smoke coverage. Bootstrap offers installation guidance, not a complete external-binary installer. |
 | Scanners and plugins | Ten registered scanners (Phase 7 adds heuristic-rules): custom-patterns, git-history-patterns, repo-governance, gitleaks, detect-secrets, semgrep, trufflehog, yara, ripgrep-heuristics, heuristic-rules. Registry factory and `orgscan.scanners` entry-point loading already exist, including report ingestion for supporting scanners. `runner.py` normalizes `ScanMatch` into stored `CanonicalFinding` and records ToolRuns. Phase 2 adds uniform metadata/readiness/context/result adapters, duplicate-ID rejection and registry-driven API/CLI inventory. Tests: `test_scanner.py`, `test_external_scanners.py`, `test_runner.py`, `test_cli.py`, `tests/scanners/`, `tests/api/test_scanner_registry.py`. | YARA versions are probed; other external versions/runtime configuration are not probed; legacy plugins retain responsibility for execution safety. Mocked tests do not establish live tool compatibility. |
 | YARA and heuristics | YARA ships three token/key rules and accepts a configured rules file; its parser redacts matches. Ripgrep scans configurable internal suffixes and organization keywords. Tests: YARA/ripgrep parser cases in `test_scanner.py`; configuration cases in `test_config.py`. | Phase 6 maps local rule metadata and unknown rule IDs, detects versions, and fully redacts matched values/source snippets. Tests: `tests/scanners/test_yara_contract.py`. Local includes require explicit full rescans after changes. Phase 7 adds the opt-in heuristic-rules scanner with validated JSON, timed regex, stable digests and five starters. Existing ripgrep/custom definitions remain compatible. Tests: `tests/scanners/test_heuristic_rules.py`. |
 | Scan planning | Eight deterministic profiles, explicit overrides and versioned plans shared by CLI/API/scheduler/queues; job/schedule JSON preserves intent. Tests: `tests/services/test_scan_plan.py`, `tests/api/test_scan_profiles.py`. | Discovery profiles use existing domain providers; the dashboard scanner dropdown still supplies explicit scanner selection. Batches are sequential, with per-scanner commits. |
@@ -35,6 +35,35 @@ Follow [development-plan.md](development-plan.md) in order, extending existing c
 - **Phase 10 (implemented):** bounded public search queries, request provenance and integration into canonical findings/graph.
 - **Phase 11 (implemented):** HTTP/browser authentication and tenant boundaries. **Phase 12 (implemented):** lifecycle history and regression detection. **Phase 13 (implemented):** operator queues and drill-downs. **Phase 14 (implemented):** bounded retry policy, rate-limit deferral and conservative recovery.
 - **Phase 15 (implemented):** SARIF and PDF variants over shared report queries. **Phase 16 (implemented):** doctor, wheel packaging/installation smoke tests and a release-readiness checklist with explicit deployment gaps.
+
+## Post-Phase-16 release recovery
+
+Recovery on 2026-09-14 found a clean `codex/architecture-foundation` tree at `03cc9fa`.
+The interrupted release fixes were committed, including migration 0008. Baseline
+security/scanner/authorization checks passed 91 tests and the full suite passed 360.
+Inspection and additional adversarial probes found remaining portions of audit items
+1, 3, 4, 5 and 8; only those implementations were changed. Items 2, 6, 7, 9 and 10 were
+verified and preserved. No MEDIUM/LOW work was included.
+
+Shared redaction now removes copied/nested source values and known secrets in paths,
+while ripgrep/governance/YARA omit raw source snippets. Original target spelling reaches no-follow validation;
+parent traversal and external filesystem trees containing symlinks are rejected.
+Saved/live Gitleaks reports and YARA location reads are bounded; file-output budgets
+remain enforced when a child closes stdout/stderr. Historical imports and raw-payload
+commit observations cannot falsely reopen remediation, while current-tree regression
+still works. Legacy HTTP provider timeout/decoding failures now have safe diagnostics.
+
+The [release recovery audit table](release-readiness.md#post-phase-16-recovery-audit-2026-09-14)
+records evidence, compatibility changes and remaining risks for all ten items.
+`orgscan doctor` found the configured database still at 0007 (application head 0008),
+so deployment needs a backed-up upgrade; the database was not modified by recovery.
+
+Final validation: **192 focused tests passed** and **398 full-suite tests passed**,
+with two existing Starlette/AnyIO deprecation warnings, in 129.03 seconds outside
+the sandbox. The recovery adds 38 adversarial cases; existing tests were not weakened
+or changed. Compilation and `git diff --check` passed; the full diff was inspected.
+No static checker is configured. Doctor exits 1 for the pre-existing migration lag
+and reports 17 configuration/dependency warnings. Changes remain uncommitted.
 
 ## Operator queue pagination follow-up
 
