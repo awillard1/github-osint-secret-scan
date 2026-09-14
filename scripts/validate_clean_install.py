@@ -41,6 +41,28 @@ run('export', 'report.json', '--format', 'json')
 assert json.loads(Path('report.json').read_text())['findings']
 run('export', 'report.sarif', '--format', 'sarif')
 assert json.loads(Path('report.sarif').read_text())['runs'][0]['results']
+# Exercise the new runtime crypto dependency without any development packages.
+import base64, os
+from sqlalchemy import select
+from orgscan.db import create_session_factory
+from orgscan.repositories import Storage
+from orgscan.schemas import CanonicalFinding
+from orgscan.models import SecretEvidence
+from orgscan.security_context import AuthContext
+from orgscan.services.secret_evidence import SecretEvidenceService
+protected = Settings(preserve_secrets=True, secret_encryption_key=base64.urlsafe_b64encode(os.urandom(32)).decode())
+with create_session_factory(protected.database_url)() as session:
+    session.info['secret_settings'] = protected
+    storage = Storage(session)
+    organization = storage.create_organization('Protected smoke', tenant_key='smoke')
+    found = storage.create_finding(CanonicalFinding(source_tool='smoke', category='secret',
+        title='Credential', description='password="install-validation-value"', organization_id=organization.id))
+    session.commit()
+    evidence = session.scalars(select(SecretEvidence)).one()
+    assert 'install-validation-value' not in found.description
+    finding_id, secret_id = found.id, evidence.id
+assert SecretEvidenceService(protected).reveal(finding_id, secret_id,
+    AuthContext('smoke-admin', 'admin', ('smoke',), True)) == 'install-validation-value'
 app = create_app(Settings().database_url, settings=Settings())
 async def smoke_api():
     messages = []
@@ -55,7 +77,7 @@ async def smoke_api():
                    'server':('127.0.0.1',8000)}, receive, send)
     assert next(m['status'] for m in messages if m['type'] == 'http.response.start') == 200, messages
 asyncio.run(smoke_api())
-print('Clean install passed: runtime dependencies, migrations, CLI, API lifespan/health, scan, JSON/SARIF reports')
+print('Clean install passed: runtime dependencies, migrations, CLI, API lifespan/health, scan, JSON/SARIF reports, encrypted evidence/reveal')
 '''
 
 

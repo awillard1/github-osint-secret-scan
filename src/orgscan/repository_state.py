@@ -26,6 +26,9 @@ def scanner_configuration_key(settings, plan, scanner: str) -> str | None:
     tool-specific includes. Except for bounded local YARA dependencies, these
     execute again. Built-ins and bounded JSON heuristics have closed inputs.
     """
+    if settings and settings.preserve_secrets:
+        from orgscan.services.secret_evidence import encryption_key
+        encryption_key(settings)  # Missing keys cannot silently reuse a checkpoint.
     from pathlib import Path
     from orgscan.scanners import get_registry
     adapter = get_registry().get(scanner, settings=settings)

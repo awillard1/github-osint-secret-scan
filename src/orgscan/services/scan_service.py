@@ -9,6 +9,7 @@ from orgscan.services.job_policy import classify_failure, ClassifiedJobError
 
 
 def execute_plan(storage: Storage, plan: ScanPlan, *, settings: Settings | None = None, **execution) -> list[ScanExecutionResult]:
+    storage.session.info['secret_settings'] = settings or Settings()
     validate_plan_scanners(plan, settings=settings)
     if plan.target_type == 'domain':
         return [execute_domain_plan(storage, plan, settings=settings)[0]]
@@ -39,6 +40,7 @@ def execute_domain_plan(storage, plan, *, settings=None):
     """Discover a resolved domain with durable job identity and provider provenance."""
     if plan.target_type != "domain":
         raise ValueError("Domain discovery requires a domain plan")
+    storage.session.info['secret_settings'] = settings or Settings()
     validate_plan_scanners(plan, settings=settings)
     from orgscan.providers import get_domain_provider
     from orgscan.services.target_service import resolve_domain_context

@@ -56,6 +56,8 @@ def authorized_session_factory(factory):
                 return permitted(m.Organization,record.organization_id) if record.organization_id is not None else any(permitted(model,identity) for model,identity in references)
             if isinstance(record,(m.Evidence,m.Suppression,m.FindingHistory)):
                 return permitted(m.Finding,record.finding_id)
+            if isinstance(record,(m.SecretEvidence,m.SecretRevealAudit)):
+                return auth.allows_tenant(record.tenant_key) and permitted(m.Finding,record.finding_id)
             if isinstance(record,m.ToolRun):
                 return permitted(m.ScanJob,record.scan_job_id)
             if isinstance(record,m.RiskScore):

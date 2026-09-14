@@ -21,6 +21,7 @@ class UserCreate(BaseModel):
 class MembershipUpdate(BaseModel):
     tenant: str = Field(min_length=1,max_length=255)
     role: str = Field(pattern="^(reader|analyst|admin)$")
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class UserUpdate(BaseModel):
@@ -93,7 +94,7 @@ def create_auth_router(service):
 
     @router.post("/users/{username}/memberships")
     def membership(username: str,payload: MembershipUpdate):
-        return call(service.grant,actor(),username,payload.tenant,payload.role)
+        return call(service.grant,actor(),username,payload.tenant,payload.role,capabilities=payload.capabilities)
 
     @router.patch("/users/{username}")
     def update_user(username: str,payload: UserUpdate):

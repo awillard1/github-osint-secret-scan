@@ -1092,6 +1092,8 @@ def create_app(database_url: str, settings: Settings | None = None) -> FastAPI:
     def scanners() -> dict[str, object]:
         return service._tooling_payload()
 
+    from orgscan.api.routes.secrets import create_secret_router
+    app.include_router(create_secret_router(service.settings))
     app.include_router(create_finding_router(service))
     app.include_router(create_operator_router(service.session_factory))
     app.include_router(create_report_router(service.session_factory))
@@ -1260,7 +1262,10 @@ def create_app(database_url: str, settings: Settings | None = None) -> FastAPI:
         payload = service._finding_html_payload(finding_id)
         if payload is None:
             raise HTTPException(status_code=404, detail="Finding not found")
-        return HTMLResponse(render_finding_detail_html(payload))
+        from orgscan.web.secret_reveal import render_secret_controls
+        page = render_finding_detail_html(payload)
+        controls = render_secret_controls(service.settings, finding_id)
+        return HTMLResponse(page.replace('</body>', controls + '</body>'))
 
     @app.get("/scan-jobs/{scan_job_id}")
     def scan_job_detail(scan_job_id: int) -> dict[str, object]:

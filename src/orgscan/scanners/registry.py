@@ -121,12 +121,13 @@ class ScannerAdapter:
             from orgscan.redaction import redact
             raise ScannerReadinessError(redact(
                 f"Scanner {self.metadata.scanner_id} is not ready: {', '.join(readiness.missing_requirements) or readiness.status}",
-                secrets_from=self.settings.as_dict(include_secrets=True) if self.settings else None))
+                secrets_from={'settings': self.settings.as_dict(include_secrets=True), 'secret': self.settings.secret_encryption_key.get_secret_value() if self.settings.secret_encryption_key else None} if self.settings else None))
         if readiness.version:
             self.metadata = replace(self.metadata, version=readiness.version)
         started_at = datetime.now(UTC)
         try:
-            with execution_context(context):
+            from orgscan.services.secret_evidence import preservation_context
+            with execution_context(context), preservation_context(self.settings):
                 native = getattr(self.scanner, "scan", None)
                 if callable(native):
                     result = native(context)
@@ -219,4 +220,4 @@ class ScannerRegistry:
                 "supports_report_ingestion": callable(getattr(scanner_class, "load_report", None)),
             })
         from orgscan.redaction import redact
-        return redact(rows, secrets_from=settings.as_dict(include_secrets=True) if settings else None)
+        return redact(rows, secrets_from={'settings': settings.as_dict(include_secrets=True), 'secret': settings.secret_encryption_key.get_secret_value() if settings.secret_encryption_key else None} if settings else None)

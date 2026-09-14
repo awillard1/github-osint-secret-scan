@@ -136,7 +136,7 @@ def test_forward_repair_from_0010_preserves_data_and_is_repeatable(tmp_path, cap
     with factory() as session:
         assert VALUE in session.get(Finding, fid).description
     command.upgrade(config, 'head')
-    assert current_db_revision(url) == '20260914_0011'
+    assert current_db_revision(url) == '20260914_0012'
     def state():
         with factory() as session:
             f, e, observation = session.get(Finding, fid), session.get(DomainExposure, eid), session.get(Evidence, evidence_id)

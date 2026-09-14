@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from orgscan.services.secret_evidence import capture
+
 import re
 from hashlib import sha256
 import shutil
@@ -185,6 +187,7 @@ class GitHistoryPatternScanner:
                         description=f"{pattern.description} The match appeared in commit {commit_sha} ({change_type} line).",
                         severity=pattern.severity,
                         confidence=pattern.confidence,
+                        protected_candidates=capture(value),
                         indicator=redacted,
                         snippet=CustomPatternScanner._redact_in_line(line, value, pattern.name),
                         remediation_hint=pattern.remediation_hint,

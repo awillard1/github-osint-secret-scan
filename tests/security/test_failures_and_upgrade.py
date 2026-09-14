@@ -63,7 +63,7 @@ def test_upgrade_adds_durable_claim_and_sanitizes_legacy_evidence(tmp_path):
             {'value':'password="legacy-private-987654321"','raw':json.dumps({'nested':{'token':'legacy-private-987654321'}})})
         session.commit()
     init_db(url)
-    assert current_db_revision(url)=='20260914_0011'
+    assert current_db_revision(url)=='20260914_0012'
     with create_session_factory(url)() as session:
         storage=Storage(session)
         task=storage.list_queue_tasks()[0]

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from orgscan.services.secret_evidence import capture
+
 import re
 from hashlib import sha256
 from dataclasses import dataclass
@@ -118,9 +120,28 @@ class CustomPatternScanner:
         if "\x00" in content:
             return []
 
+        from orgscan.redaction import private_key_values
+        private_keys = iter(private_key_values(content))
         results: list[ScanMatch] = []
         for line_number, line in enumerate(content.splitlines(), start=1):
+            # Shared assignment recognition also handles copied JSON and labels
+            # absent from the historical generic-pattern expression.
+            from orgscan.redaction import redact
+            credentials = {}
+            if any(pattern.name == GENERIC_SECRET_ASSIGNMENT_NAME for pattern, _ in self._patterns):
+                redact(line, _capture=lambda kind, value: credentials.setdefault(value, kind) if kind not in {'token-format', 'private-key'} else None)
+            for secret, kind in credentials.items():
+                if should_skip_pattern_match(GENERIC_SECRET_ASSIGNMENT_NAME, 'password="'+secret+'"'):
+                    continue
+                results.append(ScanMatch(path=file_path, line_start=line_number, line_end=line_number,
+                    category='secret', title='Possible hardcoded secret assignment', description='Credential assignment detected',
+                    severity=SeverityLevel.MEDIUM, confidence=ConfidenceLevel.HEURISTIC,
+                    indicator=self._redact(secret), snippet='<redacted:generic-secret-assignment>',
+                    metadata={'pattern': GENERIC_SECRET_ASSIGNMENT_NAME, 'secret_digest': sha256(secret.encode()).hexdigest()},
+                    protected_candidates=capture({kind: secret})))
             for pattern, compiled in self._patterns:
+                if pattern.name == GENERIC_SECRET_ASSIGNMENT_NAME:
+                    continue
                 for matched in compiled.finditer(line):
                     value = matched.group(0)
                     if should_skip_pattern_match(pattern.name, value):
@@ -135,6 +156,7 @@ class CustomPatternScanner:
                             description=pattern.description,
                             severity=pattern.severity,
                             confidence=pattern.confidence,
+                            protected_candidates=capture(next(private_keys, ''), explicit=None) if pattern.name == 'private-key' else capture(value, explicit=(_extract_assigned_secret(value) or value) if pattern.category == 'secret' else None),
                             indicator=self._redact(value),
                             snippet=self._redact_in_line(line, value, pattern.name),
                             remediation_hint=pattern.remediation_hint,

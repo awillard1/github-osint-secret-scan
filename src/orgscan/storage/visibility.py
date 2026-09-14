@@ -19,6 +19,9 @@ def visibility_ids(tenant_keys):
         )),
     )
     ids[m.Finding] = select(finding.c.id).where(finding_scope)
+    for model in (m.SecretEvidence, m.SecretRevealAudit):
+        table = model.__table__
+        ids[model] = select(table.c.id).where(table.c.finding_id.in_(ids[m.Finding]), table.c.tenant_key.in_(tenant_keys))
     job = m.ScanJob.__table__
     plan = job.c.parameters_json["scan_plan"]
     job_scope = or_(
@@ -67,4 +70,3 @@ def visibility_ids(tenant_keys):
     report = m.ScheduledReport.__table__
     ids[m.ScheduledReport] = select(report.c.id).where(report.c.target_type == "tenant", report.c.target_value.in_(tenant_keys))
     return ids
-

@@ -223,3 +223,24 @@ backtracking expressions and does not decode entire documents repeatedly.
 Migration 0011 freezes the corrected policy and repairs escaped legacy assignments;
 released 0009/0010 migrations and snapshots remain unchanged. Runtime adapters use
 the shared policy directly, with no browser/provider-specific escaped-secret rules.
+
+## Protected secret preservation
+
+With `ORGSCAN_PRESERVE_SECRETS=true` and a configured encryption key, scanners must
+capture recognized raw credential values before replacing them with masked indicators.
+Use `services.secret_evidence.capture` within the adapter's preservation context and
+attach its opaque candidates to `ScanMatch.protected_candidates`. Candidates must be
+associated with that match only, never copied from an entire multi-finding report.
+They are transient ingestion objects, not payload/metadata/report fields. Storage
+consumes them into tenant-bound ciphertext. Normal output remains redacted whether
+preservation is enabled or disabled; only the reveal service decrypts.
+
+The built-in assignment scanner uses the shared credential vocabulary and copied JSON
+parser. Complete PEM blocks, Gitleaks/TruffleHog raw matches and recognized Semgrep
+source assignments are captured when supplied. A scanner providing only a digest
+(such as detect-secrets) or already-redacted output cannot yield an original value;
+do not present its hash or masked indicator as a recovered credential. Trusted plugins
+must follow the same capture contract if they sanitize before returning their findings.
+Source-less/tenant-less preservation fails closed rather than creating globally
+revealable secrets. Readiness warnings and scanner exceptions are diagnostics, not a
+secret retention channel, and stay redacted.

@@ -333,6 +333,8 @@ class Storage:
         return scan_job
 
     def create_finding(self, finding: CanonicalFinding) -> Finding:
+        from orgscan.services.secret_evidence import capture, persist
+        candidates = capture(finding.model_dump(), settings=self.session.info.get('secret_settings'))
         existing = self.session.scalar(
             select(Finding).where(Finding.normalized_hash == finding.normalized_hash)
         )
@@ -352,6 +354,7 @@ class Storage:
             existing.metadata_json = finding.metadata
             existing.scan_job_id = finding.scan_job_id
             self.session.flush()
+            persist(self.session, existing, candidates)
             return existing
 
         record = Finding(**finding.to_storage_dict())
@@ -362,6 +365,7 @@ class Storage:
         self.session.flush()
         self._record_history(record, None, reason="Initial observation", scan_job_id=record.scan_job_id)
         self.session.flush()
+        persist(self.session, record, candidates)
         return record
 
     def _regression_evidence_is_new(self, existing, finding, incoming_job=None):
@@ -403,9 +407,13 @@ class Storage:
         return record
 
     def create_evidence(self, finding_id: int, source: str, **kwargs: Any) -> Evidence:
+        from orgscan.services.secret_evidence import capture, persist
+        candidates = capture(kwargs, settings=self.session.info.get('secret_settings'))
         evidence = Evidence(finding_id=finding_id, source=source, **kwargs)
         self.session.add(evidence)
         self.session.flush()
+        if candidates:
+            persist(self.session, self.session.get(Finding, finding_id), candidates, evidence_id=evidence.id)
         return evidence
 
     def upsert_scanner_evidence(
@@ -416,6 +424,10 @@ class Storage:
             select(Evidence).where(Evidence.observation_fingerprint == observation_fingerprint)
         )
         if existing:
+            from orgscan.services.secret_evidence import capture, persist
+            candidates = capture({'metadata': metadata_json, **kwargs}, settings=self.session.info.get('secret_settings'))
+            if candidates:
+                persist(self.session, self.session.get(Finding, finding_id), candidates, evidence_id=existing.id)
             previous = existing.metadata_json or {}
             for key, value in kwargs.items():
                 setattr(existing, key, value)
@@ -454,8 +466,19 @@ class Storage:
         source_name: str,
         result_summary: str,
         normalized_hash: str,
+        protected_candidates=(),
         **kwargs: Any,
     ) -> DomainExposure:
+        from orgscan.services.secret_evidence import capture, persist
+        candidates = (*protected_candidates, *capture({'summary': result_summary, **kwargs}, settings=self.session.info.get('secret_settings')))
+        if candidates:
+            # Providers may expose credentials without producing a canonical finding.
+            # Create the protected reference before sanitizing the legacy exposure view.
+            finding = self.create_finding(CanonicalFinding(
+                source_tool=source, source_name=source_name, category='secret', domain_id=domain_id,
+                title='Protected credential in provider evidence', description=result_summary,
+                fingerprint=normalized_hash, normalized_hash=normalized_hash))
+            persist(self.session, finding, candidates)
         existing = self.session.scalar(select(DomainExposure).where(DomainExposure.normalized_hash == normalized_hash))
         if existing:
             for key, value in kwargs.items():

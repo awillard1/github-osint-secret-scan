@@ -181,3 +181,19 @@ copies, negative labels, bounded failure, five 16/32/64/256 KB adversarial shape
 provider/plugin persistence, readiness, real HTTP handlers, legacy browser/report
 presentation and repeatable 0010-to-0011 repair. Migration parity tests compare the
 new frozen snapshot with runtime behavior; released snapshots are not edited.
+
+## Phase 23 protected evidence
+
+Run `pytest tests/security/test_phase23_secret_evidence.py` for encrypted ingestion,
+quoted/copied assignment capture, actual scanner/provider ingestion, exact authorized
+reveal, tamper rejection, tenant/role/capability checks, current membership revocation,
+browser CSRF, no-store headers, audit commit failure, masked initial HTML, all five
+report formats, webhook summaries, key diagnostics and the 0011-to-0012 schema upgrade.
+These tests use disposable databases and generated encryption keys. Existing Phase
+21/22 sanitizer performance and legacy presentation tests remain required regressions.
+
+Test raw values only in fixtures and explicit authorized reveal assertions. Check
+ordinary ORM columns and audit events independently of masked serializers. Do not
+log keys or revealed credentials during validation. Clean-install validation continues
+to install only declared runtime dependencies in an external virtual environment;
+cryptography is a runtime requirement, not a development-only dependency.

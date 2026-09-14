@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -472,3 +472,35 @@ class Suppression(TimestampMixin, Base):
 
 from orgscan.storage.safety import install as _install_evidence_safety
 _install_evidence_safety()
+
+
+class SecretEvidence(Base):
+    """Ciphertext only. No property, repr or serializer decrypts this model."""
+    __tablename__ = 'secret_evidence'
+    __table_args__ = (UniqueConstraint('finding_id', 'fingerprint', 'key_id', name='uq_secret_finding_fingerprint_key'),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    finding_id: Mapped[int] = mapped_column(ForeignKey('findings.id'), index=True)
+    evidence_id: Mapped[int | None] = mapped_column(ForeignKey('evidence.id'), nullable=True)
+    tenant_key: Mapped[str] = mapped_column(String(255), index=True)
+    secret_type: Mapped[str] = mapped_column(String(128))
+    redacted_display: Mapped[str] = mapped_column(String(64), default='••••••••••••')
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    key_id: Mapped[str] = mapped_column(String(64))
+    encrypted_value: Mapped[bytes] = mapped_column(LargeBinary)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    source: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
+class SecretRevealAudit(Base):
+    __tablename__ = 'secret_reveal_audit'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey('users.id'), nullable=True)
+    principal: Mapped[str] = mapped_column(String(255))
+    tenant_key: Mapped[str] = mapped_column(String(255), index=True)
+    finding_id: Mapped[int] = mapped_column(ForeignKey('findings.id'))
+    secret_evidence_id: Mapped[int] = mapped_column(ForeignKey('secret_evidence.id'))
+    source: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))

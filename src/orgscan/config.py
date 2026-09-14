@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,11 +14,15 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     app_name: str = "orgscan"
     app_env: str = "development"
     auto_migrate: bool = True  # Development bootstrap only; never honored in production.
+    preserve_secrets: bool = False
+    secret_encryption_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
+    secret_encryption_key_id: str = Field(default='v1', pattern=r'^[A-Za-z0-9_.-]{1,64}$')
     log_level: str = "INFO"
     data_dir: Path = Field(default_factory=lambda: Path("./data"))
     database_url: str = "sqlite:///./data/orgscan.db"
@@ -96,7 +100,7 @@ class Settings(BaseSettings):
                     payload[secret_field] = "<redacted>"
         if not include_secrets:
             from orgscan.redaction import redact
-            payload = redact(payload, secrets_from=self.model_dump())
+            payload = redact(payload, secrets_from={**self.model_dump(), 'secret': self.secret_encryption_key.get_secret_value() if self.secret_encryption_key else None})
         return payload
 
     def heuristic_term_list(self) -> list[str]:

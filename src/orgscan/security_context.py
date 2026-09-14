@@ -13,6 +13,11 @@ class AuthContext:
     authenticated: bool = False
     source: str = "local"
     user_id: int | None = None
+    capabilities: tuple[str, ...] = ()
+
+    def allows_secret_reveal(self) -> bool:
+        return self.authenticated and (self.role == 'admin' or
+            (self.role == 'analyst' and 'secrets:reveal' in self.capabilities))
 
     def allows_role(self, required_role: str) -> bool:
         return required_role in ROLE_LEVELS and ROLE_LEVELS.get(self.role, 0) >= ROLE_LEVELS[required_role]

@@ -302,3 +302,12 @@ or unrelated architecture, tenant, queue or scanner changes were introduced.
 Forward data repair `20260914_0011` follows 0010 using a new frozen parity-tested
 snapshot. Earlier migrations remain unchanged. See release readiness for validation
 and rollout status; architectural Phase 1 remains partial.
+
+## Phase 23 — controlled secret preservation and analyst reveal
+
+Adds opt-in encrypted SecretEvidence, explicit tenant-scoped reveal capability,
+authenticated POST reveal with committed audit events, and masked finding detail
+controls with Hide/automatic hiding. Ordinary APIs, reports, diagnostics and initial
+HTML remain redacted. Migration 0012 adds dedicated storage; older redacted secrets
+cannot be recovered. Remaining Phase 1 decomposition is still partial and unchanged.
+See release readiness for key provisioning, operational limits and validation results.

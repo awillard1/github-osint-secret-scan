@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from orgscan.services.secret_evidence import capture
+
 from orgscan.redaction import sanitize_matches
 
 import json
@@ -101,6 +103,7 @@ class GitleaksScanner:
                     description=str(item.get("Description") or "Gitleaks identified a potential secret."),
                     severity=SeverityLevel.HIGH,
                     confidence=ConfidenceLevel.LIKELY,
+                    protected_candidates=capture({'secret': match_value}),
                     indicator=_redact(match_value),
                     snippet=_redact_in_line(line, match_value, "gitleaks"),
                     remediation_hint="Rotate the exposed secret and remove it from source control.",
@@ -312,6 +315,7 @@ class SemgrepScanner:
                     line_end=int(end.get("line") or start.get("line") or 1),
                     category="code-policy",
                     title=f"Semgrep: {check_id}",
+                    protected_candidates=capture(extra),
                     description="Semgrep detected a policy or code issue; review the rule and location.",
                     severity=SEMGREP_SEVERITY_MAP.get(severity, SeverityLevel.LOW),
                     confidence=ConfidenceLevel.LIKELY,
@@ -398,6 +402,7 @@ class TruffleHogScanner:
                     description="TruffleHog identified a potential secret.",
                     severity=SeverityLevel.HIGH,
                     confidence=ConfidenceLevel.VERIFIED if item.get("Verified") else ConfidenceLevel.LIKELY,
+                    protected_candidates=capture({'secret': match_value}),
                     indicator=_redact(match_value),
                     snippet=_redact_in_line(line, match_value, "trufflehog"),
                     remediation_hint="Rotate the exposed secret and remove it from source control.",

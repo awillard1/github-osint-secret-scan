@@ -69,6 +69,14 @@ def doctor(settings, *, require_queue=False):
         checks.append({'name':name,'status':status,'message':message,**details})
     add('runtime','ok' if sys.version_info >= (3,12) else 'error','Python 3.12+ required',
         python='.'.join(map(str,sys.version_info[:3])),orgscan=__version__)
+    try:
+        from orgscan.services.secret_evidence import encryption_key
+        if settings.preserve_secrets:
+            encryption_key(settings)
+        add('secret-preservation', 'ok', 'Secret preservation: '+('enabled' if settings.preserve_secrets else 'disabled')+
+            '; encryption key: '+('configured' if settings.secret_encryption_key else 'missing'))
+    except ValueError:
+        add('secret-preservation', 'error', 'Secret preservation: enabled; encryption key: missing or invalid')
     has_users = False
     try:
         revisions, has_users = _database_checks(settings)

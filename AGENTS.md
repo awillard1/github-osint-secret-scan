@@ -84,7 +84,12 @@ Do not add tool-name `if/elif` dispatch in API/CLI code when registry dispatch c
 
 Scanner output must normalize through the canonical schema before persistence.
 
-Raw secret material must not be emitted in logs or user-facing diagnostics.
+Raw credentials may be retained solely in dedicated encrypted secret evidence and
+exposed only through an explicit authorized, tenant-scoped, audited reveal operation.
+They must not appear in ordinary findings, evidence, metadata, logs, diagnostics,
+initial browser HTML or bulk reports. Generic serializers must never decrypt.
+Capture recognized values before sanitization using the shared bounded parser;
+preserve ordinary redaction protections. Encryption keys stay outside the database.
 
 Prefer fingerprints, redacted indicators, metadata, and evidence references.
 

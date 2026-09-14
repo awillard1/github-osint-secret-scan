@@ -35,6 +35,9 @@ def load_auth_contexts(settings: Settings) -> dict[str, AuthContext]:
         token = str(entry.get("token") or "").strip()
         role = str(entry.get("role") or "reader").strip().lower()
         tenants = entry.get("tenants")
+        capabilities = entry.get('capabilities', [])
+        if not isinstance(capabilities, list) or any(value != 'secrets:reveal' for value in capabilities):
+            raise ValueError('Token capabilities must be a list of supported capabilities')
         if role not in ROLE_LEVELS:
             raise ValueError(f"Unsupported auth role: {role}")
         if not token:
@@ -51,6 +54,7 @@ def load_auth_contexts(settings: Settings) -> dict[str, AuthContext]:
             tenants=normalized_tenants,
             authenticated=True,
             source="env-token",
+            capabilities=tuple(capabilities),
         )
     return contexts
 

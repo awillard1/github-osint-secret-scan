@@ -60,11 +60,19 @@ class DomainIntelligenceProvider:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings
 
+    def _protected_record(self, record):
+        from orgscan.services.secret_evidence import capture
+        from orgscan.redaction import redact
+        candidates = capture(record, settings=self.settings)
+        return redact(record), candidates
+
     def discover_context(self, storage: Storage, context) -> DomainProviderResult:
         # Ownership has been validated and persisted before providers look up by name.
         return self.discover(storage, context.name)
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         raise NotImplementedError
 
 
@@ -135,6 +143,8 @@ class LocalMetadataDomainProvider(DomainIntelligenceProvider):
         return sha256("::".join(parts).encode("utf-8")).hexdigest()
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         needle = domain_name.lower()
         exposures: list[str] = []
@@ -254,6 +264,8 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
         return results
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         exposures: list[str] = []
 
@@ -288,6 +300,7 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
             exposures.append(summary)
 
         for item in self._run_httpx(subdomains):
+            item, protected_candidates = self._protected_record(item)
             host = str(item.get("input") or item.get("host") or "").strip().lower()
             url = str(item.get("url") or "").strip()
             status_code = item.get("status_code")
@@ -302,6 +315,7 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
                 domain_record.id,
                 source="projectdiscovery",
                 source_name="httpx",
+                protected_candidates=protected_candidates,
                 result_summary=summary,
                 normalized_hash=self._hash("httpx", domain_name, host or domain_name, url or ""),
                 source_class="free",
@@ -359,6 +373,8 @@ class CrtShDomainProvider(DomainIntelligenceProvider):
         return [item for item in payload if isinstance(item, dict)]
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         records = self._fetch_records(domain_name)
         exposures: list[str] = []
@@ -444,6 +460,8 @@ class WhoisDomainProvider(DomainIntelligenceProvider):
         return fields
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         fields = self._parse_fields(self._fetch_output(domain_name))
         exposures: list[str] = []
@@ -511,6 +529,8 @@ class AggregateDomainProvider(DomainIntelligenceProvider):
     name = "all"
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         exposures: list[str] = []
         identity_correlations: list[str] = []
         warnings: list[str] = []
@@ -537,6 +557,8 @@ class EnrichedAggregateDomainProvider(DomainIntelligenceProvider):
     name = "all-enriched"
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         exposures: list[str] = []
         identity_correlations: list[str] = []
         warnings: list[str] = []
@@ -617,6 +639,8 @@ class SecurityTxtDomainProvider(DomainIntelligenceProvider):
         return fields
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         exposures: list[str] = []
         identity_correlations: list[str] = []
@@ -741,6 +765,8 @@ class GitHubSearchDomainProvider(DomainIntelligenceProvider):
         return DomainProviderResult(result.exposures, result.accounts, result.warnings, result.failure)
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         return self.search_target(storage, domain_name)
 
 
@@ -774,11 +800,14 @@ class HaveIBeenPwnedDomainProvider(DomainIntelligenceProvider):
         return [item for item in payload if isinstance(item, dict)]  # type: ignore[arg-type]
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         exposures: list[str] = []
         normalized_domain = domain_name.lower()
 
         for item in self._fetch_breaches():
+            item, protected_candidates = self._protected_record(item)
             breach_domain = str(item.get("Domain") or "").strip().lower()
             if breach_domain != normalized_domain:
                 continue
@@ -791,6 +820,7 @@ class HaveIBeenPwnedDomainProvider(DomainIntelligenceProvider):
             storage.create_domain_exposure(
                 domain_record.id,
                 source="hibp",
+                protected_candidates=protected_candidates,
                 source_name=self.name,
                 result_summary=summary,
                 normalized_hash=self._hash("hibp", domain_name, breach_name, breach_date),
@@ -838,12 +868,15 @@ class DeHashedDomainProvider(DomainIntelligenceProvider):
         return [item for item in entries if isinstance(item, dict)] if isinstance(entries, list) else []
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         exposures: list[str] = []
         identity_correlations: list[str] = []
         normalized_suffix = f"@{domain_name.lower()}"
 
         for item in self._fetch_records(domain_name):
+            item, protected_candidates = self._protected_record(item)
             email = str(item.get("email") or "").strip().lower()
             username = str(item.get("username") or "").strip() or None
             source_ip = str(item.get("ip_address") or "").strip()
@@ -856,6 +889,7 @@ class DeHashedDomainProvider(DomainIntelligenceProvider):
             storage.create_domain_exposure(
                 domain_record.id,
                 source="dehashed",
+                protected_candidates=protected_candidates,
                 source_name=self.name,
                 result_summary=summary,
                 normalized_hash=self._hash("dehashed", domain_name, email, username or "", database_name),
@@ -916,12 +950,15 @@ class IntelligenceXDomainProvider(DomainIntelligenceProvider):
         return [item for item in records if isinstance(item, dict)] if isinstance(records, list) else []
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         exposures: list[str] = []
         identity_correlations: list[str] = []
         needle = domain_name.lower()
 
         for item in self._search_results(domain_name):
+            item, protected_candidates = self._protected_record(item)
             record_type = str(item.get("type") or item.get("bucket") or "record").strip()
             system_id = str(item.get("systemid") or item.get("id") or "").strip()
             name = str(item.get("name") or item.get("selectorvalue") or "").strip()
@@ -934,6 +971,7 @@ class IntelligenceXDomainProvider(DomainIntelligenceProvider):
             storage.create_domain_exposure(
                 domain_record.id,
                 source="intelligencex",
+                protected_candidates=protected_candidates,
                 source_name=self.name,
                 result_summary=summary,
                 normalized_hash=self._hash("intelligencex", domain_name, record_type, system_id, name),
@@ -998,6 +1036,8 @@ class DnsDomainProvider(DomainIntelligenceProvider):
         return results
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         exposures: list[str] = []
         warnings: list[str] = []

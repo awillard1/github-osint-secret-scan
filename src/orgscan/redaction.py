@@ -45,6 +45,19 @@ _TOKEN = re.compile(r'\b(?:gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]
 _AUTH = re.compile(r'(?i)\b(?:Bearer|Basic)\s+([A-Za-z0-9._~+/=-]+)')
 
 
+def private_key_values(text):
+    consumed = 0
+    for header in re.finditer(r'-----BEGIN ((?:[A-Z]+ )?PRIVATE KEY)-----', text):
+        if header.start() < consumed:
+            continue
+        ending = '-----END ' + header.group(1) + '-----'
+        end = text.find(ending, header.end())
+        if end < 0:
+            return
+        consumed = end + len(ending)
+        yield text[header.start():consumed]
+
+
 def credential_label(key):
     if not isinstance(key, str) or len(key) > 128:
         return False
@@ -104,6 +117,30 @@ def _assignment_values(value):
         value = decoded
         yield value
         yield unquote(value)
+
+
+def _captured_assignment(text, key_start, start, end):
+    """Decode only the assignment's quoting layers; literal backslashes survive."""
+    value = text[start:end]
+    if start == 0 or text[start-1] not in "\"'":
+        return value
+    quote = text[start-1]
+    pos = start-2
+    while pos >= 0 and text[pos] == "\\":
+        pos -= 1
+    escapes = start-2-pos
+    layers = (escapes+1).bit_length()-1
+    for _ in range(layers):
+        try:
+            value = json.loads('"'+value+'"')
+        except ValueError:
+            return value
+    if quote == '"':
+        try:
+            return json.loads('"'+value+'"')
+        except ValueError:
+            return value
+    return re.sub(r"\\(['\\])", lambda match: match.group(1), value)
 
 
 def _assignments(text):
@@ -226,7 +263,53 @@ def _private_keys(text):
         copied = position = end
 
 
-def redact(value, *, secrets_from=None, preserve_root_keys=False):
+def _inspection_text(text):
+    """Unwrap complete copied JSON strings before interpreting quote escapes."""
+    for _ in range(MAX_ESCAPE_LAYERS):
+        if not text.startswith('"'):
+            return text
+        try:
+            decoded = json.loads(text)
+        except ValueError:
+            return text
+        if not isinstance(decoded, str) or decoded == text:
+            return text
+        text = decoded
+    if text.startswith('"'):
+        try:
+            if isinstance(json.loads(text), str):
+                raise SanitizationLimitError('Sanitizer copied string limit exceeded')
+        except json.JSONDecodeError:
+            pass
+    return text
+
+
+def _copied_assignments(text):
+    """Find complete JSON string tokens in one forward pass, including in prose."""
+    pos = 0
+    while pos < len(text):
+        if text[pos] != '"':
+            pos += 1
+            continue
+        start = pos
+        pos += 1
+        while pos < len(text):
+            if text[pos] == "\\":
+                pos += 2
+            elif text[pos] == '"':
+                pos += 1
+                try:
+                    decoded = json.loads(text[start:pos])
+                except ValueError:
+                    break
+                if any(_assignments(_inspection_text(decoded))):
+                    yield start, pos, decoded
+                break
+            else:
+                pos += 1
+
+
+def redact(value, *, secrets_from=None, preserve_root_keys=False, _capture=None):
     known = set()
     nodes = characters = replacement_work = 0
     root_key_depth = 1 if isinstance(value, (list, tuple)) else 0
@@ -248,6 +331,9 @@ def redact(value, *, secrets_from=None, preserve_root_keys=False):
         charge(item, depth)
         if isinstance(item, dict):
             for key, child in item.items():
+                if (_capture and isinstance(child, str) and credential_label(key)
+                        and key not in _EVIDENCE_LABELS and not child.startswith('<redacted')):
+                    _capture(str(key).lower(), child)
                 collect(str(key), depth+1)
                 collect(child, depth+1, sensitive or sensitive_field(key, item))
         elif isinstance(item, (list, tuple)):
@@ -256,22 +342,48 @@ def redact(value, *, secrets_from=None, preserve_root_keys=False):
         elif isinstance(item, PurePath):
             collect(str(item), depth+1, sensitive)
         elif isinstance(item, str):
+            inspected = _inspection_text(item)
+            if inspected != item:
+                collect(inspected, depth+1, sensitive)
+                return
             if sensitive and not re.fullmatch(r'.{1,4}\.\.\..{1,4}', item):
                 remember(item)
-            for _, start, end in _assignments(item):
-                for candidate in _assignment_values(item[start:end]):
+            copied = list(_copied_assignments(item))
+            for _, _, decoded in copied:
+                collect(decoded, depth+1, sensitive)
+            copied_index = 0
+            for key_start, start, end in _assignments(item):
+                while copied_index < len(copied) and copied[copied_index][1] <= key_start:
+                    copied_index += 1
+                if copied_index < len(copied) and copied[copied_index][0] <= key_start < copied[copied_index][1]:
+                    continue
+                variants = list(_assignment_values(item[start:end]))
+                if _capture and variants and not variants[-2].startswith('<redacted'):
+                    _capture(_WORDS.match(item, key_start).group().lower(), _captured_assignment(item, key_start, start, end))
+                for candidate in variants:
                     remember(candidate)
+            if _capture:
+                for match in _TOKEN.finditer(item):
+                    _capture('token-format', match.group())
+                for private_key in private_key_values(item):
+                    _capture('private-key', private_key)
             for match in _AUTH.finditer(item):
                 remember(match.group(1))
+                if _capture:
+                    _capture('authorization', match.group(1))
             for start, end in _urls(item):
                 try:
                     parts, query, fragment = _parts(item[start:end])
                     for child in (parts.username, parts.password):
                         if child:
                             remember(child); remember(unquote(child))
+                    if _capture and parts.password:
+                        _capture('url-password', unquote(parts.password))
                     for key, child in query + fragment:
                         if credential_label(key):
                             remember(child); remember(unquote(child))
+                            if _capture:
+                                _capture(key, child)
                 except SanitizationLimitError:
                     raise
                 except ValueError:
@@ -289,7 +401,22 @@ def redact(value, *, secrets_from=None, preserve_root_keys=False):
             if len(text) > MAX_STRING_CHARS:
                 raise SanitizationLimitError('Sanitizer output limit exceeded')
         return _AUTH.sub('Authorization <redacted>', _TOKEN.sub(REDACTED, _private_keys(text)))
-    def text_clean(text):
+    def text_clean(text, copied_depth=0):
+        if copied_depth > MAX_ESCAPE_LAYERS:
+            raise SanitizationLimitError('Sanitizer copied string limit exceeded')
+        inspected = _inspection_text(text)
+        wrappers = 0
+        if inspected != text and any(_assignments(inspected)):
+            while text != inspected:
+                text = json.loads(text)
+                wrappers += 1
+        pieces, offset = [], 0
+        for start, end, decoded in _copied_assignments(text):
+            pieces.extend((text[offset:start], json.dumps(text_clean(decoded, copied_depth+1))))
+            offset = end
+        if pieces:
+            pieces.append(text[offset:])
+            text = ''.join(pieces)
         # Protect recognized assignment labels from substitution (even if a secret
         # equals a label). URL rendering happens before free-text tokenization.
         chunks, position = [], 0
@@ -304,6 +431,8 @@ def redact(value, *, secrets_from=None, preserve_root_keys=False):
             position = end
         chunks.append(scrub(text[position:]))
         result = ''.join(chunks)
+        for _ in range(wrappers):
+            result = json.dumps(result)
         if len(result) > MAX_STRING_CHARS:
             raise SanitizationLimitError('Sanitizer output limit exceeded')
         return result
@@ -365,9 +494,18 @@ def sanitize_matches(matches, source=None):
     from dataclasses import asdict, replace
     from hashlib import sha256
     prepared = []
+    from orgscan.services.secret_evidence import capture
+    candidates = []
     for match in matches:
+        # Capture each match separately; never attach a report's other secrets
+        # to this finding. Native parser adapters supply their own candidates.
+        data = asdict(match)
+        data.pop('protected_candidates', None)
+        candidates.append(tuple(match.protected_candidates) + capture(data,
+            explicit=match.indicator if match.category == 'secret' and '...' not in match.indicator else None))
         if match.category == 'secret' and match.indicator and not match.indicator.startswith('<redacted') and '...' not in match.indicator:
             match = replace(match, metadata={**match.metadata, 'secret_digest': match.metadata.get('secret_digest') or sha256(match.indicator.encode()).hexdigest()})
         prepared.append(match)
     cleaned = redact([asdict(match) for match in prepared], secrets_from=source, preserve_root_keys=True)
-    return [replace(match, **values) for match, values in zip(matches, cleaned)]
+    return [replace(match, **{**values, 'protected_candidates': pending})
+            for match, values, pending in zip(matches, cleaned, candidates)]

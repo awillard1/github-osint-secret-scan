@@ -54,16 +54,20 @@ class AuthService:
             scopes = _intersect(row.tenant_scopes_json or [], parent.tenants)
             role = _capped_role(row.role,parent.role)
             source = "browser-session"
+            capabilities = parent.capabilities
         else:
-            memberships = {item.tenant_key:item.role for item in storage.list_user_tenant_memberships(row.user_id) if item.role in ROLE_LEVELS}
+            membership_rows = storage.list_user_tenant_memberships(row.user_id)
+            memberships = {item.tenant_key:item.role for item in membership_rows if item.role in ROLE_LEVELS}
             saved = row.tenant_scopes_json or []
             scopes = _intersect(saved, tuple(memberships))
             roles = [memberships.get(scope,memberships.get("*","reader")) for scope in scopes]
             role = _capped_role(row.role,*roles) if roles else "reader"
             source = "db-session"
+            grants = {item.tenant_key: set((item.metadata_json or {}).get('capabilities', [])) for item in membership_rows}
+            capabilities = ('secrets:reveal',) if scopes and all('secrets:reveal' in grants.get(scope, grants.get('*', set())) for scope in scopes) else ()
         if not scopes:
             return None
-        return AuthContext(row.user.username,role,tuple(scopes),True,source,row.user_id)
+        return AuthContext(row.user.username,role,tuple(scopes),True,source,row.user_id,capabilities)
 
     def resolve(self, raw_token: str | None, *, browser=False) -> AuthContext | None:
         if not raw_token:
@@ -148,16 +152,16 @@ class AuthService:
             session.commit()
         return {"username":username}
 
-    def grant(self, context, username, tenant, role):
+    def grant(self, context, username, tenant, role, *, capabilities=()):
         self.require_admin(context)
-        if role not in ROLE_LEVELS or not tenant or len(tenant) > 255:
+        if role not in ROLE_LEVELS or not tenant or len(tenant) > 255 or any(c != 'secrets:reveal' for c in capabilities):
             raise ValueError("Invalid tenant or role")
         with self.factory() as session:
             storage = Storage(session)
             user = storage.get_user_by_username(username)
             if user is None:
                 raise ValueError("User does not exist")
-            storage.grant_tenant_membership(user.id,tenant,role)
+            storage.grant_tenant_membership(user.id,tenant,role, metadata_json={'capabilities': list(capabilities)})
             session.commit()
         return {"username":username,"tenant":tenant,"role":role}
 

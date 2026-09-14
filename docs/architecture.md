@@ -374,3 +374,31 @@ API upload orchestration, organization expansion and other command families stil
 need incremental extraction. No wholesale API/CLI rewrite or public command removal
 was performed. Unused private runner/auth helpers and scheduler imports were removed;
 public scanner factories, parsers, auth helpers and documented exports remain.
+
+## Controlled secret evidence (Phase 23)
+
+Raw credentials may be retained solely in dedicated encrypted secret evidence and
+exposed only through an explicit authorized reveal operation. Ordinary canonical
+findings, evidence, summaries, diagnostics, browser HTML and reports remain redacted.
+The shared bounded redaction parser supplies short-lived opaque ingestion candidates
+before sanitization, including copied JSON and complete quoted assignments. Candidates
+are not JSON serializable and conceal their value in repr; they are consumed after
+persistence. Scanner adapters establish the preservation context; scan services carry
+settings into storage, and providers create a canonical finding for protected evidence.
+
+`services/secret_evidence.py` owns AES-256-GCM encryption, tenant-bound HMAC-SHA256
+fingerprints (a separate HKDF-derived key), metadata authorization and audited reveal.
+Fresh 96-bit nonces accompany each ciphertext. Authenticated associated data binds the
+ciphertext to its finding, tenant, type, fingerprint, source and key ID. The new
+`secret_evidence` table contains only ciphertext, nonce, masked display and provenance;
+`secret_reveal_audit` records actor, tenant, finding/evidence IDs, source and timestamp.
+The audit transaction must commit before plaintext can leave the service. No model
+property, generic serializer or report invokes decryption.
+
+Reveal requires authentication even in local mode. Readers cannot reveal. Analysts
+need `secrets:reveal`; administrators can reveal within their authorized tenants.
+Database session capabilities are derived from current memberships across all active
+session scopes; use a single-tenant session for a grant limited to one tenant.
+Browser sessions inherit current parent permissions and existing CSRF protection.
+The dedicated API router and small browser adapter call this service. This does not
+claim completion of the remaining Phase 1 presentation decomposition.

@@ -55,7 +55,7 @@ Before upgrading an existing installation:
    separately, with restricted access. Test restoring to a separate location.
 3. Install the reviewed wheel in the intended virtual environment.
 4. Run `orgscan doctor --json`; an old schema should report an upgrade requirement.
-5. Run `orgscan init-db` explicitly, then doctor again. Head is `20260914_0011`.
+5. Run `orgscan init-db` explicitly, then doctor again. Head is `20260914_0012`.
    Migration 0006 adds evidence identity; 0007 maps lifecycle and records inferred
    legacy timestamps. Migration 0008 adds durable queue execution identities,
    quarantines duplicate legacy executions, and sanitizes legacy evidence/diagnostics.
@@ -63,6 +63,7 @@ Before upgrading an existing installation:
    including domain summaries, nested plugin metadata and job targets.
    Migration 0010 repairs credential assignments and copied values missed by 0009.
    Migration 0011 repairs escaped/copied assignments missed by 0010.
+   Migration 0012 adds encrypted secret evidence and reveal audit tables.
    Redaction is irreversible; these migrations do not reconstruct unavailable history.
 6. Validate authorized reads, a local test scan and reporting before restarting workers.
 
@@ -521,3 +522,81 @@ remain unchanged.
   API lifespan/health, inert local scan and JSON/SARIF reports.
 - Compile checks and `git diff --check` passed. Final review confirmed frozen
   migration history is unchanged and no fixture credentials entered documentation.
+
+## Phase 23 — controlled secret preservation and analyst reveal
+
+Preservation is disabled by default, including when a key is present. To enable it,
+set `ORGSCAN_PRESERVE_SECRETS=true`, `ORGSCAN_SECRET_ENCRYPTION_KEY` to a securely
+generated URL-safe base64 encoding of 32 random bytes, and optionally
+`ORGSCAN_SECRET_ENCRYPTION_KEY_ID` (default `v1`). Provision these through your secret
+manager to the API and every scanner/scheduler/worker process. Never commit the key.
+Serialized settings deliberately omit it even with `include_secrets=True`; queued
+workers must receive it independently through their environment. Missing/invalid keys
+fail preservation closed. Doctor reports only enabled/disabled and configured/missing.
+
+AES-256-GCM uses the declared cryptography runtime library. Ciphertexts are bound to
+the tenant and finding. HMAC fingerprints support equality/correlation within a tenant
+and key version without publishing a raw password hash. The schema records key IDs,
+but automated rotation and a multi-key keyring are not implemented: retain the matching
+key/version to read existing rows. Losing a key makes those values unrecoverable.
+Database backups include ciphertext; protect keys separately and test restoration.
+Python cannot guarantee immediate memory zeroization. Operators, trusted plugins and
+process debuggers remain within the application trust boundary.
+
+`GET /findings/{finding_id}/secrets` returns masked metadata to authenticated users in
+the finding's tenant. `POST /findings/{finding_id}/secrets/{secret_id}/reveal` requires
+an explicit action, tenant authorization and either scoped admin or analyst with
+`secrets:reveal`. Readers and unauthenticated local users cannot reveal. Environment
+token entries accept `capabilities: ["secrets:reveal"]`; the existing administrator
+membership API accepts the same field for database users. Membership updates without
+capabilities revoke the grant. Multi-tenant analyst sessions require the grant in
+every effective tenant scope. Reveal commits a security audit event before returning
+plaintext, with no-store/anti-caching headers. Operate behind HTTPS and ensure reverse
+proxies/APM do not capture reveal response bodies.
+
+The finding detail view initially contains masks only. Authorized users can Reveal,
+Hide, or let a value hide after 30 seconds or when leaving the page. Plaintext is not
+put in URLs, browser storage, logs or clipboard automatically. Screenshots, manual
+copying and authorized analyst actions cannot be prevented by the application.
+JSON/CSV/HTML/PDF/SARIF, scheduled reports, webhooks and generic finding APIs remain
+redacted; there is no privileged bulk secret export.
+
+Migration **20260914_0012** adds `secret_evidence` and `secret_reveal_audit` without
+rewriting 0009–0011 or recovering irreversibly redacted values. Stop writers and run
+`orgscan migrate-db` explicitly before startup. The configured database was not changed
+by this implementation. New scans can preserve recognized values supplied by scanners;
+digests, already-redacted scanner output and unrecognized opaque values are not
+recoverable. Preservation requires a tenant-owned canonical finding. Downgrading 0012
+drops protected evidence and reveal audits; restore matching backups for rollback.
+PostgreSQL/live Redis/external-tool certification and deployment resource quota
+assumptions remain as previously documented.
+
+### Phase 23 validation
+
+- Final complete suite: **691 passed, 6 skipped**, two existing dependency
+  deprecation warnings, **357.92 seconds**.
+- Added 49 tests for protected capture, encryption/reveal, authorization and current
+  grants, browser CSRF/initial HTML, reports/webhooks, audit failure, configuration,
+  provider projection, literal JSON escape fidelity, checkpoints and migration.
+- Final focused security/legacy-presentation/performance run: **172 passed**, two
+  existing dependency deprecation warnings.
+- Adversarial runtime probes: **64 KB 0.0097–0.0672 seconds; 256 KB
+  0.0383–0.2647 seconds** across unbroken, backslash, copied-assignment and URL shapes.
+  Existing boundedness regression tests passed.
+- Doctor on an explicitly migrated disposable database: **exit 0, ok=true,
+  17 warnings** for optional tools/providers and deployment configuration; preservation
+  enabled, encryption key configured, schema **20260914_0012**. No key was printed.
+- Protected schema/model comparison: **zero differences**. Forward upgrade from 0011
+  and repeat upgrade preserve existing evidence; frozen migration history is unchanged.
+- Wheel/sdist build and clean install passed. The latter used a fresh external venv,
+  runtime dependencies only, `pip check`, migrations, CLI/API startup, local scan,
+  JSON/SARIF reports and encrypted storage with exact authorized reveal.
+- Compile checks and `git diff --check` passed. Documentation contains no synthetic
+  test credentials. The configured database was not migrated or otherwise changed.
+
+Changing preservation mode or key ID invalidates reusable scanner checkpoints;
+missing encryption configuration cannot silently reuse a checkpoint when preservation
+is enabled. Change the key ID when provisioning a different key. Copied JSON extraction
+retains literal backslashes, quotes, Unicode and actual newlines without repeatedly
+decoding the original credential. Provider records containing recognized password
+fields are captured before adapters reduce them to redacted summaries.

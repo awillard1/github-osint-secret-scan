@@ -24,6 +24,7 @@ class ScanMatch:
     remediation_hint: str | None = None
     raw_payload: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+    protected_candidates: tuple = field(default=(), repr=False, compare=False)
 
 
 class ScannerExecutionError(RuntimeError):

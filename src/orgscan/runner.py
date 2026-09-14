@@ -49,6 +49,7 @@ def execute_scan(
     plan=None,
     canonical_root: Path | None = None,
 ) -> ScanExecutionResult:
+    storage.session.info['secret_settings'] = settings or Settings()
     scanner = get_scanner(scanner_name, settings=settings) if settings is not None else get_scanner(scanner_name)
     scanner_impl = ScannerAdapter(scanner, scanner_id=scanner_name, settings=settings)
     from orgscan.scanners.files import validate_scan_target
@@ -230,7 +231,10 @@ def _persist_matches(
     from orgscan.services.correlation import finding_identity, evidence_identity, detector_id
     finding_ids: list[int] = []
     from orgscan.redaction import sanitize_matches
-    for match in sanitize_matches(matches):
+    from orgscan.services.secret_evidence import preservation_context
+    with preservation_context(storage.session.info.get('secret_settings')):
+        sanitized = sanitize_matches(matches)
+    for match in sanitized:
         identity = finding_identity(
             match, scanner_name, organization_id=organization_id, repository_id=repository_id
         )
@@ -259,6 +263,8 @@ def _persist_matches(
                 scan_job_id=scan_job_id,
             )
         )
+        from orgscan.services.secret_evidence import persist
+        persist(storage.session, finding, match.protected_candidates)
         storage.upsert_scanner_evidence(
             finding_id=finding.id,
             observation_fingerprint=evidence_identity(finding.id, scanner_name, match),
