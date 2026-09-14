@@ -1,3 +1,4 @@
+import os
 from io import BytesIO
 from pathlib import Path
 import shutil
@@ -128,6 +129,7 @@ def test_detect_secrets_readiness_checks_supported_contract(monkeypatch, version
     assert DetectSecretsScanner().readiness().ready is supported
 
 
+@pytest.mark.skipif(os.environ.get('ORGSCAN_LIVE_TOOLS') != '1', reason='Set ORGSCAN_LIVE_TOOLS=1 to opt in')
 @pytest.mark.skipif(shutil.which('detect-secrets') is None,reason='Optional detect-secrets executable is unavailable')
 def test_live_detect_secrets_compatibility(tmp_path):
     scanner = DetectSecretsScanner()

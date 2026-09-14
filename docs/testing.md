@@ -150,3 +150,26 @@ It asserts pytest/httpx are absent and cleans the temporary environment afterwar
 Index access (or pip wheelhouse configuration) is required. The GitHub Actions
 `clean-install.yml` runs this independently on Python 3.12 and 3.13; normal unit tests
 remain offline and do not perform this dependency install.
+
+
+## Optional live tools
+
+Normal tests never require external scanner executables. Explicitly opt in with:
+
+```bash
+ORGSCAN_LIVE_TOOLS=1 python -m pytest tests/live -rs
+```
+
+The five scanner smokes skip missing executables/unmet readiness, generate their own
+inert inputs and local rules, and disable Semgrep metrics and TruffleHog update/verification
+requests. No target repository code is executed. See the scanner contract for limits.
+The existing detect-secrets live test also requires this opt-in variable.
+
+
+Phase 21 regressions live in `tests/security/test_phase21_sanitizer.py` and
+`tests/security/test_phase21_presentation.py`. They cover shared label grammar,
+URL/copy context, fail-closed budgets, 16/32/64 KB adversarial growth, unsafe legacy
+API/browser/report presentation, provider persistence and repeatable 0009-to-0010
+repair. Performance assertions use a conservative two-second ceiling and growth
+allowance, rather than exact machine-dependent timings. Legacy presentation tests
+verify the database remains unsafe, proving serialization itself supplies safety.

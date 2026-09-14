@@ -1,6 +1,8 @@
 """Operator queues over the caller's authorized storage session."""
 from datetime import UTC, datetime, timedelta
 
+from orgscan.redaction import safe_output
+from orgscan.presentation import safe_finding_fields
 from orgscan.storage.dashboard import DashboardStorage
 from orgscan.lifecycle import HIGH_RISK_THRESHOLD, MANAGED_STATES
 
@@ -15,6 +17,7 @@ class DashboardService:
     def __init__(self, session_factory):
         self.session_factory = session_factory
 
+    @safe_output
     def overview(self, *, days: int = 7, limit: int = 10, offset: int = 0) -> dict:
         if not 1 <= days <= 365 or not 1 <= limit <= 500 or offset < 0:
             raise ValueError("Invalid dashboard window")
@@ -35,11 +38,11 @@ class DashboardService:
             ):
                 count, findings = storage.findings(limit=limit, offset=offset, **filters)
                 queue(name, count, [
-                    {"id": finding.id, "label": finding.title,
+                    safe_finding_fields(finding, {"id": finding.id, "label": finding.title,
                      "href": f"/dashboard/findings/{finding.id}",
                      "state": finding.lifecycle_state, "risk_score": finding.risk_score or 0,
                      "severity": finding.severity, "confidence": finding.confidence,
-                     "owner": finding.triage_owner, "observed_at": finding.last_seen_at.isoformat()}
+                     "owner": finding.triage_owner, "observed_at": finding.last_seen_at.isoformat()})
                     for finding in findings
                 ])
             for name, statuses in (

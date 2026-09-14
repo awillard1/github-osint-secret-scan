@@ -119,7 +119,7 @@ def resolve_requested_tenants(auth: AuthContext, requested_tenant: str | None = 
         return None
     if requested_tenant:
         if not auth.allows_tenant(requested_tenant):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Requested tenant is not permitted.")
+            raise HTTPException(status_code=403, detail="Requested tenant is not permitted.")
         return [requested_tenant]
     return list(auth.tenants)
 

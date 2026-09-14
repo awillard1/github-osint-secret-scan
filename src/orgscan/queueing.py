@@ -199,9 +199,10 @@ def execute_scheduled_scan_job(scheduled_scan_id: int, settings_payload: dict[st
 
         try:
             results = execute_scheduled_scan(storage, scheduled, settings=settings)
-            result = results[0] if results else None
-            if result is None:
+            if not results:
                 raise QueueBackendError("Scheduled scan did not produce a result")
+            result = results[0]
+            payload = _result_payload(scheduled.id, results)
             storage.mark_scheduled_scan_run(
                 scheduled,
                 next_run_from_cadence(scheduled.cadence),
@@ -220,10 +221,10 @@ def execute_scheduled_scan_job(scheduled_scan_id: int, settings_payload: dict[st
                     "next_retry_at": None,
                 }
             )
-            task.metadata_json = {'result':_result_payload(scheduled.id, result)}
+            task.metadata_json = {'result':payload}
             storage.mark_queue_task_completed(task, scan_job_id=result.scan_job_id, tool_run_id=result.tool_run_id)
             metadata["completed_execution_id"] = execution_id
-            metadata["completed_result"] = _result_payload(scheduled.id, result)
+            metadata["completed_result"] = payload
             scheduled.metadata_json = metadata
             session.commit()
         except Exception as exc:
@@ -254,15 +255,7 @@ def execute_scheduled_scan_job(scheduled_scan_id: int, settings_payload: dict[st
             session.commit()
             raise JobExecutionError(failure.message) from None
 
-    return {
-        "scheduled_scan_id": scheduled_scan_id,
-        "scan_job_id": result.scan_job_id,
-        "tool_run_id": result.tool_run_id,
-        "scanner": result.scanner,
-        "target": result.target,
-        "findings": result.findings,
-        "finding_ids": result.finding_ids,
-    }
+    return payload
 
 
 def run_worker(
@@ -373,9 +366,11 @@ def _execute_db_queue_task(settings: Settings, queue_task_id: int, *, worker_id:
         metadata = dict(scheduled.metadata_json or {})
         try:
             results = execute_scheduled_scan(storage, scheduled, settings=settings)
-            result = results[0] if results else None
-            if result is None:
+            if not results:
                 raise QueueBackendError("Scheduled scan did not produce a result")
+            result = results[0]
+            payload = _result_payload(scheduled.id, results)
+            payload["queue_task_id"] = task.id
             storage.mark_scheduled_scan_run(
                 scheduled,
                 next_run_from_cadence(scheduled.cadence),
@@ -384,7 +379,7 @@ def _execute_db_queue_task(settings: Settings, queue_task_id: int, *, worker_id:
             session.refresh(task)
             if task.status != "running" or task.lease_owner != worker_id:
                 raise JobExecutionError("Queue task ownership changed during execution")
-            task.metadata_json = {**(task.metadata_json or {}), "result": _result_payload(scheduled.id, result)}
+            task.metadata_json = {**(task.metadata_json or {}), "result": payload}
             storage.mark_queue_task_completed(task, scan_job_id=result.scan_job_id, tool_run_id=result.tool_run_id)
             metadata.update(
                 {
@@ -399,16 +394,7 @@ def _execute_db_queue_task(settings: Settings, queue_task_id: int, *, worker_id:
             )
             scheduled.metadata_json = metadata
             session.commit()
-            return {
-                "scheduled_scan_id": scheduled.id,
-                "queue_task_id": task.id,
-                "scan_job_id": result.scan_job_id,
-                "tool_run_id": result.tool_run_id,
-                "scanner": result.scanner,
-                "target": result.target,
-                "findings": result.findings,
-                "finding_ids": result.finding_ids,
-            }
+            return payload
         except Exception as exc:
             failure = classify_failure(exc)
             session.rollback()
@@ -448,7 +434,6 @@ def _execute_db_queue_task(settings: Settings, queue_task_id: int, *, worker_id:
             raise JobExecutionError(failure.message) from None
 
 
-def _result_payload(scheduled_id, result):
-    return {"scheduled_scan_id": scheduled_id, "scan_job_id": result.scan_job_id,
-            "tool_run_id": result.tool_run_id, "scanner": result.scanner, "target": result.target,
-            "findings": result.findings, "finding_ids": result.finding_ids}
+def _result_payload(scheduled_id, results):
+    from orgscan.services.scan_service import result_payload
+    return {"scheduled_scan_id": scheduled_id, **result_payload(results)}

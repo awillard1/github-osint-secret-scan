@@ -10,8 +10,8 @@ The package now has `api/` (FastAPI, compatibility `OrgscanApiService`, artifact
 
 | Area | Implemented capability and evidence | Partial or missing scope |
 | --- | --- | --- |
-| Foundation and storage | Packaging, CLI entry point, environment configuration/redaction, bootstrap/readiness, SQLAlchemy `Storage`, canonical findings, evidence, risk scores, targets, jobs, relationships, suppressions, users/sessions, queue and rate-limit records. `db.py` supports explicit Alembic migration through `20260914_0009`; production startup checks the revision without applying migrations. Tests: `test_config.py`, `test_bootstrap.py`, `test_db.py`, `test_storage.py`, `test_schemas.py`. | SQLite fresh initialization and populated prior evidence-schema upgrades are exercised; PostgreSQL operation remains unverified. Phase 16 adds non-creating doctor and wheel resources; Phase 18 adds runtime-only clean-install CI and frozen historical migration inputs. Bootstrap offers installation guidance, not a complete external-binary installer. |
-| Scanners and plugins | Ten registered scanners (Phase 7 adds heuristic-rules): custom-patterns, git-history-patterns, repo-governance, gitleaks, detect-secrets, semgrep, trufflehog, yara, ripgrep-heuristics, heuristic-rules. Registry factory and `orgscan.scanners` entry-point loading already exist, including report ingestion for supporting scanners. `runner.py` normalizes `ScanMatch` into stored `CanonicalFinding` and records ToolRuns. Phase 2 adds uniform metadata/readiness/context/result adapters, duplicate-ID rejection and registry-driven API/CLI inventory. Tests: `test_scanner.py`, `test_external_scanners.py`, `test_runner.py`, `test_cli.py`, `tests/scanners/`, `tests/api/test_scanner_registry.py`. | YARA versions are probed; other external versions/runtime configuration are not probed; legacy plugins retain responsibility for execution safety. Mocked tests do not establish live tool compatibility. |
+| Foundation and storage | Packaging, CLI entry point, environment configuration/redaction, bootstrap/readiness, SQLAlchemy `Storage`, canonical findings, evidence, risk scores, targets, jobs, relationships, suppressions, users/sessions, queue and rate-limit records. `db.py` supports explicit Alembic migration through `20260914_0010`; production startup checks the revision without applying migrations. Tests: `test_config.py`, `test_bootstrap.py`, `test_db.py`, `test_storage.py`, `test_schemas.py`. | SQLite fresh initialization and populated prior evidence-schema upgrades are exercised; PostgreSQL operation remains unverified. Phase 16 adds non-creating doctor and wheel resources; Phase 18 adds runtime-only clean-install CI and frozen historical migration inputs. Bootstrap offers installation guidance, not a complete external-binary installer. |
+| Scanners and plugins | Ten registered scanners (Phase 7 adds heuristic-rules): custom-patterns, git-history-patterns, repo-governance, gitleaks, detect-secrets, semgrep, trufflehog, yara, ripgrep-heuristics, heuristic-rules. Registry factory and `orgscan.scanners` entry-point loading already exist, including report ingestion for supporting scanners. `runner.py` normalizes `ScanMatch` into stored `CanonicalFinding` and records ToolRuns. Phase 2 adds uniform metadata/readiness/context/result adapters, duplicate-ID rejection and registry-driven API/CLI inventory. Tests: `test_scanner.py`, `test_external_scanners.py`, `test_runner.py`, `test_cli.py`, `tests/scanners/`, `tests/api/test_scanner_registry.py`. | YARA versions and detect-secrets 1.5.x version/help compatibility are probed with bounds; other external versions remain unknown and runtime configuration is not certified; legacy plugins retain responsibility for execution safety. Mocked tests do not establish live tool compatibility. |
 | YARA and heuristics | YARA ships three token/key rules and accepts a configured rules file; its parser redacts matches. Ripgrep scans configurable internal suffixes and organization keywords. Tests: YARA/ripgrep parser cases in `test_scanner.py`; configuration cases in `test_config.py`. | Phase 6 maps local rule metadata and unknown rule IDs, detects versions, and fully redacts matched values/source snippets. Tests: `tests/scanners/test_yara_contract.py`. Phase 18 fingerprints bounded local includes and disables skipping for unresolved configuration. Phase 7 adds the opt-in heuristic-rules scanner with validated JSON, timed regex, stable digests and five starters. Existing ripgrep/custom definitions remain compatible. Tests: `tests/scanners/test_heuristic_rules.py`. |
 | Scan planning | Eight deterministic profiles, explicit overrides and versioned plans shared by CLI/API/scheduler/queues; job/schedule JSON preserves intent. Tests: `tests/services/test_scan_plan.py`, `tests/api/test_scan_profiles.py`. | Discovery profiles use existing domain providers; the dashboard scanner dropdown still supplies explicit scanner selection. Batches are sequential, with per-scanner commits. |
 | Repository acquisition and history | `mirroring.py` clones/reuses a working checkout, fetches tags/remote refs, persists mirror path/time and tracked/available refs, and checks out requested branches/tags. CLI and scheduled scans support multiple refs and record scope/ref on scan jobs. Built-in history scanning reads Git diffs. Tests: `test_mirroring.py`, mirror/history cases in `test_cli.py`, `test_scheduler.py`, `test_scanner.py`. Phase 4 adds isolated scan worktrees, POSIX locking, default-branch discovery and persisted sync/scan checkpoints in existing JSON. Tests: `tests/services/test_repository_cache.py`. Phase 5 adds opt-in unchanged skipping, verified history ranges, branch/deletion policies and conservative full fallback. Tests: `tests/services/test_incremental.py`. | Crash-orphan cleanup and distributed locking remain incomplete. |
@@ -182,7 +182,7 @@ At completion of Phase 2, all nine then-existing scanners declared metadata and 
 
 Built-in scanner subprocesses share explicit working directories, captured results and a configurable 300-second per-process timeout. Failures no longer expose raw subprocess diagnostics through the runner. There are no schema, migration, ScanPlan, profile, heuristic-rule or authentication changes. Scheduler/queue execution inherits the contract through the existing shared runner.
 
-Compatibility changes are additive inventory fields and broader metadata-driven artifact choices, predictable duplicate-ID errors, bounded built-in subprocess execution, and sanitized failure text. Existing missing-binary guidance is retained. Readiness checks binary presence and configured-file readability; external versions and runtime compatibility remain unverified. Output remains buffered without size limits, timeout is per subprocess, and third-party plugins must implement safe execution. YARA still ignores unknown rule IDs, and heuristics remain Python/settings based. See [scanner-contract.md](scanner-contract.md) for plugin integration details.
+Compatibility changes are additive inventory fields and broader metadata-driven artifact choices, predictable duplicate-ID errors, bounded built-in subprocess execution, and sanitized failure text. Existing missing-binary guidance is retained. Current readiness includes bounded YARA version and detect-secrets 1.5.x version/help probes; other external versions remain unknown. Captured output is bounded, timeout is per subprocess, and third-party plugins must implement safe execution. YARA supports custom rule metadata and unknown rule IDs; heuristic-rules supports validated local rules. These later phases supersede the initial Phase 2 limitations. See [scanner-contract.md](scanner-contract.md) for plugin integration details.
 
 Validation: the pre-change full suite passed **115 tests**. `tests/scanners tests/api/test_scanner_registry.py tests/test_bootstrap.py tests/test_docs.py` passed **75 tests**; final scanner/runner checks (`tests/scanners tests/test_external_scanners.py tests/test_runner.py`) passed **73 tests**. The full `.venv/bin/python -m pytest` suite passed **185 tests**, with the same two Starlette/AnyIO deprecation warnings. API/full runs used the established outside-sandbox workaround for TestClient hangs. Diff/whitespace checks passed; an AST comparison confirmed all nine parser and canonical persistence/report-recording functions unchanged. Normal tests fake external tools, including timeout, malformed output and failure cases. No static checker is configured.
 
@@ -257,3 +257,35 @@ Production rollout requires explicit migration from 0008 to 0009 after backup.
 Portable cache checks require deployment disk quotas; PostgreSQL and live external
 tools remain uncertified. Phase 1 remains **partial**. Dashboard scaling, queue batch
 summaries, compatibility-helper cleanup and broader decomposition are deferred.
+
+
+## Phase 20 — final non-blocking correctness and performance cleanup
+
+Both queues now persist/replay the same full batch aggregation as synchronous scans,
+including every scanner/ref result while retaining first-job compatibility fields.
+Dashboard summaries reuse storage SQL aggregates, selected graph endpoint labels,
+bounded previews and SQL trends. Dashboard high-signal filtering runs before the SQL
+limit. Report evidence remains batched. Public `resolve_requested_tenants` is retained
+and its unauthorized request correctly raises HTTP 403.
+
+Scanner readiness documentation is reconciled, with opt-in generated-fixture smoke
+coverage for five external tools. No migration or broad decomposition is required;
+head remains 0009. Phase 1 remains **partial**: upload/expansion orchestration and
+remaining API/CLI command-family extraction still need incremental work. See
+[release readiness](release-readiness.md#phase-20-correctness-and-performance-cleanup)
+for exact validation, preview limits, legacy replay limitations and deployment risks.
+
+
+## Phase 21 — secret-safety and sanitizer hardening
+
+A shared credential-label policy now covers structured fields and copied assignments,
+including AWS credentials and access/client tokens. Browser finding rows, details,
+triage queues and report previews retain the same metadata-derived secret knowledge
+as API presentation. Bounded tokenization replaces repeated URL-prefix matching;
+central work limits fail closed without echoing input.
+
+Forward migration `20260914_0010` repairs legacy fields missed by 0009 using a frozen,
+parity-tested sanitizer. Released migration 0009 is unchanged. Deployments must run
+explicit migration before production startup. Phase 1 remains **partial**; this phase
+adds no general architectural decomposition. See release readiness for validation
+and operational limits.

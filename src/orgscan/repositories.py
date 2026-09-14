@@ -835,10 +835,14 @@ class Storage:
         detected_before: datetime | None = None,
         tenant_keys: list[str] | None = None,
         include_evidence: bool = False,
+        high_signal_only: bool = False,
+        min_confidence: str = "likely",
     ) -> Sequence[Finding]:
         query = select(Finding).order_by(Finding.detected_at.desc(), Finding.id.desc())
         if tenant_keys is not None:
             query = query.where(self.finding_tenant_scope(tenant_keys))
+        if high_signal_only:
+            query = query.where(Finding.confidence.in_(self._allowed_confidences(min_confidence)), Finding.status != "suppressed")
         if include_evidence:
             query = query.options(selectinload(Finding.evidence_items), selectinload(Finding.repository), selectinload(Finding.scan_job))
         if status:

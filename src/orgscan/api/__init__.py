@@ -104,7 +104,8 @@ def _serialize_finding(finding, *, include_detail: bool = False) -> dict[str, An
                 "metadata": finding.metadata_json,
             }
         )
-    return payload
+    from orgscan.presentation import safe_finding_fields
+    return safe_finding_fields(finding, payload)
 
 
 @safe_output
@@ -880,44 +881,22 @@ class OrgscanApiService:
             storage = Storage(session)
             summary = build_summary(storage)
             findings = storage.list_findings(
-                limit=max(limit * 4, limit) if high_signal_only else limit,
+                limit=limit,
+                high_signal_only=high_signal_only,
+                min_confidence=min_confidence,
                 status=status,
                 severity=severity,
                 category=category,
                 confidence=confidence,
             )
-            if high_signal_only:
-                findings = self._high_signal_findings(findings, min_confidence=min_confidence, limit=limit)
-            filtered_rows = [
-                {
-                    "id": finding.id,
-                    "title": finding.title,
-                    "description": finding.description,
-                    "category": finding.category,
-                    "severity": finding.severity,
-                    "confidence": finding.confidence,
-                    "status": finding.status,
-                    "triage_state": finding.triage_state,
-                    "triage_owner": finding.triage_owner,
-                    "triage_notes": finding.triage_notes,
-                    "remediation_due_date": finding.remediation_due_date.isoformat() if finding.remediation_due_date else None,
-                    "source_tool": finding.source_tool,
-                    "source_name": finding.source_name,
-                    "repository_id": finding.repository_id,
-                    "scan_job_id": finding.scan_job_id,
-                    "risk_score": finding.risk_score or 0,
-                    "detected_at": finding.detected_at.isoformat(),
-                    "fingerprint": finding.fingerprint,
-                }
-                for finding in findings
-            ]
+            filtered_rows = [_serialize_finding(finding) for finding in findings]
             tooling = self._tooling_payload()
             return render_dashboard_html(
                 summary,
                 filtered_rows,
                 operations=DashboardService(self.session_factory).overview(days=days),
                 trends=finding_trends(storage, days=days),
-                graph=relationship_graph(storage, limit=200),
+                graph=summary['relationship_graph'],
                 filters={
                     "limit": limit,
                     "days": days,

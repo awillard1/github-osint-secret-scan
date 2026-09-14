@@ -11,7 +11,7 @@ Phase 2 implements this contract in `src/orgscan/scanners/base.py` and `registry
 All contract records are frozen dataclasses:
 
 - `ScannerMetadata`: stable `scanner_id`, `display_name`, `kind`, `supported_targets`, history/incremental flags, optional `version`, description, binary/settings/environment-key declarations, configuration requirements and optional file settings.
-- `ScannerReadiness`: `ready`, `status`, optional binary path/version, missing requirements and warnings. Checks must not execute scans. Built-in readiness checks executable presence and configured file readability; it does not probe external versions or validate runtime configuration. Built-in Python detectors declare the package version; external versions remain unknown.
+- `ScannerReadiness`: `ready`, `status`, optional binary path/version, missing requirements and warnings. Checks must not execute scans. Built-in Python detectors declare the package version. YARA performs a bounded five-second version probe; failure leaves an unknown version and warning. detect-secrets requires successful five-second version/help probes for the supported 1.5.x scan contract. Semgrep requires readable local rules and leaves runtime compatibility unverified. Other external adapters check executable presence and declared configuration; their versions remain unknown. None of these checks certifies a live scan.
 - `ScanTarget`: prepared `path`, `kind` (`path`, `mirror`, or `artifact`) and `ref`.
 - `ScanContext`: target, optional job/organization/repository IDs, positive finite `timeout_seconds`, optional environment overrides, and options carrying existing scope settings. Environment is excluded from repr; do not serialize/log contexts containing credentials. It is not an authorization context.
 - `ScanResult`: scanner ID, start/completion timestamps, `findings: list[ScanMatch]`, logical `exit_status` and warnings. Zero means the scanner accepted the tool's exit status, including tool-specific findings exits. Result warnings/timings are available to callers; the runner retains its existing persisted job/ToolRun timing model.
@@ -167,3 +167,39 @@ the supported flags. Unknown versions/contracts are unavailable, rather than
 advertised ready. An optional live smoke test skips absent/unsupported executables.
 YARA retains its bounded version probe and execution-time rule syntax validation.
 External binaries and plugins still require deployment-specific validation.
+
+
+## Opt-in live compatibility checks (Phase 20)
+
+`ORGSCAN_LIVE_TOOLS=1 python -m pytest tests/live -rs` exercises detect-secrets,
+Semgrep, YARA, Gitleaks and TruffleHog only when explicitly enabled. Missing binaries
+or unmet readiness skip cleanly. Tests create inert temporary target files and local
+Semgrep/YARA rules; they do not scan checkout content, execute target code or download
+rules. Semgrep metrics/version checks are disabled. The TruffleHog smoke adds
+`--no-update --no-verification`, supported by its
+[CLI definitions](https://github.com/trufflesecurity/trufflehog/blob/main/main.go),
+to prevent update and credential verification requests. Use deployment egress controls
+for external binaries; readiness is not a network sandbox.
+
+A live smoke passing certifies only that executable and these tiny inputs. A parser
+or command incompatibility fails the opted-in test; do not weaken assertions to hide it.
+The ordinary unit suite uses mocks and skips all live executable tests.
+
+
+## Shared secret presentation policy (Phase 21)
+
+Persistence, diagnostics and presentation share `orgscan.redaction`. Credential
+labels are case-insensitive, normalize hyphens, and use the same recognition for
+nested fields and value-bearing `key=value` / `key: value` text. Quoted values,
+query credentials and copied values are protected; labels and non-secret prose
+remain useful. Finding presentation includes hidden metadata as redaction context.
+Browser renderers sanitize their inputs before HTML escaping, as API and report
+serializers do. Plugin code remains trusted; arbitrary unlabelled opaque strings
+cannot be identified as secrets without evidence or known-secret context.
+
+Sanitization fails closed at centrally defined limits: 1,000,000 characters per
+string, 8,000,000 total input characters, 100,000 nodes, depth 30, 2,048 known secrets,
+32,000,000 replacement-work characters and 4,096 URL fields. Output expansion is
+also bounded. Limit errors contain no input. These are independent of acquisition
+limits and may reject unusually large legitimate payloads; callers must not retry
+by returning unsanitized data. Migration 0010 freezes this policy with parity tests.

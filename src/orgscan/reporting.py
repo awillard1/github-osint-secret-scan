@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 
 from orgscan.config import Settings
 from orgscan.reports.redaction import redact
-from orgscan.redaction import safe_output
+from orgscan.redaction import safe_output, safe_presentation
 from orgscan.repositories import Storage
 
 
@@ -52,121 +52,16 @@ def _filtered_findings(
 
 @safe_output
 def build_summary(storage: Storage, *, tenant_keys: list[str] | None = None) -> dict[str, Any]:
-    scope = _scoped_assets(storage, tenant_keys)
-    findings = list(scope["findings"])
-    repositories = {repo.id: repo.full_name for repo in scope["repositories"]}
-    top_risky_findings = sorted(findings, key=lambda finding: (finding.risk_score or 0, finding.detected_at, finding.id), reverse=True)[:10]
-    repository_counts: dict[str, int] = {}
-    severity_breakdown: dict[str, int] = {}
-    category_breakdown: dict[str, int] = {}
-    source_tool_breakdown: dict[str, int] = {}
-    workflow_breakdown: dict[str, int] = {}
-    lifecycle_breakdown: dict[str, int] = {}
-    evidence_count = 0
-    risk_score_count = 0
-    for finding in findings:
-        repository_label = repositories.get(finding.repository_id, "unassigned")
-        repository_counts[repository_label] = repository_counts.get(repository_label, 0) + 1
-        severity_breakdown[finding.severity] = severity_breakdown.get(finding.severity, 0) + 1
-        category_breakdown[finding.category] = category_breakdown.get(finding.category, 0) + 1
-        source_tool_breakdown[finding.source_tool] = source_tool_breakdown.get(finding.source_tool, 0) + 1
-        lifecycle_breakdown[finding.lifecycle_state] = lifecycle_breakdown.get(finding.lifecycle_state, 0) + 1
-        workflow_breakdown[finding.status] = workflow_breakdown.get(finding.status, 0) + 1
-        evidence_count += len(finding.evidence_items)
-        if finding.risk_score is not None:
-            risk_score_count += 1
-    repository_breakdown = sorted(repository_counts.items(), key=lambda item: (-item[1], item[0]))[:10]
-    trend_rows = finding_trends(storage, days=30, tenant_keys=tenant_keys)
-    graph = relationship_graph(storage, limit=200, tenant_keys=tenant_keys)
-
-    return {
-        "counts": {
-            "organizations": len(scope["organizations"]),
-            "domains": len(scope["domains"]),
-            "repositories": len(scope["repositories"]),
-            "accounts": len(scope["accounts"]),
-            "scan_jobs": len(scope["scan_jobs"]),
-            "findings": len(findings),
-            "evidence": evidence_count,
-            "domain_exposures": len(scope["domain_exposures"]),
-            "identity_correlations": len(scope["identity_correlations"]),
-            "relationships": len(scope["relationships"]),
-            "risk_scores": risk_score_count,
-            "scheduled_scans": len(scope["scheduled_scans"]),
-            "scheduled_reports": len(scope["scheduled_reports"]),
-            "suppressions": 0,
-            "tool_runs": len(scope["tool_runs"]),
-        },
-        "severity_breakdown": severity_breakdown,
-        "category_breakdown": category_breakdown,
-        "source_tool_breakdown": source_tool_breakdown,
-        "workflow_breakdown": workflow_breakdown,
-        "lifecycle_breakdown": lifecycle_breakdown,
-        "actionable_high_risk_count": sum(is_actionable_high_risk(finding) for finding in findings),
-        "organizations": [org.name for org in scope["organizations"]],
-        "repositories": list(repositories.values()),
-        "accounts": [account.username for account in scope["accounts"]],
-        "domain_exposures": [exposure.result_summary for exposure in scope["domain_exposures"]],
-        "finding_trends": trend_rows,
-        "relationship_graph": graph,
-        "organization_comparison": organization_comparison(storage, limit=10, tenant_keys=tenant_keys),
-        "remediation_suggestions": remediation_suggestions(storage, limit=10, tenant_keys=tenant_keys),
-        "identity_correlations": [
-            {
-                "domain_id": correlation.domain_id,
-                "email": correlation.email,
-                "username": correlation.username,
-                "relation_type": correlation.relation_type,
-            }
-            for correlation in scope["identity_correlations"]
-        ],
-        "recent_scan_jobs": [
-            {
-                "id": job.id,
-                "target_type": job.target_type,
-                "target_id": job.target_id,
-                "scanner_name": job.scanner_name,
-                "status": job.status,
-            }
-            for job in scope["scan_jobs"][:25]
-        ],
-        "recent_tool_runs": [
-            {
-                "id": run.id,
-                "tool_name": run.tool_name,
-                "target": run.target,
-                "status": run.status,
-            }
-            for run in scope["tool_runs"][:25]
-        ],
-        "top_risky_findings": [
-            {
-                "id": finding.id,
-                "title": finding.title,
-                "severity": finding.severity,
-                "confidence": finding.confidence,
-                "risk_score": finding.risk_score or 0,
-                "source_tool": finding.source_tool,
-                "status": finding.status,
-            }
-            for finding in top_risky_findings
-        ],
-        "top_risky_assets": [
-            {"repository": repository_name, "findings": count}
-            for repository_name, count in repository_breakdown
-        ],
-        "scheduled_scans": [
-            {
-                "id": scan.id,
-                "target_type": scan.target_type,
-                "target_value": scan.target_value,
-                "scanner_name": scan.scanner_name,
-                "cadence": scan.cadence,
-                "enabled": scan.enabled,
-            }
-            for scan in scope["scheduled_scans"]
-        ],
-    }
+    if tenant_keys is not None:
+        from orgscan.storage.sources import scoped_reader
+        with scoped_reader(storage, tenant_keys) as scoped:
+            summary = scoped.report_summary(tenant_keys=tenant_keys)
+    else:
+        summary = storage.report_summary()
+    # The dashboard's historical degree field is a string; report DTOs use ints.
+    for node in summary['relationship_graph']['nodes']:
+        node['degree'] = str(node['degree'])
+    return summary
 
 
 def finding_rows(
@@ -185,7 +80,8 @@ def finding_rows(
 
 
 def finding_row(finding):
-    return {
+    from orgscan.presentation import safe_finding_fields
+    return safe_finding_fields(finding, {
             "id": finding.id,
             **lifecycle_fields(finding),
             "title": finding.title,
@@ -205,21 +101,12 @@ def finding_row(finding):
             "risk_score": finding.risk_score or 0,
             "detected_at": finding.detected_at.isoformat(),
             "fingerprint": finding.fingerprint,
-        }
+        })
 
 
 def finding_trends(storage: Storage, days: int = 30, *, tenant_keys: list[str] | None = None) -> list[dict[str, Any]]:
-    cutoff_date = (datetime.now(UTC) - timedelta(days=max(days, 1) - 1)).date()
-    series: dict[str, dict[str, Any]] = {}
-    for finding in _filtered_findings(storage, tenant_keys=tenant_keys):
-        detected_date = finding.detected_at.date()
-        if detected_date < cutoff_date:
-            continue
-        day = detected_date.isoformat()
-        entry = series.setdefault(day, {"date": day, "total": 0, "by_severity": {}})
-        entry["total"] += 1
-        entry["by_severity"][finding.severity] = entry["by_severity"].get(finding.severity, 0) + 1
-    return [series[day] for day in sorted(series)]
+    from orgscan.storage.report_queries import finding_trends as query_trends
+    return query_trends(storage, days=days, tenant_keys=tenant_keys)
 
 
 def relationship_graph(storage: Storage, limit: int = 200, *, tenant_keys: list[str] | None = None) -> dict[str, Any]:
@@ -423,6 +310,7 @@ def deliver_report_webhook(webhook_url: str, *, timeout: int, payload: dict[str,
         raise RuntimeError(f"alert delivery failed: {exc.reason}") from exc
 
 
+@safe_presentation
 def render_dashboard_html(
     summary: dict[str, Any],
     findings: list[dict[str, Any]],
@@ -929,6 +817,7 @@ def _render_html_page(title: str, body: str) -> str:
 </html>"""
 
 
+@safe_presentation
 def render_finding_detail_html(payload: dict[str, Any]) -> str:
     finding = payload["finding"]
     evidence_rows = "".join(
@@ -1006,6 +895,7 @@ def render_finding_detail_html(payload: dict[str, Any]) -> str:
     return _render_html_page(f"Finding {finding['id']}", body)
 
 
+@safe_presentation
 def render_scan_job_detail_html(payload: dict[str, Any]) -> str:
     scan_job = payload["scan_job"]
     tool_runs = payload.get("tool_runs", [])
@@ -1083,6 +973,7 @@ def _relationship_provenance_html(metadata: dict[str, Any]) -> str:
     return ("<ul>" + "".join(items) + f"</ul><small>Last observed: {observed}</small>") if items else "No recorded provenance"
 
 
+@safe_presentation
 def render_graph_html(graph: dict[str, Any]) -> str:
     node_cards = "".join(
         f"<span class='pill'>{html.escape(str(node['entity_type']))}: {html.escape(str(node['label']))}</span>"
