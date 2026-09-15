@@ -14,6 +14,7 @@ from orgscan.config import Settings
 from orgscan.reports.redaction import redact
 from orgscan.redaction import safe_output, safe_presentation
 from orgscan.repositories import Storage
+from orgscan.services.projection_service import derived_projection
 
 
 def _scoped_assets(storage: Storage, tenant_keys: list[str] | None = None) -> dict[str, Any]:
@@ -38,7 +39,8 @@ def _filtered_findings(
     category: str | None = None,
     confidence: str | None = None,
 ) -> list[Any]:
-    findings = list(_scoped_assets(storage, tenant_keys)["findings"])
+    from orgscan.models import Finding
+    findings = list(storage.visible_rows(Finding, tenant_keys))
     if status:
         findings = [finding for finding in findings if finding.status == status]
     if severity:
@@ -51,13 +53,13 @@ def _filtered_findings(
 
 
 @safe_output
-def build_summary(storage: Storage, *, tenant_keys: list[str] | None = None) -> dict[str, Any]:
+def build_summary(storage: Storage, *, tenant_keys: list[str] | None = None, source_context=None) -> dict[str, Any]:
     if tenant_keys is not None:
         from orgscan.storage.sources import scoped_reader
         with scoped_reader(storage, tenant_keys) as scoped:
             summary = scoped.report_summary(tenant_keys=tenant_keys)
     else:
-        summary = storage.report_summary()
+        summary = storage.report_summary(source_context=source_context)
     # The dashboard's historical degree field is a string; report DTOs use ints.
     for node in summary['relationship_graph']['nodes']:
         node['degree'] = str(node['degree'])
@@ -113,91 +115,27 @@ def finding_projection(finding):
         }
 
 
-def finding_trends(storage: Storage, days: int = 30, *, tenant_keys: list[str] | None = None) -> list[dict[str, Any]]:
+def finding_trends(storage: Storage, days: int = 30, *, tenant_keys: list[str] | None = None, source_context=None) -> list[dict[str, Any]]:
     from orgscan.storage.report_queries import finding_trends as query_trends
-    return query_trends(storage, days=days, tenant_keys=tenant_keys)
+    from orgscan.services.projection_service import safe_projection
+    context = source_context if source_context is not None else storage.projection_context(
+        family='trends', tenant_keys=tenant_keys)
+    return safe_projection(storage, query_trends(storage, days=days, tenant_keys=tenant_keys),
+                           family='trends', tenant_keys=tenant_keys, source_context=context)
 
 
 def relationship_graph(storage: Storage, limit: int = 200, *, tenant_keys: list[str] | None = None) -> dict[str, Any]:
-    scope = _scoped_assets(storage, tenant_keys)
-    relationships = list(scope["relationships"])[:limit]
-    repositories = {str(repo.id): repo.full_name for repo in scope["repositories"]}
-    organizations = {str(org.id): org.name for org in scope["organizations"]}
-    accounts = {str(account.id): account.username for account in scope["accounts"]}
-    domain_names = {str(domain.id): domain.name for domain in scope["domains"]}
-
-    nodes: dict[tuple[str, str], dict[str, str]] = {}
-    degrees: dict[str, int] = {}
-    relation_breakdown: dict[str, int] = {}
-
-    def resolve_label(entity_type: str, entity_id: str) -> str:
-        if entity_type == "repository":
-            return repositories.get(entity_id, f"repository:{entity_id}")
-        if entity_type == "organization":
-            return organizations.get(entity_id, f"organization:{entity_id}")
-        if entity_type == "account":
-            return accounts.get(entity_id, f"account:{entity_id}")
-        if entity_type == "domain":
-            return domain_names.get(entity_id) or f"domain:{entity_id}"
-        return f"{entity_type}:{entity_id}"
-
-    edges: list[dict[str, str]] = []
-    for relationship in relationships:
-        from_key = (relationship.from_entity_type, relationship.from_entity_id)
-        to_key = (relationship.to_entity_type, relationship.to_entity_id)
-        nodes.setdefault(
-            from_key,
-            {
-                "id": f"{relationship.from_entity_type}:{relationship.from_entity_id}",
-                "entity_type": relationship.from_entity_type,
-                "entity_id": relationship.from_entity_id,
-                "label": resolve_label(relationship.from_entity_type, relationship.from_entity_id),
-            },
-        )
-        nodes.setdefault(
-            to_key,
-            {
-                "id": f"{relationship.to_entity_type}:{relationship.to_entity_id}",
-                "entity_type": relationship.to_entity_type,
-                "entity_id": relationship.to_entity_id,
-                "label": resolve_label(relationship.to_entity_type, relationship.to_entity_id),
-            },
-        )
-        edges.append(
-            {
-                "id": str(relationship.id),
-                "from": f"{relationship.from_entity_type}:{relationship.from_entity_id}",
-                "to": f"{relationship.to_entity_type}:{relationship.to_entity_id}",
-                "relation_type": relationship.relation_type,
-                "confidence": relationship.confidence,
-                "source": relationship.source or "",
-                "provenance": relationship.metadata_json,
-            }
-        )
-        from_id = f"{relationship.from_entity_type}:{relationship.from_entity_id}"
-        to_id = f"{relationship.to_entity_type}:{relationship.to_entity_id}"
-        degrees[from_id] = degrees.get(from_id, 0) + 1
-        degrees[to_id] = degrees.get(to_id, 0) + 1
-        relation_breakdown[relationship.relation_type] = relation_breakdown.get(relationship.relation_type, 0) + 1
-
-    for node in nodes.values():
-        node["degree"] = str(degrees.get(node["id"], 0))
-
-    return {
-        "nodes": list(nodes.values()),
-        "edges": edges,
-        "summary": {
-            "node_count": len(nodes),
-            "edge_count": len(edges),
-            "relation_breakdown": relation_breakdown,
-            "entity_breakdown": {
-                entity_type: sum(1 for node in nodes.values() if node["entity_type"] == entity_type)
-                for entity_type in sorted({node["entity_type"] for node in nodes.values()})
-            },
-        },
-    }
+    from orgscan.storage.credential_context import build_projection_context
+    from orgscan.storage.graph_queries import graph_projection
+    from orgscan.services.projection_service import safe_projection
+    context = build_projection_context(storage, family='graph', tenant_keys=tenant_keys)
+    projection = graph_projection(storage, limit=limit, tenant_keys=tenant_keys)
+    for node in projection['nodes']:
+        node['degree'] = str(node['degree'])
+    return safe_projection(storage, projection, family='graph', source_context=context)
 
 
+@derived_projection('assets')
 def organization_comparison(storage: Storage, limit: int = 10, *, tenant_keys: list[str] | None = None) -> list[dict[str, Any]]:
     findings = _filtered_findings(storage, tenant_keys=tenant_keys)
     organizations = {org.id: org.name for org in storage.list_organizations()}
@@ -224,6 +162,7 @@ def organization_comparison(storage: Storage, limit: int = 10, *, tenant_keys: l
     return rows[:limit]
 
 
+@derived_projection('trends')
 def remediation_suggestions(storage: Storage, limit: int = 10, *, tenant_keys: list[str] | None = None) -> list[dict[str, Any]]:
     findings = _filtered_findings(storage, tenant_keys=tenant_keys)
     grouped: dict[tuple[str, str], dict[str, Any]] = {}

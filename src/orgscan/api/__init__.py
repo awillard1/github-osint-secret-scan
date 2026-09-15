@@ -467,14 +467,15 @@ class OrgscanApiService:
     def _scan_job_payload(self, scan_job_id: int) -> dict[str, object] | None:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='jobs')
             scan_job = storage.get_scan_job(scan_job_id)
             if scan_job is None:
                 return None
-            return {
+            return storage.safe_projection({
                 "scan_job": _serialize_scan_job(scan_job),
                 "tool_runs": [_serialize_tool_run(run) for run in storage.list_tool_runs(limit=25, scan_job_id=scan_job_id)],
                 "findings": [_serialize_finding(finding) for finding in storage.list_findings(limit=100, scan_job_id=scan_job_id)],
-            }
+            }, family='jobs', source_context=context)
 
     def _entity_risk_profile(
         self,
@@ -510,6 +511,7 @@ class OrgscanApiService:
     def _organizations_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             organizations = list(storage.list_organizations())[:limit]
             profiles = {
                 item["entity_id"]: item
@@ -519,7 +521,7 @@ class OrgscanApiService:
                     limit=max(limit, 1),
                 )
             }
-            return {
+            return storage.safe_projection({
                 "organizations": [
                     {
                         "id": organization.id,
@@ -531,7 +533,7 @@ class OrgscanApiService:
                     }
                     for organization in organizations
                 ]
-            }
+            }, family='assets', source_context=context)
 
     @safe_output
     def _organization_payload(
@@ -544,6 +546,7 @@ class OrgscanApiService:
     ) -> dict[str, object] | None:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             organization = storage.get_organization(organization_id)
             if organization is None:
                 return None
@@ -552,7 +555,7 @@ class OrgscanApiService:
                 min_confidence=min_confidence,
                 limit=finding_limit,
             )
-            return {
+            return storage.safe_projection({
                 "organization": {
                     "id": organization.id,
                     "name": organization.name,
@@ -572,12 +575,13 @@ class OrgscanApiService:
                     for relationship in storage.list_relationships_for_entity("organization", str(organization_id), limit=relationship_limit)
                 ],
                 "top_findings": [_serialize_finding(finding) for finding in findings],
-            }
+            }, family='assets', source_context=context)
 
     @safe_output
     def _repositories_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             repositories = list(storage.list_repositories())[:limit]
             profiles = {
                 item["entity_id"]: item
@@ -587,7 +591,7 @@ class OrgscanApiService:
                     limit=max(limit, 1),
                 )
             }
-            return {
+            return storage.safe_projection({
                 "repositories": [
                     {
                         "id": repository.id,
@@ -601,7 +605,7 @@ class OrgscanApiService:
                     }
                     for repository in repositories
                 ]
-            }
+            }, family='assets', source_context=context)
 
     @safe_output
     def _repository_payload(
@@ -614,6 +618,7 @@ class OrgscanApiService:
     ) -> dict[str, object] | None:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             repository = storage.get_repository(repository_id)
             if repository is None:
                 return None
@@ -622,7 +627,7 @@ class OrgscanApiService:
                 min_confidence=min_confidence,
                 limit=finding_limit,
             )
-            return {
+            return storage.safe_projection({
                 "repository": {
                     "id": repository.id,
                     "full_name": repository.full_name,
@@ -641,12 +646,13 @@ class OrgscanApiService:
                     for relationship in storage.list_relationships_for_entity("repository", str(repository_id), limit=relationship_limit)
                 ],
                 "top_findings": [_serialize_finding(finding) for finding in findings],
-            }
+            }, family='assets', source_context=context)
 
     @safe_output
     def _domains_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             domains = list(storage.list_domains())[:limit]
             profiles = {
                 item["entity_id"]: item
@@ -656,7 +662,7 @@ class OrgscanApiService:
                     limit=max(limit, 1),
                 )
             }
-            return {
+            return storage.safe_projection({
                 "domains": [
                     {
                         "id": domain.id,
@@ -668,7 +674,7 @@ class OrgscanApiService:
                     }
                     for domain in domains
                 ]
-            }
+            }, family='assets', source_context=context)
 
     @safe_output
     def _domain_payload(
@@ -681,6 +687,7 @@ class OrgscanApiService:
     ) -> dict[str, object] | None:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             domain = storage.get_domain(domain_id)
             if domain is None:
                 return None
@@ -689,7 +696,7 @@ class OrgscanApiService:
                 min_confidence=min_confidence,
                 limit=finding_limit,
             )
-            return {
+            return storage.safe_projection({
                 "domain": {
                     "id": domain.id,
                     "name": domain.name,
@@ -729,12 +736,13 @@ class OrgscanApiService:
                     for relationship in storage.list_relationships_for_entity("domain", str(domain_id), limit=relationship_limit)
                 ],
                 "top_findings": [_serialize_finding(finding) for finding in findings],
-            }
+            }, family='assets', source_context=context)
 
     @safe_output
     def _accounts_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             accounts = list(storage.list_accounts())[:limit]
             profiles = {
                 item["entity_id"]: item
@@ -744,7 +752,7 @@ class OrgscanApiService:
                     limit=max(limit, 1),
                 )
             }
-            return {
+            return storage.safe_projection({
                 "accounts": [
                     {
                         "id": account.id,
@@ -758,7 +766,7 @@ class OrgscanApiService:
                     }
                     for account in accounts
                 ]
-            }
+            }, family='assets', source_context=context)
 
     @safe_output
     def _account_payload(
@@ -771,6 +779,7 @@ class OrgscanApiService:
     ) -> dict[str, object] | None:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             account = storage.get_account(account_id)
             if account is None:
                 return None
@@ -779,7 +788,7 @@ class OrgscanApiService:
                 min_confidence=min_confidence,
                 limit=finding_limit,
             )
-            return {
+            return storage.safe_projection({
                 "account": {
                     "id": account.id,
                     "username": account.username,
@@ -799,7 +808,7 @@ class OrgscanApiService:
                     for relationship in storage.list_relationships_for_entity("account", str(account_id), limit=relationship_limit)
                 ],
                 "top_findings": [_serialize_finding(finding) for finding in findings],
-            }
+            }, family='assets', source_context=context)
 
     @safe_output
     def _finding_payload(self, finding_id: int) -> dict[str, object] | None:
@@ -824,20 +833,22 @@ class OrgscanApiService:
     ) -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
-            return {
+            context = storage.projection_context(family='assets')
+            return storage.safe_projection({
                 "min_confidence": min_confidence,
                 "risk_profiles": storage.list_entity_risk_profiles(
                     entity_type=entity_type,
                     min_confidence=min_confidence,
                     limit=limit,
                 ),
-            }
+            }, family='assets', source_context=context)
 
     @safe_output
     def _scheduled_scans_payload(self) -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
-            return {
+            context = storage.projection_context(family='schedules')
+            return storage.safe_projection({
                 "scheduled_scans": [
                     {
                         "id": scan.id,
@@ -850,7 +861,7 @@ class OrgscanApiService:
                     }
                     for scan in storage.list_scheduled_scans()
                 ]
-            }
+            }, family='schedules', source_context=context)
 
     @safe_output
     def _relationship_graph_payload(self, *, limit: int = 200) -> dict[str, object]:
@@ -880,7 +891,10 @@ class OrgscanApiService:
     ) -> str:
         with self.session_factory() as session:
             storage = Storage(session)
-            summary = build_summary(storage)
+            from orgscan.storage.credential_context import build_report_context
+            from orgscan.reports.projection import MAX_CONTEXT_ROWS
+            context = build_report_context(storage, max_rows=MAX_CONTEXT_ROWS)
+            summary = build_summary(storage, source_context=context)
             findings = storage.list_findings(
                 limit=limit,
                 high_signal_only=high_signal_only,
@@ -896,7 +910,7 @@ class OrgscanApiService:
                 summary,
                 filtered_rows,
                 operations=DashboardService(self.session_factory).overview(days=days),
-                trends=finding_trends(storage, days=days),
+                trends=finding_trends(storage, days=days, source_context=context),
                 graph=summary['relationship_graph'],
                 filters={
                     "limit": limit,

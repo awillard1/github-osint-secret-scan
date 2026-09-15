@@ -69,4 +69,6 @@ def visibility_ids(tenant_keys):
     ))
     report = m.ScheduledReport.__table__
     ids[m.ScheduledReport] = select(report.c.id).where(report.c.target_type == "tenant", report.c.target_value.in_(tenant_keys))
+    task = m.QueueTask.__table__
+    ids[m.QueueTask] = select(task.c.id).where(task.c.scheduled_scan_id.in_(ids[m.ScheduledScan]))
     return ids

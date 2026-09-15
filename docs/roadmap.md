@@ -341,3 +341,13 @@ Both paths fail closed when context completeness exceeds their documented budget
 The two gate reproductions and query measurements have permanent regression coverage.
 No migration or authorized reveal change is required; head remains 0013. Phase 1
 decomposition remains partial. See release readiness for final validation results.
+
+## Phase 27 — derived projection credential context
+
+Operator job/asset labels and standalone graph/trend output now retain credential
+knowledge through a shared derived-projection boundary. Asset/job detail, CLI job
+inventory and compatibility aggregates use the same contract. Source families are
+tenant-scoped, batched and bounded; incomplete context fails closed. Graph endpoints
+are loaded by ID without unrelated ORM collections. No schema migration or reveal
+change is introduced. See [projection safety](projection-safety.md) and release
+readiness for the source inventory, validation and remaining operational limits.

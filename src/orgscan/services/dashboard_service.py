@@ -2,7 +2,7 @@
 from datetime import UTC, datetime, timedelta
 
 from orgscan.redaction import safe_output
-from orgscan.presentation import safe_finding_fields
+from orgscan.services.projection_service import safe_projection
 from orgscan.storage.dashboard import DashboardStorage
 from orgscan.lifecycle import HIGH_RISK_THRESHOLD, MANAGED_STATES
 
@@ -24,6 +24,8 @@ class DashboardService:
         cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
         with self.session_factory() as session:
             storage = DashboardStorage(session)
+            from orgscan.storage.credential_context import build_projection_context
+            context = build_projection_context(storage, family='operator')
             queues = {}
 
             def queue(name, count, items):
@@ -39,15 +41,13 @@ class DashboardService:
             ):
                 count, findings = storage.findings(limit=limit, offset=offset, **filters)
                 finding_queues.append((name, count, findings))
-            from orgscan.storage.credential_context import bind_finding_contexts
-            bind_finding_contexts(storage, [finding for _, _, findings in finding_queues for finding in findings])
             for name, count, findings in finding_queues:
                 queue(name, count, [
-                    safe_finding_fields(finding, {"id": finding.id, "label": finding.title,
+                    {"id": finding.id, "label": finding.title,
                      "href": f"/dashboard/findings/{finding.id}",
                      "state": finding.lifecycle_state, "risk_score": finding.risk_score or 0,
                      "severity": finding.severity, "confidence": finding.confidence,
-                     "owner": finding.triage_owner, "observed_at": finding.last_seen_at.isoformat()})
+                     "owner": finding.triage_owner, "observed_at": finding.last_seen_at.isoformat()}
                     for finding in findings
                 ])
             for name, statuses in (
@@ -68,5 +68,5 @@ class DashboardService:
                  "observed_at": row["observed_at"].isoformat()}
                 for row in assets
             ])
-            return {"days": days, "limit": limit, "offset": offset,
-                    "queues": {name: queues[name] for name in QUEUE_LABELS}}
+            return safe_projection(storage, {"days": days, "limit": limit, "offset": offset,
+                    "queues": {name: queues[name] for name in QUEUE_LABELS}}, family='operator', source_context=context)

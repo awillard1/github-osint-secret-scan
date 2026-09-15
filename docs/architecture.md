@@ -452,3 +452,13 @@ limited to 500 distinct findings. Incomplete, oversized or uninspectable context
 closed; existing sanitizer work budgets still apply. Context is ephemeral, uses the
 shared credential vocabulary, has a private representation and never queries or
 decrypts protected evidence. These are presentation changes, with no schema migration.
+
+## Derived projection context (Phase 27)
+
+Operator/job/asset, standalone graph/trend and compatibility aggregate projections
+now use `services/projection_service.py` with explicit storage-owned source families.
+Context is collected before projection, and the complete DTO is sanitized before it
+leaves storage/services. API/browser adapters do not implement credential regexes.
+Graph storage loads bounded edges and batches endpoint IDs. Dashboard trends share
+the existing report context; operator queues use their own complete authorized source
+context. See the [projection source inventory and limits](projection-safety.md).

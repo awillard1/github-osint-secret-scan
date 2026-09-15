@@ -1,4 +1,5 @@
 from __future__ import annotations
+from orgscan.services.projection_service import derived_projection
 
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
@@ -948,6 +949,15 @@ class Storage:
         from orgscan.storage.report_queries import report_summary
         return report_summary(self, tenant_keys=tenant_keys, source_context=source_context)
 
+    def safe_projection(self, value, *, family, tenant_keys=None, source_context=None):
+        from orgscan.services.projection_service import safe_projection
+        return safe_projection(self, value, family=family, tenant_keys=tenant_keys,
+                               source_context=source_context)
+
+    def projection_context(self, *, family, tenant_keys=None):
+        from orgscan.storage.credential_context import build_projection_context
+        return build_projection_context(self, family=family, tenant_keys=tenant_keys)
+
     def get_finding(self, finding_id: int) -> Finding | None:
         finding = self.session.get(Finding, finding_id)
         if finding is not None:
@@ -1220,24 +1230,28 @@ class Storage:
     def get_scheduled_report(self, scheduled_report_id: int) -> ScheduledReport | None:
         return self.session.get(ScheduledReport, scheduled_report_id)
 
+    @derived_projection('trends')
     def finding_counts_by_severity(self) -> Mapping[str, int]:
         rows = self.session.execute(
             select(Finding.severity, func.count()).group_by(Finding.severity).order_by(Finding.severity.asc())
         )
         return {severity: count for severity, count in rows}
 
+    @derived_projection('trends')
     def finding_counts_by_category(self) -> Mapping[str, int]:
         rows = self.session.execute(
             select(Finding.category, func.count()).group_by(Finding.category).order_by(Finding.category.asc())
         )
         return {category: count for category, count in rows}
 
+    @derived_projection('trends')
     def finding_counts_by_source_tool(self) -> Mapping[str, int]:
         rows = self.session.execute(
             select(Finding.source_tool, func.count()).group_by(Finding.source_tool).order_by(Finding.source_tool.asc())
         )
         return {source_tool: count for source_tool, count in rows}
 
+    @derived_projection('trends')
     def finding_counts_by_status(self) -> Mapping[str, int]:
         rows = self.session.execute(
             select(Finding.status, func.count()).group_by(Finding.status).order_by(Finding.status.asc())
@@ -1252,6 +1266,7 @@ class Storage:
         )
         return self.bind_finding_contexts(list(self.session.scalars(query)))
 
+    @derived_projection('assets')
     def list_entity_risk_profiles(
         self,
         *,
@@ -1325,6 +1340,7 @@ class Storage:
         )
         return profiles[:limit]
 
+    @derived_projection('assets')
     def finding_counts_by_repository(self, limit: int = 10) -> list[tuple[str, int]]:
         rows = self.session.execute(
             select(func.coalesce(Repository.full_name, "unassigned"), func.count())
@@ -1336,6 +1352,7 @@ class Storage:
         )
         return [(repository_name, count) for repository_name, count in rows]
 
+    @derived_projection('trends')
     def finding_trends_by_day(self, days: int = 30) -> list[tuple[str, str, int]]:
         cutoff = datetime.now(UTC) - timedelta(days=max(days, 1) - 1)
         rows = self.session.execute(

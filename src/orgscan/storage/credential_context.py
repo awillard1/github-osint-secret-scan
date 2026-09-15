@@ -17,8 +17,18 @@ from orgscan.storage.visibility import visibility_ids
 # copied provenance. Numeric-only counts/risk scores add no credential sources.
 REPORT_SOURCES = (m.Finding, m.Evidence, m.Organization, m.Repository, m.Account,
     m.Domain, m.DomainExposure, m.IdentityCorrelation, m.Relationship, m.ScanJob,
-    m.ToolRun, m.ScheduledScan, m.ScheduledReport)
+    m.ToolRun, m.ScheduledScan, m.ScheduledReport, m.QueueTask)
 FINDING_SOURCES = (m.Finding, m.Evidence, m.FindingHistory, m.RiskScore)
+ASSET_SOURCES = (m.Organization, m.Repository, m.Account, m.Domain,
+                 m.DomainExposure, m.IdentityCorrelation)
+PROJECTION_SOURCES = {
+    'trends': (m.Finding, m.Evidence),
+    'graph': (*ASSET_SOURCES, m.Relationship, m.Finding, m.Evidence),
+    'assets': (*ASSET_SOURCES, m.Relationship, m.Finding, m.Evidence),
+    'jobs': (*ASSET_SOURCES, m.ScanJob, m.ToolRun, m.QueueTask, m.Finding, m.Evidence),
+    'operator': (*REPORT_SOURCES, m.FindingHistory, m.RiskScore),
+    'schedules': (*REPORT_SOURCES, m.FindingHistory, m.RiskScore),
+}
 _REFERENCES = {'fingerprint', 'normalized_hash', 'observation_fingerprint', 'commit_sha',
                'tenant_key', 'from_entity_id', 'to_entity_id', 'entity_id'}
 
@@ -102,6 +112,17 @@ def build_report_context(storage, *, tenant_keys=None, max_rows=None):
     limit = Settings().report_context_max_rows if max_rows is None else max_rows
     return CredentialContext([values for _, values in _sources(storage, REPORT_SOURCES,
         tenant_keys=tenant_keys, max_rows=limit)])
+
+
+def build_projection_context(storage, *, family, tenant_keys=None):
+    """Inspect all authorized contributors, never just ranked/displayed labels.
+
+    The families share one bounded column query and the existing secret policy.
+    Numeric aggregation does not make its stored grouping labels trustworthy.
+    """
+    models = PROJECTION_SOURCES[family]
+    return CredentialContext([values for _, values in _sources(storage, models,
+        tenant_keys=tenant_keys, max_rows=Settings().projection_context_max_rows)])
 
 
 def bind_finding_contexts(storage, findings, *, tenant_keys=None):

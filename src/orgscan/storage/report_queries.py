@@ -31,36 +31,8 @@ def report_summary(storage, *, tenant_keys=None, source_context=None):
     counts = {model.__tablename__: count(model) for model in models}
     counts.update(risk_scores=count(m.Finding, m.Finding.risk_score.is_not(None)), suppressions=0)
     organizations, repositories, accounts = rows(m.Organization), rows(m.Repository), rows(m.Account)
-    relationships = rows(m.Relationship, 200)
-    endpoint_ids = {}
-    for relation in relationships:
-        for side in ('from', 'to'):
-            kind, identity = getattr(relation, side+'_entity_type'), getattr(relation, side+'_entity_id')
-            endpoint_ids.setdefault(kind, set()).add(identity)
-    labels = {}
-    for kind, model, label in (('organization', m.Organization, m.Organization.name),
-                               ('repository', m.Repository, m.Repository.full_name),
-                               ('account', m.Account, m.Account.username), ('domain', m.Domain, m.Domain.name)):
-        if endpoint_ids.get(kind):
-            endpoints = list(session.scalars(select(model).where(conditions.get(model, True),
-                cast(model.id, String).in_(endpoint_ids[kind]))))
-            labels.update({(kind, str(row.id)): getattr(row, label.key) for row in endpoints})
-    graph = {'nodes': [], 'edges': [], 'summary': {}}
-    nodes, relations = {}, {}
-    for relation in relationships:
-        endpoints = []
-        for side in ('from', 'to'):
-            kind, identity = getattr(relation, side+'_entity_type'), getattr(relation, side+'_entity_id')
-            key = f'{kind}:{identity}'
-            node = nodes.setdefault(key, dict(id=key, entity_type=kind, entity_id=identity, label=labels.get((kind, identity), key), degree=0))
-            node['degree'] += 1
-            endpoints.append(key)
-        graph['edges'].append(dict(id=str(relation.id), **{'from': endpoints[0], 'to': endpoints[1]},
-            relation_type=relation.relation_type, confidence=relation.confidence, source=relation.source or '', provenance=relation.metadata_json))
-        relations[relation.relation_type] = relations.get(relation.relation_type, 0) + 1
-    graph['nodes'] = list(nodes.values())
-    graph['summary'] = dict(node_count=len(nodes), edge_count=len(graph['edges']), relation_breakdown=relations,
-                           entity_breakdown={kind: sum(n['entity_type'] == kind for n in nodes.values()) for kind in sorted({n['entity_type'] for n in nodes.values()})})
+    from orgscan.storage.graph_queries import graph_projection
+    graph = graph_projection(storage, tenant_keys=tenant_keys)
     from orgscan.lifecycle import MANAGED_STATES, HIGH_RISK_THRESHOLD
     high = case((m.Finding.severity.in_(['critical', 'high']), 1), else_=0)
     opened = case((m.Finding.status == 'open', 1), else_=0)

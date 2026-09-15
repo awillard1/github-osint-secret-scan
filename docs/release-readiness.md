@@ -754,3 +754,61 @@ complete Phase 1 decomposition. No commit/tag is created by this implementation.
   evidence/exact reveal smoke validation. Compile and `git diff --check` passed.
 - Final projection/context diff and documentation reviewed; no synthetic credential
   values were introduced into documentation. No frozen migrations were changed.
+
+## Phase 27 — derived projection credential context
+
+The three Phase 26 gate reproductions are covered by a shared derived-projection
+boundary: failed-job labels identified in parameters, repository/graph labels
+identified in asset metadata, and trend keys identified in finding metadata. Context
+is retained until the complete DTO is sanitized. Operator, graph, trend, asset/job
+detail, schedule, CLI job and compatibility aggregate output consume the same policy.
+No endpoint-specific credential regex or decryption path is added.
+
+Storage defines explicit contributor families and loads bounded ordinary text/JSON
+columns in one query per context. Graph edge selection is bounded, and endpoint
+labels are loaded in batches by ID. Queue diagnostic context inherits scheduled-scan
+tenant visibility through the authoritative policy. Dashboard trends reuse report
+context; operator context remains scoped to its own session. The full source inventory
+and A/B/C classification are in [projection safety](projection-safety.md).
+
+`ORGSCAN_PROJECTION_CONTEXT_MAX_ROWS` defaults to 2,000 rows per family (configurable
+up to 100,000). Existing report/page and sanitizer work limits remain active. Oversized
+or incomplete context fails closed before derived output is emitted; no first-N
+partial context is accepted. Large scopes may therefore require budget configuration.
+
+These are presentation/projection defects. Direct SQL is required to seed the unsafe
+legacy reproduction rows; current job/repository persistence already sanitizes their
+copies, and Phase 24 persistence regressions remain required. **No migration is
+needed**, head remains **20260914_0013**, and frozen migrations are unchanged. Protected
+ciphertext, encryption/key handling, authorized exact reveal and reveal audits are
+unchanged. No configured database upgrade, release commit or tag is performed.
+
+Existing PostgreSQL/live Redis certification gaps, optional scanner availability and
+deployment resource requirements remain documented limitations. Phase 1 decomposition
+remains partial; this phase does not perform unrelated architectural cleanup.
+
+### Phase 27 validation
+
+- Added **34 regression cases**, including all three original SQL-bypass probes,
+  adjacent source families, CLI job/queue diagnostics, tenant context isolation,
+  family overflow, aggregate keys and current job/asset persistence.
+- Final focused Phase 23–27 security/report/API/service run: **193 passed** in
+  293.31 seconds. Final full suite: **803 passed, 6 skipped** in 562.37 seconds,
+  with two existing dependency deprecation warnings. Existing tests were not weakened.
+- Reader operator/dashboard/graph/trend and asset/job surfaces contain no fixture
+  plaintext. Generic operations run with decryption forbidden, leave legacy values
+  and ciphertext unchanged and create **zero** reveal audits. Reader/ungranted analyst/
+  wrong-tenant reveal is denied; authorized analyst/admin reveal returns the exact
+  original value and creates **one** audit. Phase 23–26 report/persistence regressions
+  continue to pass, including all five report formats and scheduled/webhook delivery.
+- At 10/100/300 items: operator **15 SELECTs**, dashboard **55**, graph **4**, trends
+  **2**, with context reads **1 / 3 / 1 / 1** respectively. Existing Phase 20/26 query
+  assertions remain unchanged. The combined 300-item fixture explicitly uses a
+  2,000-row report budget because findings/assets/jobs contribute multiple source rows.
+- Doctor: **ok=true, 17 warnings**, configured current/head **20260914_0013**. Local
+  preservation is disabled/key missing; encrypted tests use disposable databases/keys.
+- Final wheel/sdist build and runtime-only clean install passed. Clean install covers
+  dependency checks, migrations, CLI/API startup, scan/report workflow and encrypted
+  evidence/exact reveal. Compile and whitespace checks passed.
+- Final diff/source inventory reviewed. No frozen migration or secret-evidence/reveal
+  implementation changed, and synthetic fixture credentials were not added to docs.

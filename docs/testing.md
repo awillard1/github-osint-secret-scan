@@ -246,3 +246,20 @@ readers, ungranted analysts and other tenants remain denied. At 10/100/300 findi
 page loading is two SELECTs and report-context loading is one, with SQL limits and
 no protected-evidence query. Existing Phase 20 aggregate/query-count and Phase 25
 scheduled/webhook/RQ service regression assertions remain unchanged.
+
+## Phase 27 derived projections
+
+`tests/security/test_phase27_projections.py` covers the three exact gate failures
+and additional job errors, tool diagnostics, repository/provider, account, domain,
+organization, relationship, schedule and finding aggregate labels. Fixtures insert
+unsafe values with SQL so tests prove presentation safety independently of persistence.
+Authenticated reader API/browser/graph/trend requests must redact every copy, leave
+the unsafe source and ciphertext unchanged, and create zero reveal audits. Generic
+decryption is forbidden. Reader/ungranted analyst/foreign tenant reveal is denied;
+authorized analyst/admin reveal remains exact and creates one audit.
+
+The suite also covers CLI job/queue output, compatibility aggregate keys, family
+overflow, context isolation between tenants, current job/repository persistence,
+and 10/100/300 query-count measurements. See [projection safety](projection-safety.md)
+for the A/B/C source inventory, family limits and query counts. Existing Phase 23–26
+tests and query assertions remain required and unchanged.

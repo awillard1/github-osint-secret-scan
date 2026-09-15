@@ -1083,6 +1083,7 @@ def jobs(
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
+        context = storage.projection_context(family="schedules")
         scan_jobs = storage.list_scan_jobs()
         tool_runs = storage.list_tool_runs()
         scheduled_scans = storage.list_scheduled_scans()
@@ -1157,6 +1158,7 @@ def jobs(
             for task in queue_tasks
         ],
     }
+    payload = storage.safe_projection(payload, family="schedules", source_context=context)
     if json_output:
         typer.echo(json.dumps(payload, indent=2, default=str))
     else:

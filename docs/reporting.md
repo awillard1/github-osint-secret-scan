@@ -94,7 +94,9 @@ Detailed finding filters/limits and select-in evidence loading remain in storage
 Summary counts still cover all authorized rows. Phase 26 context uses one UNION ALL
 column query over findings, evidence, organizations, repositories, accounts, domains,
 domain exposures, identity correlations, relationships, scan jobs, tool runs, scheduled
-scans and scheduled reports. Every authorized row in these populations participates,
+scans and scheduled reports, with queued-task diagnostic sources included from
+Phase 27. Queue context inherits
+the scheduled scan's tenant visibility. Every authorized contributor participates,
 including rows outside all displayed pages, rankings and groups. This covers source
 tool/category labels, copied previews, remediation groups and provenance. Context
 selection intersects requested tenant scope with inherited/request authorization.
