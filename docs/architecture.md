@@ -462,3 +462,35 @@ leaves storage/services. API/browser adapters do not implement credential regexe
 Graph storage loads bounded edges and batches endpoint IDs. Dashboard trends share
 the existing report context; operator queues use their own complete authorized source
 context. See the [projection source inventory and limits](projection-safety.md).
+
+## Assessment control plane
+
+The assessment implementation is described in [assessment control plane](assessment-control-plane.md).
+`services/assessments` owns target normalization, connections, discovery, launch and
+workbench queries. JSON/browser routes call those services; `storage/assessments`
+adds explicit membership selection to the existing tenant-scoped reader. Membership
+subqueries use Core tables to avoid recursive ORM criteria in SQLite. Credential
+knowledge is complete within the authorized tenant before the selected assessment
+DTO is sanitized. Asset identity includes GitHub connection ID; legacy domains keep
+the existing global-uniqueness restriction and cannot change tenant ownership.
+
+AssessmentRun links existing ScheduledScan/QueueTask execution, including optional
+AI operations. `ai/ollama.py` owns text transport and response validation;
+`services/local_ai.py` owns safe input selection, independent advisory persistence,
+cache identity and tenant authorization. No AI path decrypts protected evidence or
+has executable tools. See [local AI](local-ai.md) for its deliberately bounded scope.
+
+
+## Assessment continuation validation (2026-09-15)
+
+The assessment continuation adds encrypted artifact staging/lifetime, editable
+connection state, snapshotted discovery options and durable stages, connection-bound
+public-search ingestion, correlated organization/commit identities and source
+observations, scope controls, ScanPlan review, progress, traversable relationships,
+assessment finding detail, complete scope exports and bounded optional AI advice.
+The browser acceptance test in `tests/assessments/test_operator_acceptance.py`
+uses disposable databases and external service fakes to exercise login through
+report generation and exact audited reveal. See
+[the current milestone matrix](assessment-control-plane-validation.md) for final
+validation counts and explicit operational/deployment limits. Migration 0014 remains
+additive; migrations through 0013 and the configured database are unchanged.

@@ -195,72 +195,17 @@ def _serialize_tool_run(tool_run: ToolRun) -> dict[str, Any]:
     }
 
 
-def _safe_artifact_name(filename: str | None) -> str:
-    return (Path(filename or "artifact.txt").name or "artifact.txt").replace("\x00", "")
-
-
-def _archive_type(path: Path) -> str | None:
-    name = path.name.lower()
-    if name.endswith(".zip"):
-        return "zip"
-    if name.endswith(".tar") or name.endswith(".tar.gz") or name.endswith(".tgz"):
-        return "tar"
-    return None
-
-
-def _safe_extract_destination(root: Path, member_name: str) -> Path:
-    normalized = Path(member_name.lstrip("/"))
-    destination = (root / normalized).resolve()
-    if destination != root and root not in destination.parents:
-        raise ValueError("Unsafe archive entry")
-    return destination
+from orgscan.services.artifact_service import _safe_artifact_name, _archive_type, _safe_extract_destination
 
 
 def _extract_zip_artifact(artifact_path: Path, destination_root: Path) -> int:
-    file_count = 0
-    total_bytes = 0
-    check_zip_directory(artifact_path, MAX_ARTIFACT_EXTRACTED_FILES)
-    with zipfile.ZipFile(artifact_path) as archive:
-        for member in archive.infolist():
-            if member.is_dir():
-                continue
-            file_count += 1
-            if file_count > MAX_ARTIFACT_EXTRACTED_FILES:
-                raise ValueError("Uploaded archive contains too many files.")
-            total_bytes += member.file_size
-            if total_bytes > MAX_ARTIFACT_EXTRACTED_BYTES:
-                raise ValueError("Uploaded archive expands beyond the allowed size limit.")
-            destination = _safe_extract_destination(destination_root, member.filename)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(archive.read(member))
-    return file_count
+    from orgscan.services.artifact_service import _extract_zip_artifact as extract
+    return extract(artifact_path,destination_root,max_files=MAX_ARTIFACT_EXTRACTED_FILES,max_bytes=MAX_ARTIFACT_EXTRACTED_BYTES)
 
 
 def _extract_tar_artifact(artifact_path: Path, destination_root: Path) -> int:
-    file_count = 0
-    total_bytes = 0
-    with tar_stream(artifact_path, MAX_ARTIFACT_EXTRACTED_BYTES + MAX_ARTIFACT_EXTRACTED_FILES * 4096) as stream, tarfile.open(fileobj=stream, mode="r|") as archive:
-        for entry_count, member in enumerate(archive, 1):
-            if entry_count > MAX_ARTIFACT_EXTRACTED_FILES:
-                raise ValueError("Uploaded archive contains too many entries")
-            archive.members.clear()
-            if member.isdir():
-                continue
-            if not member.isfile():
-                raise ValueError("Uploaded archive contains unsupported special entries.")
-            file_count += 1
-            if file_count > MAX_ARTIFACT_EXTRACTED_FILES:
-                raise ValueError("Uploaded archive contains too many files.")
-            total_bytes += member.size
-            if total_bytes > MAX_ARTIFACT_EXTRACTED_BYTES:
-                raise ValueError("Uploaded archive expands beyond the allowed size limit.")
-            extracted = archive.extractfile(member)
-            if extracted is None:
-                continue
-            destination = _safe_extract_destination(destination_root, member.name)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(extracted.read())
-    return file_count
+    from orgscan.services.artifact_service import _extract_tar_artifact as extract
+    return extract(artifact_path,destination_root,max_files=MAX_ARTIFACT_EXTRACTED_FILES,max_bytes=MAX_ARTIFACT_EXTRACTED_BYTES)
 
 
 class OrgscanApiService:
@@ -1093,7 +1038,7 @@ def create_app(database_url: str, settings: Settings | None = None) -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     def root() -> RedirectResponse:
-        return RedirectResponse(url="/dashboard")
+        return RedirectResponse(url="/dashboard/assessments")
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -1112,6 +1057,8 @@ def create_app(database_url: str, settings: Settings | None = None) -> FastAPI:
     app.include_router(create_finding_router(service))
     app.include_router(create_operator_router(service.session_factory))
     app.include_router(create_report_router(service.session_factory))
+    from orgscan.api.routes.assessments import create_assessment_router
+    app.include_router(create_assessment_router(service.settings))
 
     @app.get("/organizations")
     def organizations(

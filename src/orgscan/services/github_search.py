@@ -66,10 +66,12 @@ class SearchResult:
 
 
 class GitHubSearchService:
-    def __init__(self, settings: Settings, request_page, response_metadata):
+    def __init__(self, settings: Settings, request_page, response_metadata, *, ingestion=None, authenticated=None):
         self.settings, self.request_page, self.response_metadata = settings, request_page, response_metadata
+        self.ingestion=ingestion
+        self.authenticated=bool(settings.github_token) if authenticated is None else authenticated
 
-    def search(self, storage: Storage, value: str, *, target_type="domain", identifiers=(), pages=1, per_page=10, tenant_key=None):
+    def search(self, storage: Storage, value: str, *, target_type="domain", identifiers=(), pages=1, per_page=10, tenant_key=None, target_context=None):
         from orgscan.providers import DomainProviderError
 
         if target_type not in {"domain", "organization"}:
@@ -77,7 +79,11 @@ class GitHubSearchService:
         if not 1 <= pages <= 3 or not 1 <= per_page <= 100:
             raise ValueError("GitHub search is limited to 1–3 pages and 1–100 results per page")
         queries = build_queries(tuple(dict.fromkeys((value, *identifiers))))
-        if target_type == "domain":
+        plan=None
+        if target_context is not None:
+            if self.ingestion is None:raise ValueError("Explicit search context requires scoped ingestion")
+            target=target_context
+        elif target_type == "domain":
             from orgscan.services.scan_plan import resolve_scan_plan
             from orgscan.services.target_service import resolve_domain_context
             plan = resolve_scan_plan(target=value, target_type='domain', discovery_provider='github-search', tenant_key=tenant_key)
@@ -88,16 +94,17 @@ class GitHubSearchService:
         else:
             target, _ = storage.get_or_create_organization(value, **({"tenant_key": tenant_key} if tenant_key is not None else {}))
         job = storage.create_scan_job(target_type, str(target.id), "github-search",
-                                      parameters_json={"queries": [q.__dict__ for q in queries], **({"scan_plan": plan.serialized()} if target_type == "domain" else {})}, scope_json={"pages": []})
+                                      parameters_json={"queries": [q.__dict__ for q in queries], **({"scan_plan": plan.serialized()} if plan is not None else {})}, scope_json={"pages": []})
         storage.mark_scan_job_running(job)
+        if self.ingestion:self.ingestion.link('scan_job',job,'github-search')
         result = SearchResult()
         exhausted = False
         public_repositories = set()
         for query in queries:
             if exhausted:
                 break
-            if query.kind == "code" and not self.settings.github_token:
-                warning = "Code search skipped: configure ORGSCAN_GITHUB_TOKEN."
+            if query.kind == "code" and not self.authenticated:
+                warning = "Code search skipped: configure credentials for the selected GitHub connection." if self.ingestion else "Code search skipped: configure ORGSCAN_GITHUB_TOKEN."
                 if warning not in result.warnings:
                     result.warnings.append(warning)
                 continue
@@ -182,7 +189,11 @@ class GitHubSearchService:
             full_name = "/".join(path_parts[:2])
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", full_name):
             return
-        repository, _ = storage.get_or_create_repository(full_name, provider="github")
+        if self.ingestion:
+            repository=self.ingestion.repository(repository_data,source='github-search')
+            if repository is None:return
+            if url and not url.startswith(self.ingestion.connection.web_base_url+'/'):return
+        else:repository, _ = storage.get_or_create_repository(full_name, provider="github")
         if repository.is_private:
             return
         path = str(item.get("path") or "") if query.kind == "code" else ""
@@ -192,7 +203,7 @@ class GitHubSearchService:
         if query.kind == "issues" and not str(issue_number).isdigit():
             return
         resource = (full_name, path, str(issue_number))
-        identity = _hash("github-search", target_type, target.id, query.kind, resource)
+        identity = _hash("github-search", target_type, target.id, query.kind, resource, *([repository.id] if self.ingestion else []))
         if query.kind == "repositories":
             summary = f"GitHub repository mentions {target.name}: {full_name}"
         elif query.kind == "code":
@@ -216,20 +227,25 @@ class GitHubSearchService:
             metadata_json={**metadata, "last_scan_job_id": job_id}, source_url=url or None,
             repository_path=path or None, query_used=query.query, confidence="heuristic", source_class="free",
         )
-        storage.upsert_relationship_provenance(
+        relation,_ = storage.upsert_relationship_provenance(
             "repository", str(repository.id), target_type, str(target.id), "mentions", source="github-search",
             confidence="heuristic", provenance=metadata,
         )
+        if self.ingestion:
+            self.ingestion.link('finding',finding,'github-search')
+            self.ingestion.link('relationship',relation,'github-search')
         owner = repository_data.get("owner") or (item.get("user") if query.kind == "issues" else {}) or {}
         login = owner.get("login") if isinstance(owner, dict) else None
         if login:
-            account, _ = storage.get_or_create_account(str(login), provider="github")
-            storage.upsert_relationship_provenance(
+            if self.ingestion:account=self.ingestion.account(str(login),source='github-search')
+            else:account, _ = storage.get_or_create_account(str(login), provider="github")
+            relation,_ = storage.upsert_relationship_provenance(
                 "account", str(account.id), "repository", str(repository.id),
                 "participated_in" if query.kind == "issues" else "owns", source="github-search",
                 confidence="likely" if query.kind == "issues" else "verified",
                 provenance={**metadata, "reason": "GitHub issue author" if query.kind == "issues" else "GitHub repository owner field; not target ownership"},
             )
+            if self.ingestion:self.ingestion.link('relationship',relation,'github-search')
             if account.username not in result.accounts:
                 result.accounts.append(account.username)
             if target_type == "domain":

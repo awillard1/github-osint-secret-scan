@@ -30,12 +30,12 @@ def test_cli_init_db_and_status(monkeypatch, tmp_path: Path) -> None:
     init_result = runner.invoke(app, ["init-db"])
     assert init_result.exit_code == 0
     assert "Initialized database" in init_result.stdout
-    assert "schema_revision: 20260914_0013" in init_result.stdout
+    assert "schema_revision: 20260915_0014" in init_result.stdout
 
     status_result = runner.invoke(app, ["status"])
     assert status_result.exit_code == 0
     assert f"database_url: {database_url}" in status_result.stdout
-    assert "schema_revision: 20260914_0013" in status_result.stdout
+    assert "schema_revision: 20260915_0014" in status_result.stdout
     assert "organizations: 0" in status_result.stdout
 
     setup_result = runner.invoke(app, ["setup", "--verify-only"])

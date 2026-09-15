@@ -24,6 +24,23 @@ class Settings(BaseSettings):
     report_context_max_rows: int = Field(default=1000, ge=1, le=100000)
     finding_context_max_rows: int = Field(default=2000, ge=1, le=100000)
     projection_context_max_rows: int = Field(default=2000, ge=1, le=100000)
+    github_connection_credentials_json: str = '{}'
+    assessment_import_max_bytes: int = Field(default=1_000_000, ge=1024, le=10_000_000)
+    assessment_import_max_rows: int = Field(default=5000, ge=1, le=100000)
+    assessment_allow_local_paths: bool = False
+    assessment_discovery_max_pages: int = Field(default=20, ge=1, le=1000)
+    ai_enabled: bool = False
+    ai_provider: str = 'ollama'
+    ollama_base_url: str = 'http://127.0.0.1:11434'
+    ollama_model: str = ''
+    ai_timeout_seconds: int = Field(default=30, ge=1, le=300)
+    ai_max_input_chars: int = Field(default=24000, ge=1000, le=100000)
+    ai_max_output_tokens: int = Field(default=1000, ge=1, le=8192)
+    ai_max_output_chars: int = Field(default=16000, ge=100, le=100000)
+    ai_max_entities: int = Field(default=50, ge=1, le=100)
+    ai_allow_source_code: bool = False
+    ai_allow_finding_context: bool = True
+    ai_allow_protected_secrets: bool = False
     secret_encryption_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
     secret_encryption_key_id: str = Field(default='v1', pattern=r'^[A-Za-z0-9_.-]{1,64}$')
     log_level: str = "INFO"

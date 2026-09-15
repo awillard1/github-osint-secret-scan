@@ -351,3 +351,40 @@ tenant-scoped, batched and bounded; incomplete context fails closed. Graph endpo
 are loaded by ID without unrelated ORM collections. No schema migration or reveal
 change is introduced. See [projection safety](projection-safety.md) and release
 readiness for the source inventory, validation and remaining operational limits.
+
+## Assessment operator control plane — initial integration (2026-09-15)
+
+Historical checkpoint; the continuation section and linked milestone matrix below
+supersede its counts and remaining-work list.
+
+Added first-class assessments with normalized multi-target import, tenant-scoped
+GitHub/GHES connection configuration, durable reconnaissance/scanning, scope review,
+canonical findings/reports and server-rendered operator pages. Optional Ollama advice
+is disabled by default, uses bounded safe metadata and cannot change evidence or
+reveal credentials. Migration 0014 is additive; earlier migrations stay frozen.
+
+See [implementation and remaining epic gaps](assessment-control-plane.md) and
+[local AI scope](local-ai.md). The full A–Z epic remains partial: public search needs
+connection-aware ingestion, artifact assessment ownership is pending, and richer
+home/progress/filter/profile/AI workflows remain. Existing standalone interfaces
+continue to be supported.
+
+Validation: 39 assessment tests; final full suite **842 passed, 7 skipped**, two
+existing dependency warnings. Doctor on a disposable 0014 database returned
+**ok=true** with 16 optional warnings. Build, clean runtime installation, compile
+and whitespace checks passed. See [checkpoint validation](assessment-control-plane-validation.md).
+
+
+## Assessment continuation validation (2026-09-15)
+
+The assessment continuation adds encrypted artifact staging/lifetime, editable
+connection state, snapshotted discovery options and durable stages, connection-bound
+public-search ingestion, correlated organization/commit identities and source
+observations, scope controls, ScanPlan review, progress, traversable relationships,
+assessment finding detail, complete scope exports and bounded optional AI advice.
+The browser acceptance test in `tests/assessments/test_operator_acceptance.py`
+uses disposable databases and external service fakes to exercise login through
+report generation and exact audited reveal. See
+[the current milestone matrix](assessment-control-plane-validation.md) for final
+validation counts and explicit operational/deployment limits. Migration 0014 remains
+additive; migrations through 0013 and the configured database are unchanged.

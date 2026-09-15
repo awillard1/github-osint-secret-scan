@@ -359,7 +359,7 @@ def test_fastapi_dashboard_and_json_routes(tmp_path: Path) -> None:
     summary = client.get("/summary")
 
     assert root.status_code in {307, 308}
-    assert root.headers["location"] == "/dashboard"
+    assert root.headers["location"] == "/dashboard/assessments"
     assert dashboard.status_code == 200
     assert "Live filters" in dashboard.text
     assert "Artifact upload analysis" in dashboard.text

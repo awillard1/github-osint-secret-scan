@@ -728,7 +728,7 @@ def _browser_html(body: str, *, full_page: bool = False) -> str:
     auth, csrf = current_auth.get(), current_csrf.get()
     if auth is not None and auth.authenticated:
         users = "<a href='/dashboard/users'>Users</a> · " if auth.allows_role("admin") and "*" in auth.tenants else ""
-        navigation = f"<nav><a href='/dashboard'>Dashboard</a> · {users}{html.escape(auth.name)}<form method='post' action='/logout'><button>Sign out</button></form></nav>"
+        navigation = f"<nav><a href='/dashboard/assessments'>Assessments</a> · <a href='/dashboard/assessments/new'>+ New Assessment</a> · <a href='/dashboard'>Dashboard</a> · {users}{html.escape(auth.name)}<form method='post' action='/logout'><button>Sign out</button></form></nav>"
         body = body.replace("<main>", "<main>"+navigation, 1) if full_page else navigation+body
     if csrf:
         hidden = f'<input type="hidden" name="csrf_token" value="{html.escape(csrf, quote=True)}">'

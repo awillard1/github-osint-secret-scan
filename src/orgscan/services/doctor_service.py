@@ -36,7 +36,8 @@ def _database_checks(settings):
             tables = inspect(connection).get_table_names()
             revisions = tuple(str(row[0]) for row in connection.execute(text('SELECT version_num FROM alembic_version'))) if 'alembic_version' in tables else ()
             has_users = bool(connection.execute(text('SELECT id FROM users LIMIT 1')).first()) if 'users' in tables else False
-        return revisions, has_users
+            ai_counts=dict(connection.execute(text('SELECT enabled, COUNT(*) FROM local_ai_configurations GROUP BY enabled')).all()) if 'local_ai_configurations' in tables else {}
+        return revisions, has_users, ai_counts
     finally:
         engine.dispose()
 
@@ -77,9 +78,20 @@ def doctor(settings, *, require_queue=False):
             '; encryption key: '+('configured' if settings.secret_encryption_key else 'missing'))
     except ValueError:
         add('secret-preservation', 'error', 'Secret preservation: enabled; encryption key: missing or invalid')
+    if not settings.ai_enabled:
+        add('local-ai','ok','Local AI: disabled; protected data disabled')
+    else:
+        from orgscan.ai.ollama import OllamaProvider
+        try:
+            state=OllamaProvider(settings,settings.ollama_base_url,settings.ollama_model).health()['status']
+        except ValueError:
+            state='unavailable'
+        add('local-ai','ok' if state=='ready' else 'warning',
+            'Local AI: '+state+'; endpoint configured; protected data disabled; source code disabled')
     has_users = False
     try:
-        revisions, has_users = _database_checks(settings)
+        revisions, has_users, ai_counts = _database_checks(settings)
+        add('local-ai-configurations','ok','Tenant overrides inventoried without remote requests; use Settings to test each configured endpoint',enabled=ai_counts.get(True,0),disabled=ai_counts.get(False,0))
         add('database','ok','Read-only connectivity succeeded')
     except Exception:
         revisions = ()

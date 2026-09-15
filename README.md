@@ -12,6 +12,14 @@
 - repository expansion, scheduled scanning, execution telemetry, intuitive configuration helpers, and a live FastAPI dashboard/API
 - tests for config, validation, storage, and CLI flows
 
+## Assessment workspace
+
+Open `/dashboard/assessments` for multi-target investigations, GitHub/GHES
+connections, discovery, scope review, scan launch, findings and reports. See the
+[operator guide](docs/assessment-control-plane.md) for setup, migration 0014 and
+current limitations. [Optional local Ollama advice](docs/local-ai.md) is disabled
+by default and uses sanitized metadata only.
+
 ## Requirements
 
 - Python 3.12+

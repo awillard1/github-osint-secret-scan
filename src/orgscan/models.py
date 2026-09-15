@@ -12,6 +12,11 @@ class Base(DeclarativeBase):
     pass
 
 
+class ControlPlaneRecord:
+    """Ordinary control-plane text must cross persistence and projection safety."""
+    pass
+
+
 class SeverityLevel(StrEnum):
     CRITICAL = "critical"
     HIGH = "high"
@@ -504,3 +509,105 @@ class SecretRevealAudit(Base):
     secret_evidence_id: Mapped[int] = mapped_column(ForeignKey('secret_evidence.id'))
     source: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
+class Assessment(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'assessments'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_key: Mapped[str] = mapped_column(String(255), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str] = mapped_column(Text, default='')
+    status: Mapped[str] = mapped_column(String(32), default='draft')
+    created_by: Mapped[str] = mapped_column(String(255))
+    organization_id: Mapped[int] = mapped_column(ForeignKey('organizations.id'))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    discovery_profile: Mapped[dict] = mapped_column(JSON, default=dict)
+    scan_profile: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class GitHubConnection(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'github_connections'
+    __table_args__ = (UniqueConstraint('tenant_key', 'web_base_url', name='uq_connection_tenant_web'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_key: Mapped[str] = mapped_column(String(255), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    connection_type: Mapped[str] = mapped_column(String(32))
+    web_base_url: Mapped[str] = mapped_column(String(512))
+    api_base_url: Mapped[str] = mapped_column(String(512))
+    credential_env: Mapped[str | None] = mapped_column(String(128))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    allow_private: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_test_status: Mapped[str] = mapped_column(String(32), default='not-tested')
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class AssessmentTarget(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'assessment_targets'
+    __table_args__ = (UniqueConstraint('assessment_id','identity',name='uq_assessment_target_identity'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(ForeignKey('assessments.id'), index=True)
+    connection_id: Mapped[int | None] = mapped_column(ForeignKey('github_connections.id'))
+    identity: Mapped[str] = mapped_column(String(64))
+    raw_input: Mapped[str] = mapped_column(Text)
+    normalized_value: Mapped[str] = mapped_column(String(2048))
+    target_type: Mapped[str] = mapped_column(String(32))
+    validation_status: Mapped[str] = mapped_column(String(32), default='valid')
+    notes: Mapped[str] = mapped_column(Text, default='')
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class AssessmentEntity(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'assessment_entities'
+    __table_args__ = (UniqueConstraint('assessment_id','entity_type','entity_id',name='uq_assessment_entity'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(ForeignKey('assessments.id'), index=True)
+    connection_id: Mapped[int | None] = mapped_column(ForeignKey('github_connections.id'))
+    entity_type: Mapped[str] = mapped_column(String(32))
+    entity_id: Mapped[int] = mapped_column(Integer, index=True)
+    included: Mapped[bool] = mapped_column(Boolean, default=True)
+    confidence: Mapped[str] = mapped_column(String(32), default='unverified')
+    source: Mapped[str] = mapped_column(String(128))
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class AssessmentRun(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'assessment_runs'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(ForeignKey('assessments.id'), index=True)
+    target_id: Mapped[int | None] = mapped_column(ForeignKey('assessment_targets.id'))
+    scheduled_scan_id: Mapped[int] = mapped_column(ForeignKey('scheduled_scans.id'), unique=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ReconProfile(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'recon_profiles'
+    __table_args__ = (UniqueConstraint('tenant_key','name',name='uq_recon_profile_tenant_name'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_key: Mapped[str] = mapped_column(String(255), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    configuration: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class LocalAIConfiguration(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'local_ai_configurations'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_key: Mapped[str] = mapped_column(String(255), unique=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    base_url: Mapped[str] = mapped_column(String(512))
+    model: Mapped[str] = mapped_column(String(255))
+
+
+class AIAdvice(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'ai_advice'
+    __table_args__ = (UniqueConstraint('assessment_id','fingerprint',name='uq_ai_advice_input'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(ForeignKey('assessments.id'), index=True)
+    purpose: Mapped[str] = mapped_column(String(64))
+    provider: Mapped[str] = mapped_column(String(32), default='ollama')
+    model: Mapped[str] = mapped_column(String(255))
+    policy_version: Mapped[str] = mapped_column(String(32))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    output_json: Mapped[dict] = mapped_column(JSON, default=dict)

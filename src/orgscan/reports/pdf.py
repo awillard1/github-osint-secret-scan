@@ -17,6 +17,22 @@ def write_pdf_report(output_path, summary, findings, *, variant='executive'):
     paragraph(f'orgscan {variant} report', 'Title')
     paragraph('Scope: stored authorized observations; absence from a report does not prove remediation.')
     paragraph(f'Included findings: {len(findings)}. Summary covers all authorized findings.')
+    assessment=summary.get('assessment')
+    if assessment:
+        import json
+        paragraph('Assessment: '+assessment['name'],'Heading1')
+        paragraph(assessment.get('description',''))
+        paragraph(assessment.get('detail_policy',''))
+        if assessment.get('ai_summary'):
+            paragraph('AI Suggested executive summary','Heading2')
+            paragraph(assessment['ai_summary']['advice']['explanation'])
+        for kind,section in assessment.get('scope',{}).items():
+            paragraph(f'{kind.title()}: {section["total"]}','Heading2')
+            if section.get('truncated'):paragraph('Detail truncated; use paginated assessment views for remaining records.')
+            for row in section['items']:
+                # Split long records into bounded paragraphs for reliable pagination.
+                text=json.dumps(row,default=str,ensure_ascii=False)
+                for offset in range(0,len(text),1500):paragraph(text[offset:offset+1500])
     paragraph('Asset and observation counts', 'Heading1')
     paragraph(', '.join(f'{key}={value}' for key,value in sorted(summary.get('counts',{}).items())))
     if variant == 'executive':

@@ -15,6 +15,7 @@ from orgscan.repositories import Storage
 
 
 _GIT_TIMEOUT = ContextVar("git_timeout", default=300)
+_GIT_ENV = ContextVar("git_connection_environment", default={})
 _GIT_OUTPUT_LIMIT = ContextVar("git_output_limit", default=8_000_000)
 _GIT_DISK_CHECK = ContextVar("git_disk_check", default=lambda: None)
 
@@ -416,7 +417,7 @@ def _current_mirror_ref(target_path: Path) -> str:
 def _git_process(command: list[str], action: str):
     command = [command[0], '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
                '-c', 'protocol.ext.allow=never', *command[1:]]
-    environment = {**os.environ, 'GIT_TERMINAL_PROMPT': '0', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull}
+    environment = {**os.environ, 'GIT_TERMINAL_PROMPT': '0', 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull, **_GIT_ENV.get()}
     try:
         _GIT_DISK_CHECK.get()()
         result = subprocess.run(command, check=False, capture_output=True, text=True,

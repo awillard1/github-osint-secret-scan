@@ -70,3 +70,33 @@ no longer materialize unrelated ORM collections. Frozen migrations remain unchan
 and no schema/data migration is required for these projection defects. Regression
 fixtures deliberately bypass storage guards; current job/repository writes already
 sanitize copies. Generic reads leave legacy rows and protected ciphertext unchanged.
+
+## Assessment and optional AI projections
+
+The `assessment` contributor family includes existing report sources plus Assessment,
+GitHubConnection, AssessmentTarget, AssessmentEntity, AssessmentRun, ReconProfile,
+LocalAIConfiguration and AIAdvice. Visibility derives from tenant or parent assessment.
+The family never includes SecretEvidence or reveal audit rows. Complete bounded
+context is loaded before field selection; scope pagination is independent of that
+context. AI input uses these same safe projections and whitelisted metadata only,
+then sanitizes advisory output again before persistence. The raw provider prompt is
+not stored. Assessment updates sanitize old and new values together so replacing a
+credential-bearing field cannot strand unsafe legacy sibling copies.
+
+Scope page loading is five SELECTs at 10/100/300 repository fixtures, including its
+one complete context read. Existing Phase 20/26/27 query-count assertions remain.
+
+
+## Assessment continuation validation (2026-09-15)
+
+The assessment continuation adds encrypted artifact staging/lifetime, editable
+connection state, snapshotted discovery options and durable stages, connection-bound
+public-search ingestion, correlated organization/commit identities and source
+observations, scope controls, ScanPlan review, progress, traversable relationships,
+assessment finding detail, complete scope exports and bounded optional AI advice.
+The browser acceptance test in `tests/assessments/test_operator_acceptance.py`
+uses disposable databases and external service fakes to exercise login through
+report generation and exact audited reveal. See
+[the current milestone matrix](assessment-control-plane-validation.md) for final
+validation counts and explicit operational/deployment limits. Migration 0014 remains
+additive; migrations through 0013 and the configured database are unchanged.

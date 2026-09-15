@@ -45,6 +45,10 @@ def authorized_session_factory(factory):
             return session.connection().execute(select(table.c.id).where(table.c.id == identity, table.c.id.in_(ids[model]))).first() is not None
 
         def writable(record):
+            if isinstance(record, (m.Assessment, m.GitHubConnection, m.ReconProfile, m.LocalAIConfiguration)):
+                return auth.allows_tenant(record.tenant_key)
+            if isinstance(record, (m.AssessmentTarget, m.AssessmentEntity, m.AssessmentRun, m.AIAdvice)):
+                return permitted(m.Assessment, record.assessment_id)
             if isinstance(record, m.Organization):
                 return auth.allows_tenant(record.tenant_key)
             if isinstance(record,(m.Repository,m.Domain,m.Account)):

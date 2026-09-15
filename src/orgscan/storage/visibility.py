@@ -48,7 +48,7 @@ def visibility_ids(tenant_keys):
 
     def entity_scope(kind, value):
         return or_(*(and_(kind == name, value.in_(select(cast(ids[model].subquery().c.id,String))))
-                     for name,model in (("organization",m.Organization),("repository",m.Repository),("domain",m.Domain),("account",m.Account))))
+                     for name,model in (("organization",m.Organization),("repository",m.Repository),("domain",m.Domain),("account",m.Account),("finding",m.Finding))))
 
     relationship = m.Relationship.__table__
     ids[m.Relationship] = select(relationship.c.id).where(
@@ -71,4 +71,10 @@ def visibility_ids(tenant_keys):
     ids[m.ScheduledReport] = select(report.c.id).where(report.c.target_type == "tenant", report.c.target_value.in_(tenant_keys))
     task = m.QueueTask.__table__
     ids[m.QueueTask] = select(task.c.id).where(task.c.scheduled_scan_id.in_(ids[m.ScheduledScan]))
+    for model in (m.Assessment, m.GitHubConnection, m.ReconProfile, m.LocalAIConfiguration):
+        table = model.__table__
+        ids[model] = select(table.c.id).where(table.c.tenant_key.in_(tenant_keys))
+    for model in (m.AssessmentTarget, m.AssessmentEntity, m.AssessmentRun, m.AIAdvice):
+        table = model.__table__
+        ids[model] = select(table.c.id).where(table.c.assessment_id.in_(ids[m.Assessment]))
     return ids

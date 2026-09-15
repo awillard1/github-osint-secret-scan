@@ -22,6 +22,8 @@ FINDING_SOURCES = (m.Finding, m.Evidence, m.FindingHistory, m.RiskScore)
 ASSET_SOURCES = (m.Organization, m.Repository, m.Account, m.Domain,
                  m.DomainExposure, m.IdentityCorrelation)
 PROJECTION_SOURCES = {
+    'assessment': (*REPORT_SOURCES, m.Assessment, m.GitHubConnection, m.AssessmentTarget,
+                   m.AssessmentEntity, m.AssessmentRun, m.ReconProfile, m.LocalAIConfiguration, m.AIAdvice),
     'trends': (m.Finding, m.Evidence),
     'graph': (*ASSET_SOURCES, m.Relationship, m.Finding, m.Evidence),
     'assets': (*ASSET_SOURCES, m.Relationship, m.Finding, m.Evidence),

@@ -354,3 +354,28 @@ Correlation should land before extensive detector expansion if duplicate volume 
 - PostgreSQL-only features;
 - AI classification of raw secrets;
 - executing target repository code to improve analysis.
+
+## Operator control plane epic — initial integration
+
+Assessment model/targets, connection routing, discovery/scan job adapters,
+server-rendered scope/findings/report pages and optional local AI are now integrated.
+This does not mark the entire A–Z epic complete. The implementation order and precise
+remaining product gaps are recorded in [assessment control plane](assessment-control-plane.md)
+and [local AI](local-ai.md). Next slices are assessment-aware public search and
+artifact ownership, richer home/progress/filter controls, saved-profile UI, then
+expanded deterministic confidence and chunked advisory workflows.
+
+
+## Assessment continuation validation (2026-09-15)
+
+The assessment continuation adds encrypted artifact staging/lifetime, editable
+connection state, snapshotted discovery options and durable stages, connection-bound
+public-search ingestion, correlated organization/commit identities and source
+observations, scope controls, ScanPlan review, progress, traversable relationships,
+assessment finding detail, complete scope exports and bounded optional AI advice.
+The browser acceptance test in `tests/assessments/test_operator_acceptance.py`
+uses disposable databases and external service fakes to exercise login through
+report generation and exact audited reveal. See
+[the current milestone matrix](assessment-control-plane-validation.md) for final
+validation counts and explicit operational/deployment limits. Migration 0014 remains
+additive; migrations through 0013 and the configured database are unchanged.

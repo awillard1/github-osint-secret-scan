@@ -34,6 +34,9 @@ def execute_scheduled_scan(storage: Storage, scheduled, *, settings: Settings | 
     from orgscan.services.scan_plan import ScanPlan, resolve_scan_plan
     from orgscan.services.scan_service import execute_plan
     metadata = scheduled.metadata_json or {}
+    if metadata.get('assessment_action'):
+        from orgscan.services.assessments.jobs import execute_assessment_task
+        return execute_assessment_task(storage, scheduled, settings or Settings())
     if metadata.get("scan_plan"):
         plan = ScanPlan.model_validate(metadata["scan_plan"])
     else:

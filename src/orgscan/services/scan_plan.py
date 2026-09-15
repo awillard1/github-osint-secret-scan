@@ -17,6 +17,7 @@ class ScanProfile(BaseModel):
 
 
 PROFILES = {
+    'custom': ScanProfile(),
     'quick': ScanProfile(scanners=('custom-patterns',)),
     'standard': ScanProfile(scanners=('custom-patterns', 'repo-governance')),
     'comprehensive': ScanProfile(scanners=('custom-patterns', 'repo-governance', 'gitleaks', 'detect-secrets', 'semgrep', 'trufflehog', 'yara', 'ripgrep-heuristics')),
