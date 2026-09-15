@@ -100,3 +100,12 @@ report generation and exact audited reveal. See
 [the current milestone matrix](assessment-control-plane-validation.md) for final
 validation counts and explicit operational/deployment limits. Migration 0014 remains
 additive; migrations through 0013 and the configured database are unchanged.
+
+## Recon network assets
+
+ReconAsset ordinary labels and observation metadata now join the report, asset,
+graph, job and assessment source families. Tenant visibility derives from immutable
+organization ownership. Assessment links control display membership independently
+of the complete tenant context. Recon ingestion retains prior association metadata
+through replacement; SQL-inserted legacy copies are covered by the new regression
+fixture. No raw tool output, protected ciphertext or reveal audit enters AI input.

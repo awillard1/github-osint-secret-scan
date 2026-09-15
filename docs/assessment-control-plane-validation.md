@@ -181,3 +181,11 @@ added; existing scan/queue/report/doctor commands are reused.
   tests pass. Frozen migrations and configured database remain untouched.
 
 All required local validation gates pass. Changes remain uncommitted and undeployed.
+
+## Recon toolchain follow-up
+
+The subsequent recon integration adds Settings → Recon Tools, explicit installers,
+scoped provider stages, canonical recon assets and migration 0015. Its validation
+and remaining compatibility limits are recorded separately in
+[Recon toolchain validation](recon-toolchain-validation.md); the earlier migration
+and CLI statements above describe the preceding assessment release.

@@ -12,7 +12,7 @@ def test_init_db_runs_alembic_migrations_and_creates_new_columns(tmp_path) -> No
     inspector = inspect(engine)
 
     assert "alembic_version" in inspector.get_table_names()
-    assert current_db_revision(database_url) == "20260915_0014"
+    assert current_db_revision(database_url) == "20260915_0015"
     assert "target_ref" in {column["name"] for column in inspector.get_columns("scan_jobs")}
     assert "scope_json" in {column["name"] for column in inspector.get_columns("scan_jobs")}
     assert "metadata_json" in {column["name"] for column in inspector.get_columns("relationships")}

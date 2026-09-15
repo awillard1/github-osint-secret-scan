@@ -494,3 +494,12 @@ report generation and exact audited reveal. See
 [the current milestone matrix](assessment-control-plane-validation.md) for final
 validation counts and explicit operational/deployment limits. Migration 0014 remains
 additive; migrations through 0013 and the configured database are unchanged.
+
+## Recon toolchain integration
+
+The first-class [recon registry and pipeline](recon-toolchain.md) now supply tool
+management/readiness to Settings, CLI, doctor and bootstrap. Assessment domain
+stages ingest canonical observations before dependency execution. Additive migration
+0015 supplies tenant-owned ReconAsset records for IP/services/endpoints/certificates;
+existing Domains, Findings, Evidence and Relationships remain canonical. Explicit
+active authorization and local Nuclei template policy apply at launch and execution.

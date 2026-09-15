@@ -611,3 +611,15 @@ class AIAdvice(ControlPlaneRecord, TimestampMixin, Base):
     policy_version: Mapped[str] = mapped_column(String(32))
     fingerprint: Mapped[str] = mapped_column(String(64))
     output_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ReconAsset(ControlPlaneRecord, TimestampMixin, Base):
+    """Tenant-owned canonical IP/service/endpoint/certificate with safe observations."""
+    __tablename__ = 'recon_assets'
+    __table_args__ = (UniqueConstraint('organization_id','kind','identity',name='uq_recon_asset_identity'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey('organizations.id'),index=True)
+    kind: Mapped[str] = mapped_column(String(32),index=True)
+    identity: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(2048))
+    metadata_json: Mapped[dict] = mapped_column(JSON,default=dict)

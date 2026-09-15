@@ -14,7 +14,7 @@ class AssessmentWorkbench(AssessmentService):
         query=select(link).join(model,model.id==link.entity_id).where(link.assessment_id==a.id,link.entity_type==kind)
         from orgscan.storage.visibility import visibility_ids
         query=query.where(model.id.in_(visibility_ids([a.tenant_key])[model]))
-        label=getattr(model,{'repository':'full_name','organization':'display_name','account':'username','domain':'name',
+        label=getattr(model,{'recon_asset':'name','repository':'full_name','organization':'display_name','account':'username','domain':'name',
             'relationship':'relation_type','finding':'title','scan_job':'scanner_name'}[kind])
         if entity_id is not None:query=query.where(link.entity_id==entity_id)
         if search:query=query.where(label.contains(search,autoescape=True))
@@ -53,6 +53,22 @@ class AssessmentWorkbench(AssessmentService):
             rows=[{**fields(link),'entity':records[link.entity_id]} for link in links]
             return st.safe({'total':total,'items':rows},a.tenant_key)
 
+    def recon_results(self,identity,*,tab='overview',offset=0):
+        if tab not in ('overview','domains','hosts','services','web'):
+            raise ValueError('Unknown discovery results tab')
+        if tab=='domains':return self.assets(identity,'domain',offset=offset)
+        with self.factory() as s:
+            st=AssessmentStorage(s);a=st.assessment(identity)
+            query=self._asset_query(a,'recon_asset')
+            if tab=='overview':
+                counts=dict(s.execute(select(m.ReconAsset.kind,func.count()).join(m.AssessmentEntity,m.AssessmentEntity.entity_id==m.ReconAsset.id).where(m.AssessmentEntity.assessment_id==identity,m.AssessmentEntity.entity_type=='recon_asset').group_by(m.ReconAsset.kind)).all())
+                counts['domains']=s.scalar(select(func.count()).select_from(self._asset_query(a,'domain').subquery()))
+                return st.safe({'counts':counts,'items':[]},a.tenant_key)
+            kinds={'hosts':['ip_address'],'services':['network_service','http_service'],'web':['endpoint']}[tab]
+            total,links=st.page(query.where(m.ReconAsset.kind.in_(kinds)).order_by(m.AssessmentEntity.id),offset=offset)
+            records={r.id:fields(r) for r in s.scalars(select(m.ReconAsset).where(m.ReconAsset.id.in_([r.entity_id for r in links])))}
+            return st.safe({'total':total,'items':[{**fields(link),'entity':records[link.entity_id]} for link in links]},a.tenant_key)
+
     def select_repositories(self,identity,*,included,ids=None,filters=None):
         with self.factory() as s:
             st=AssessmentStorage(s);a=st.assessment(identity,'analyst')
@@ -87,7 +103,7 @@ class AssessmentWorkbench(AssessmentService):
                 for offset in range(0,total,500):yield list(s.scalars(query.limit(500).offset(offset)))
             targets=[fields(row) for batch in bounded_rows(target_query) for row in batch]
             sections['targets']={'total':len(targets),'items':targets,'truncated':False}
-            for kind in ('repository','account','domain','relationship'):
+            for kind in ('repository','account','domain','recon_asset','relationship'):
                 model=ENTITY_MODELS[kind];items=[]
                 for links in bounded_rows(self._asset_query(a,kind).order_by(m.AssessmentEntity.id)):
                     records={r.id:fields(r) for r in s.scalars(select(model).where(model.id.in_([r.entity_id for r in links])))}
@@ -193,7 +209,7 @@ class AssessmentWorkbench(AssessmentService):
                     for row in reader.session.scalars(select(model).where(model.id.in_(ids))):
                         meta=getattr(row,'metadata_json',{}) or {}
                         label=meta.get('remote_full_name') or meta.get('login') or next((getattr(row,key) for key in ('name','username','full_name','title','display_name') if getattr(row,key,None)),str(row.id))
-                        nodes.append({'id':kind+':'+str(row.id),'entity_type':kind,'entity_id':row.id,'label':label})
+                        nodes.append({'id':kind+':'+str(row.id),'entity_type':kind,'kind':getattr(row,'kind',kind),'entity_id':row.id,'label':label})
                 visible={r['id'] for r in nodes}
                 edges=[]
                 for row in relationships:

@@ -7,7 +7,7 @@ def visibility_ids(tenant_keys):
     org = m.Organization.__table__
     orgs = select(org.c.id).where(or_(org.c.tenant_key.in_([key for key in tenant_keys if key is not None]), org.c.tenant_key.is_(None) if None in tenant_keys else false()))
     ids = {m.Organization: orgs}
-    for model in (m.Repository, m.Domain, m.Account):
+    for model in (m.Repository, m.Domain, m.Account, m.ReconAsset):
         table = model.__table__
         ids[model] = select(table.c.id).where(or_(table.c.organization_id.in_(orgs), table.c.organization_id.is_(None) if None in tenant_keys else false()))
     finding = m.Finding.__table__
@@ -48,7 +48,7 @@ def visibility_ids(tenant_keys):
 
     def entity_scope(kind, value):
         return or_(*(and_(kind == name, value.in_(select(cast(ids[model].subquery().c.id,String))))
-                     for name,model in (("organization",m.Organization),("repository",m.Repository),("domain",m.Domain),("account",m.Account),("finding",m.Finding))))
+                     for name,model in (("organization",m.Organization),("repository",m.Repository),("domain",m.Domain),("account",m.Account),("finding",m.Finding),("recon_asset",m.ReconAsset))))
 
     relationship = m.Relationship.__table__
     ids[m.Relationship] = select(relationship.c.id).where(

@@ -19,6 +19,9 @@ PROFILES={
     'github-only':dict(expand=True,providers=[]),
     'domain-only':dict(expand=False,providers=['local-metadata']),
     'passive-only':dict(expand=False,providers=['local-metadata','crtsh']),
+    'passive-organization':dict(repository_metadata=True,expand=True,members=True,providers=['local-metadata','crtsh','rdap','subfinder','wayback']),
+    'standard-organization':dict(repository_metadata=True,expand=True,members=True,providers=['local-metadata','crtsh','rdap','subfinder','dnsx','httpx']),
+    'comprehensive-organization':dict(repository_metadata=True,expand=True,members=True,contributor_repositories=True,public_search=True,providers=['local-metadata','crtsh','rdap','subfinder','dnsx','httpx']),
     'custom':dict(expand=False,providers=[]),
 }
 
@@ -28,14 +31,34 @@ def profile_options(settings,configuration):
     if name not in PROFILES:raise ValueError('Unknown discovery profile')
     options={**PROFILES[name],**configuration}
     inventory={r['name']:r for r in provider_readiness(settings)}
-    if name=='organization-comprehensive' and 'providers' not in configuration:
-        options['providers']=[name for name,row in inventory.items() if row['status']=='ok' and name not in ('github-search','all','all-enriched')]
+    from orgscan.recon.registry import get_registry, PASSIVE
+    registry=get_registry()
+    providers=options.get('providers',[])
+    if not isinstance(providers,list) or any(not isinstance(p,str) for p in providers):
+        raise ValueError('Providers must be a list of tool IDs')
+    if any(p in ('all','all-enriched','projectdiscovery') for p in providers):
+        raise ValueError('Select individual recon tools instead of legacy aggregate providers')
+    active=[p for p in providers if registry.get(p).mode!=PASSIVE]
+    if active and options.get('active_authorized') is not True:
+        raise ValueError('Active recon requires explicit operator authorization')
+    if name in ('passive-only','passive-organization') and active:
+        raise ValueError('Passive profiles cannot contain active tools')
+    missing=[p for p in providers if p not in inventory or inventory[p]['status']!='ok']
+    if missing and options.get('run_available_only') is True:
+        options['unavailable_providers']=missing
+        options['providers']=[p for p in providers if p not in missing]
+    elif missing:
+        raise ValueError('Selected discovery provider is unavailable: '+', '.join(missing))
+    selected=set(options.get('providers',[]))
+    for p in selected:
+        if any(d not in selected for d in registry.get(p).dependencies):
+            raise ValueError('Selected recon tool requires its upstream providers')
     if 'github-search' in options.get('providers',[]):
         raise ValueError('Use Public GitHub Search with an explicit GitHub target connection')
     for provider in options.get('providers',[]):
         if provider not in inventory or inventory[provider]['status']!='ok':
             raise ValueError('Selected discovery provider is unavailable')
-    for key in ('include_private','expand','members','contributor_repositories','public_search'):
+    for key in ('include_private','expand','members','contributor_repositories','public_search','active_authorized','run_available_only','repository_metadata'):
         if key in options and type(options[key]) is not bool:raise ValueError('Discovery flags must be booleans')
     options['include_private']=options.get('include_private',False)
     options['max_pages']=settings.assessment_discovery_max_pages
@@ -147,7 +170,7 @@ class ReconIngestor:
         previous_metadata=dict(row.metadata_json or {})
         row.metadata_json={**previous_metadata,'remote_full_name':repo.full_name,'connection_id':self.connection.id,
             'visibility':('internal' if data.get('visibility')=='internal' else 'private') if private else 'public','archived':bool(data.get('archived')),
-            'fork':bool(data.get('fork')),'updated_at':data.get('updated_at'),'description':repo.description,
+            'fork':bool(data.get('fork')),'created_at':data.get('created_at'),'pushed_at':data.get('pushed_at'),'updated_at':data.get('updated_at'),'description':repo.description,
             'homepage':repo.homepage,'topics':data.get('topics') or [],'language':data.get('language'),
             'visibility_provenance':visibility or {'explicit_private_scope':True},'fork_parent':(data.get('parent') or {}).get('full_name') if isinstance(data.get('parent'),dict) else None}
         updates=dict(row.metadata_json)
@@ -191,6 +214,29 @@ class ReconIngestor:
             if parent:
                 selected=self.selected_repository(parent)
                 if selected:self.edge('fork_of',('repository',repository.id),('repository',selected.id),'GitHub fork parent within already authorized assessment discovery','verified')
+
+    def repository_metadata(self,repo,data,options):
+        """Read API metadata and file names; never fetch or execute repository code."""
+        from orgscan.storage.credential_context import CredentialContext
+        from orgscan.services.secret_evidence import SecretCandidateContext
+        base='/repos/'+quote(data['full_name'],safe='/')
+        languages=self.client._request_json(base+'/languages')
+        if not isinstance(languages,dict):raise ValueError('Invalid repository language inventory')
+        branches=[{'name':item.get('name'),'protected':bool(item.get('protected'))} for item in self.client.pages(base+'/branches',max_pages=options['max_pages'])]
+        branch=repo.default_branch
+        tree=self.client._request_json(base+'/git/trees/'+quote(branch,safe='')+'?recursive=1') if branch else {'tree':[]}
+        if not isinstance(tree,dict) or not isinstance(tree.get('tree'),list):raise ValueError('Invalid repository file inventory')
+        if tree.get('truncated'):raise ValueError('LIMIT REACHED: repository file inventory')
+        paths=[item.get('path','') for item in tree['tree'] if isinstance(item,dict)]
+        if len(paths)>100000:raise ValueError('LIMIT REACHED: repository file inventory')
+        indicators={'ci_cd':any(p.startswith('.github/workflows/') or p in ('.gitlab-ci.yml','Jenkinsfile','azure-pipelines.yml') for p in paths),
+            'terraform':any(p.endswith('.tf') for p in paths),'containers':any(p.rsplit('/',1)[-1] in ('Dockerfile','docker-compose.yml','compose.yaml') for p in paths),
+            'kubernetes':any('kubernetes' in p.lower() or p.endswith('/Chart.yaml') or p=='Chart.yaml' for p in paths)}
+        incoming={'before':repo.metadata_json or {},'languages':languages,'branches':branches,'file_indicators':indicators}
+        with SecretCandidateContext.from_source(incoming,settings=self.session.info.get('secret_settings')):
+            safe=CredentialContext(incoming).sanitize(incoming)
+            repo.metadata_json={**safe.pop('before'),**safe}
+            self.session.flush()
 
     def expand(self,repo,data,options):
         full=data['full_name'];encoded=quote(full,safe='/')
@@ -284,22 +330,8 @@ def discover_target(storage,assessment,target,settings,*,configuration=None,prog
     if target.target_type=='domain':
         domain,_=storage.get_or_create_domain(target.normalized_value,organization_id=assessment.organization_id)
         AssessmentStorage(storage.session).link(assessment,'domain',domain.id,source='operator',confidence='verified')
-        progress.queued(options['providers']+['Relationship Correlation'])
-        failures=[]
-        for provider in options['providers']:
-            plan=resolve_scan_plan(target=domain.name,target_type='domain',domain_id=domain.id,organization_id=assessment.organization_id,
-                tenant_key=assessment.tenant_key,discovery_provider=provider,settings=settings)
-            try:
-                with progress.stage(provider) as stage:
-                    from orgscan.services.scan_service import execute_domain_plan
-                    _,outcome=execute_domain_plan(storage,plan,settings=settings)
-                    stage['result_count']=len(outcome.exposures)+len(outcome.identity_correlations)
-            except Exception:failures.append(provider)
-        with progress.stage('Relationship Correlation') as stage:
-            correlate_domains(storage,assessment,domain,settings)
-            stage['result_count']=len(domain.discovered_subdomains or [])
-        if failures:raise ValueError('Some selected domain providers failed; retry this target')
-        return {'domain_id':domain.id}
+        from orgscan.recon.pipeline import run_pipeline
+        return run_pipeline(storage,assessment,domain,options,settings,progress)
     connection=AssessmentStorage(storage.session).connection(target.connection_id,assessment.tenant_key)
     if options['include_private'] and not connection.allow_private:raise ValueError('Private scope is not enabled for this connection')
     client=ConnectionClient(settings,connection)
@@ -337,6 +369,10 @@ def discover_target(storage,assessment,target,settings,*,configuration=None,prog
             if repo:
                 count+=1
                 storage.session.commit() # Each page/item is durable; rediscovery is idempotent.
+                if options.get('repository_metadata'):
+                    with progress.stage('Repository Metadata') as detail_stage:
+                        ingest.repository_metadata(repo,data,options)
+                        detail_stage['result_count']+=1
                 if options.get('expand'):
                     try:
                         with progress.stage('Contributor Expansion') as expanded:
@@ -344,6 +380,17 @@ def discover_target(storage,assessment,target,settings,*,configuration=None,prog
                             expanded['result_count']+=1
                     except Exception:failures.append('Contributor Expansion')
             stage['result_count']=count
+    if kind=='github-org' and options.get('repository_metadata'):
+        with progress.stage('Organization Metadata') as stage:
+            data=client._request_json('/orgs/'+name)
+            if not isinstance(data,dict) or str(data.get('login','')).lower()!=target.normalized_value.lower():raise ValueError('Organization metadata identity mismatch')
+            organization=ingest.organization(target.normalized_value,{'official_owner':True})
+            from orgscan.storage.credential_context import CredentialContext
+            from orgscan.storage.assessments import fields
+            safe=CredentialContext([fields(organization),data]).sanitize(data)
+            organization.metadata_json={key:safe.get(key) for key in ('name','description','blog','location','created_at','updated_at','public_repos')}
+            ingest.domain(urlsplit(str(safe.get('blog') or '')).hostname,'organization-metadata',('organization',organization.id))
+            stage['result_count']=1
     if kind=='github-org' and options.get('members'):
         with progress.stage('Organization Members') as stage:
             for member in client.pages('/orgs/'+name+'/members',max_pages=settings.assessment_discovery_max_pages):

@@ -71,7 +71,7 @@ def test_forward_0009_repair_is_repeatable_and_preserves_relationships(tmp_path,
         connection.execute(update(DomainExposure.__table__).values(**legacy))
         connection.execute(update(Finding.__table__).values(description='client_secret=synthetic-nested-repair',metadata_json={'nested':[{'copy':'synthetic-nested-repair'}]}))
     command.upgrade(config,'head')
-    assert current_db_revision(url)=='20260915_0014'
+    assert current_db_revision(url)=='20260915_0015'
     with factory() as session:
         exposure=session.get(DomainExposure,identity)
         assert 'synthetic-repair-value' not in exposure.result_summary

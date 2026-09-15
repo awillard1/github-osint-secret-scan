@@ -84,6 +84,11 @@ class AIService(AssessmentService):
         data={'purpose':purpose,'assessment':{k:v for k,v in work.detail(identity).items() if k in ('id','name','description','counts')}}
         if purpose in ('summary','correlations'):
             data['relationships']=work.graph(identity,limit=limit)
+        if purpose in ('summary','correlations','triage'):
+            rows=work.assets(identity,'recon_asset',limit=limit)['items']
+            data['recon']=[{'kind':r['entity']['kind'],'name':r['entity']['name'],
+                'sources':r['metadata_json'].get('sources',[]),'confidence':r['confidence'],
+                'observed':{key:(r['entity'].get('metadata_json') or {}).get(key) for key in ('status','title','tech','port','protocol','hostname')}} for r in rows]
         if purpose in ('summary','finding') and self.settings.ai_allow_finding_context:
             rows=work.findings(identity,limit=limit,**({'id':entity_id} if entity_id is not None else {}))['items']
             if entity_id is not None:

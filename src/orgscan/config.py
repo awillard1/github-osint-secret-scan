@@ -96,6 +96,25 @@ class Settings(BaseSettings):
     subfinder_binary: str = "subfinder"
     httpx_binary: str = "httpx"
     whois_binary: str = "whois"
+    dnsx_binary: str = "dnsx"
+    naabu_binary: str = "naabu"
+    katana_binary: str = "katana"
+    nuclei_binary: str = "nuclei"
+    amass_binary: str = "amass"
+    gau_binary: str = "gau"
+    recon_tools_dir: Path | None = None
+    recon_go_binary: str = "go"
+    recon_install_timeout_seconds: int = Field(default=900, ge=1, le=3600)
+    recon_tool_timeout_seconds: int = Field(default=180, ge=1, le=3600)
+    recon_pipeline_timeout_seconds: int = Field(default=900, ge=1, le=86400)
+    recon_max_output_bytes: int = Field(default=2_000_000, ge=1024, le=16_000_000)
+    recon_max_domains: int = Field(default=1000, ge=1, le=100000)
+    recon_max_hosts: int = Field(default=1000, ge=1, le=100000)
+    recon_max_urls: int = Field(default=2000, ge=1, le=100000)
+    recon_max_endpoints: int = Field(default=2000, ge=1, le=100000)
+    recon_max_concurrent_jobs: int = Field(default=2, ge=1, le=32)
+    nuclei_templates_path: str | None = None
+    subfinder_provider_config: str | None = None
 
     def ensure_data_dir(self) -> Path:
         self.data_dir.mkdir(parents=True, exist_ok=True)

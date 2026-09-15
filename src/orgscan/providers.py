@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import time
+from contextvars import ContextVar
+from contextlib import contextmanager
 import shutil
 from orgscan import processes as subprocess
 import tempfile
@@ -11,7 +14,7 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request, urlopen as _stdlib_urlopen, build_opener, HTTPRedirectHandler
 
 import dns.exception
 import dns.resolver
@@ -23,16 +26,28 @@ from orgscan.rate_limit import wait_for_rate_limit
 from orgscan.repositories import Storage
 
 
+class _NoTargetRedirect(HTTPRedirectHandler):
+    def redirect_request(self,*args,**kwargs):
+        return None
+
+
+def urlopen(request,**kwargs):
+    if getattr(request,'orgscan_target_scope',False):
+        return build_opener(_NoTargetRedirect()).open(request,**kwargs)
+    return _stdlib_urlopen(request,**kwargs)
+
+
 @dataclass(frozen=True)
 class DomainProviderResult:
     exposures: list[str]
     identity_correlations: list[str]
     warnings: list[str] | None = None
     failure: Failure | None = None
+    observations: list[dict] | None = None
 
     def __post_init__(self):
         from orgscan.redaction import redact
-        values = redact({'exposures':self.exposures, 'identity_correlations':self.identity_correlations, 'warnings':self.warnings})
+        values = redact({'exposures':self.exposures, 'identity_correlations':self.identity_correlations, 'warnings':self.warnings,'observations':self.observations})
         for key, value in values.items():
             object.__setattr__(self, key, value)
 
@@ -43,9 +58,33 @@ class DomainProviderError(RuntimeError):
         super().__init__(failure.message if failure is not None else message)
 
 
+_PROVIDER_DEADLINE = ContextVar('orgscan_provider_deadline',default=None)
+
+
+@contextmanager
+def provider_budget(seconds):
+    marker=_PROVIDER_DEADLINE.set(time.monotonic()+seconds)
+    try:yield
+    finally:_PROVIDER_DEADLINE.reset(marker)
+
+
+def _remaining_timeout(seconds):
+    deadline=_PROVIDER_DEADLINE.get()
+    if deadline is None:return seconds
+    remaining=deadline-time.monotonic()
+    if remaining<=0:
+        raise DomainProviderError('LIMIT REACHED: provider deadline',failure=Failure('limit_reached',False,'LIMIT REACHED: provider deadline'))
+    return min(seconds,remaining)
+
+
 def _run_provider_process(command, **kwargs):
     try:
-        return subprocess.run(command, **kwargs)
+        kwargs['timeout']=_remaining_timeout(kwargs.get('timeout',300))
+        from orgscan.recon.registry import controlled_environment
+        with tempfile.TemporaryDirectory(prefix='orgscan-provider-') as work:
+            kwargs.setdefault('cwd',work)
+            kwargs.setdefault('env',controlled_environment(work))
+            return subprocess.run(command, **kwargs)
     except subprocess.TimeoutExpired:
         raise DomainProviderError('Provider process timed out', failure=Failure('process_timeout',True,'Provider process timed out')) from None
     except subprocess.OutputLimitExceeded:
@@ -80,7 +119,8 @@ def _resolve_binary(command: str) -> str | None:
     candidate = Path(command)
     if candidate.is_absolute():
         return str(candidate) if candidate.exists() else None
-    return shutil.which(command)
+    found=shutil.which(command)
+    return str(Path(found).resolve()) if found else None
 
 
 def _require_setting(value: str | None, message: str) -> str:
@@ -101,9 +141,11 @@ def _request_json(
     expected: type[list[Any]] | type[dict[str, Any]] | None = None,
     response_metadata: dict[str, Any] | None = None,
 ) -> object:
+    timeout=_remaining_timeout(timeout)
     request = Request(url, headers=headers or {}, method=method, data=data)
     try:
         wait_for_rate_limit(settings, scope)
+        timeout=_remaining_timeout(timeout)
         deadline = response_deadline(timeout)
         with urlopen(request, timeout=timeout) as response:
             if response_metadata is not None:
@@ -270,13 +312,16 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
         exposures: list[str] = []
 
         subfinder_results = self._run_subfinder(domain_name)
+        from orgscan.recon.observations import scoped_host
         subdomains = sorted(
             {
                 str(item.get("host") or item.get("input") or "").strip().lower()
                 for item in subfinder_results
-                if str(item.get("host") or item.get("input") or "").strip()
+                if scoped_host(str(item.get("host") or item.get("input") or "").strip(),domain_name)
             }
         )
+        if len(subdomains)>(self.settings.recon_max_domains if self.settings else 1000):
+            raise DomainProviderError('LIMIT REACHED: discovered domains')
         if subdomains:
             existing_subdomains = {value.lower() for value in domain_record.discovered_subdomains}
             domain_record.discovered_subdomains = sorted(existing_subdomains.union(subdomains))
@@ -356,8 +401,8 @@ class CrtShDomainProvider(DomainIntelligenceProvider):
             },
         )
         try:
-            deadline = response_deadline(settings.http_timeout_seconds)
-            with urlopen(request, timeout=settings.http_timeout_seconds) as response:
+            deadline = response_deadline(_remaining_timeout(settings.http_timeout_seconds))
+            with urlopen(request, timeout=_remaining_timeout(settings.http_timeout_seconds)) as response:
                 payload = json.loads(read_response(response, settings=settings, deadline=deadline).decode("utf-8") or "[]")
         except HTTPError as exc:
             raise DomainProviderError(f"crt.sh request failed with status {exc.code}", failure=classify_failure(exc)) from None
@@ -379,6 +424,7 @@ class CrtShDomainProvider(DomainIntelligenceProvider):
         records = self._fetch_records(domain_name)
         exposures: list[str] = []
         discovered_hosts: set[str] = set()
+        observations=[]
 
         for item in records:
             names = str(item.get("name_value") or "").splitlines()
@@ -387,10 +433,11 @@ class CrtShDomainProvider(DomainIntelligenceProvider):
             not_after = str(item.get("not_after") or "").strip()
             entry_id = str(item.get("id") or "")
             for raw_name in names:
-                host = raw_name.strip().lower()
-                if not host or "*" in host or not host.endswith(domain_name.lower()):
+                host = raw_name.strip().lower().removeprefix('*.').rstrip('.')
+                if not host or "*" in host or not (host==domain_name.lower() or host.endswith('.'+domain_name.lower())):
                     continue
                 discovered_hosts.add(host)
+                observations.append({'kind':'certificate','value':'crtsh:'+entry_id+':'+host,'provider':'crtsh','attributes':{'hostname':host,'issuer':issuer,'not_before':not_before,'not_after':not_after}})
                 validity = f" valid={not_before}->{not_after}" if not_before or not_after else ""
                 summary = f"Certificate transparency entry for {host} via {issuer}{validity}".strip()
                 storage.create_domain_exposure(
@@ -414,7 +461,7 @@ class CrtShDomainProvider(DomainIntelligenceProvider):
             existing_sources.add("crtsh")
             domain_record.discovery_sources = sorted(existing_sources)
 
-        return DomainProviderResult(exposures=exposures, identity_correlations=[], warnings=[])
+        return DomainProviderResult(exposures=exposures, identity_correlations=[], warnings=[],observations=observations)
 
 
 class WhoisDomainProvider(DomainIntelligenceProvider):
@@ -522,7 +569,7 @@ class WhoisDomainProvider(DomainIntelligenceProvider):
             )
             exposures.append(ns_summary)
 
-        return DomainProviderResult(exposures=exposures, identity_correlations=[], warnings=[])
+        return DomainProviderResult(exposures=exposures, identity_correlations=[], warnings=[],observations=[{'kind':'domain','value':domain_name,'provider':'whois','attributes':{'registration':{'registrar':registrar,'created':created,'expires':expires,'organization':registrant_org,'nameservers':nameservers,'ownership_proof':False}}}])
 
 
 class AggregateDomainProvider(DomainIntelligenceProvider):
@@ -609,10 +656,11 @@ class SecurityTxtDomainProvider(DomainIntelligenceProvider):
                     "Accept": "text/plain",
                 },
             )
+            request.orgscan_target_scope=True
             try:
                 wait_for_rate_limit(settings, "securitytxt")
-                deadline = response_deadline(settings.http_timeout_seconds if settings else 15)
-                with urlopen(request, timeout=settings.http_timeout_seconds if settings else 15) as response:
+                deadline = response_deadline(_remaining_timeout(settings.http_timeout_seconds if settings else 15))
+                with urlopen(request, timeout=_remaining_timeout(settings.http_timeout_seconds if settings else 15)) as response:
                     return read_response(response, settings=settings, deadline=deadline).decode("utf-8", errors="replace"), url
             except HTTPError as exc:
                 if exc.code == 404:
@@ -1017,7 +1065,7 @@ class DnsDomainProvider(DomainIntelligenceProvider):
 
     def _resolve_records(self, name: str, record_type: str) -> list[str]:
         try:
-            answers = dns.resolver.resolve(name, record_type)
+            answers = dns.resolver.resolve(name, record_type, lifetime=_remaining_timeout(self.settings.http_timeout_seconds if self.settings else 15))
         except (
             dns.resolver.NoAnswer,
             dns.resolver.NXDOMAIN,

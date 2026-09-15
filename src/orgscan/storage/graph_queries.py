@@ -20,7 +20,8 @@ def graph_projection(storage, *, limit=200, tenant_keys=None):
     labels = {}
     for kind, model, label in (('organization', m.Organization, m.Organization.name),
                                ('repository', m.Repository, m.Repository.full_name),
-                               ('account', m.Account, m.Account.username), ('domain', m.Domain, m.Domain.name)):
+                               ('account', m.Account, m.Account.username), ('domain', m.Domain, m.Domain.name),
+                               ('recon_asset',m.ReconAsset,m.ReconAsset.name),('finding',m.Finding,m.Finding.title)):
         if endpoint_ids.get(kind):
             endpoints = session.execute(select(model.id, label).where(conditions.get(model, True),
                 cast(model.id, String).in_(endpoint_ids[kind])))

@@ -25,7 +25,7 @@ class DiscoveryProgress:
         try:yield value
         except Exception:
             self.storage.session.rollback()
-            value['status']='failed';value['error']='Discovery stage failed; inspect connection/provider readiness and retry the target'
+            value['status']='failed';value['completed_at']=datetime.now(UTC).isoformat();value['error']='Discovery stage failed; inspect connection/provider readiness and retry the target'
             self.states[name]=value;self.save();raise
         else:
             value['status']='failed' if previous.get('status')=='failed' else 'completed';value['completed_at']=datetime.now(UTC).isoformat()

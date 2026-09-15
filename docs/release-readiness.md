@@ -1,5 +1,10 @@
 # Doctor and release readiness
 
+The recon toolchain follow-up has a separate
+[validation record](recon-toolchain-validation.md), covering migration 0015,
+explicit installation, scoped provider execution and remaining compatibility
+limits. Earlier phase records below retain their historical scope.
+
 `orgscan doctor` performs diagnostic reads. `orgscan doctor --json` returns
 `ok`, individual checks and warnings; exit 1 indicates a required failure.
 `--require-queue` makes unavailable Redis a required failure for RQ deployments.

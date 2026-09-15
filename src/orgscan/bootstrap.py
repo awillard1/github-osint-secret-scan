@@ -22,9 +22,6 @@ OPTIONAL_COMMANDS = (
     "trufflehog",
     "yara",
     "rg",
-    "subfinder",
-    "httpx",
-    "whois",
 )
 OPTIONAL_INSTALL_NOTES = {
     "jq": "Package manager install is usually sufficient.",
@@ -35,9 +32,6 @@ OPTIONAL_INSTALL_NOTES = {
     "trufflehog": "Prefer the official upstream installation method rather than OS packages for current versions.",
     "yara": "Install the YARA CLI to enable rule-based artifact and secret matching.",
     "rg": "Install ripgrep to enable fast heuristic scanning for internal hostnames and org-specific indicators.",
-    "subfinder": "Use ProjectDiscovery's official release or package instructions for passive subdomain discovery.",
-    "httpx": "Use ProjectDiscovery's official release or package instructions for HTTP probing and metadata collection.",
-    "whois": "Install the standard whois client package to enable registrar and nameserver enrichment.",
 }
 OPTIONAL_TOOL_METADATA = {
     "jq": {
@@ -51,24 +45,6 @@ OPTIONAL_TOOL_METADATA = {
         "description": "Optional queue backend for scheduled scan workers.",
         "env_var": "ORGSCAN_REDIS_URL",
         "settings_attr": None,
-    },
-    "subfinder": {
-        "category": "provider",
-        "description": "Passive subdomain discovery for ProjectDiscovery enrichment.",
-        "env_var": "ORGSCAN_SUBFINDER_BINARY",
-        "settings_attr": "subfinder_binary",
-    },
-    "httpx": {
-        "category": "provider",
-        "description": "HTTP probing and metadata enrichment for discovered hosts.",
-        "env_var": "ORGSCAN_HTTPX_BINARY",
-        "settings_attr": "httpx_binary",
-    },
-    "whois": {
-        "category": "provider",
-        "description": "Registrar and nameserver enrichment for tracked domains.",
-        "env_var": "ORGSCAN_WHOIS_BINARY",
-        "settings_attr": "whois_binary",
     },
 }
 
@@ -120,6 +96,17 @@ def optional_tool_inventory(settings: Settings, *, inventory=None) -> list[dict[
                 "install_note": OPTIONAL_INSTALL_NOTES.get(command, ""),
             }
         )
+    from orgscan.recon.registry import get_registry as recon_registry
+    registry = recon_registry()
+    tools = [row for row in tools if row['name'] not in registry.definitions]
+    for row in registry.inventory(settings):
+        if not row['executables']:
+            continue
+        tools.append({'name':row['tool_id'],'category':'provider','description':row['description'],
+            'configured_command':getattr(settings,row['tool_id']+'_binary',row['tool_id']),
+            'env_var':'ORGSCAN_'+row['tool_id'].upper()+'_BINARY','installed':row['installed'],
+            'ready':row['ready'],'status':row['status'],'version':row['version'],
+            'install_note':row['guidance'] or 'Explicit installation: orgscan recon-tools install '+row['tool_id']})
     return redact(tools, secrets_from=settings.model_dump())
 
 

@@ -57,7 +57,7 @@ def test_0014_additive_upgrade_preserves_existing_records(tmp_path):
         conn.exec_driver_sql("INSERT INTO organizations (name,tenant_key,metadata_json,created_at,updated_at) VALUES ('retained','a','{}',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)")
         before=conn.exec_driver_sql('SELECT * FROM organizations').all()
         tables=set(inspect(conn).get_table_names())
-    command.upgrade(cfg,'head');command.upgrade(cfg,'head')
+    command.upgrade(cfg,'20260915_0014');command.upgrade(cfg,'20260915_0014')
     with engine.connect() as conn:
         assert conn.exec_driver_sql('SELECT * FROM organizations').all()==before
         assert set(inspect(conn).get_table_names())-tables=={'assessments','assessment_targets','assessment_entities','assessment_runs','github_connections','recon_profiles','local_ai_configurations','ai_advice'}

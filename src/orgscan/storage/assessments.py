@@ -5,7 +5,7 @@ from orgscan.security_context import AuthorizationError, current_auth, LOCAL_CON
 from orgscan.storage.credential_context import build_projection_context
 from orgscan.repositories import Storage
 
-ENTITY_MODELS = {'organization':m.Organization,'repository':m.Repository,'account':m.Account,
+ENTITY_MODELS = {'recon_asset':m.ReconAsset,'organization':m.Organization,'repository':m.Repository,'account':m.Account,
                  'domain':m.Domain,'relationship':m.Relationship,'finding':m.Finding,'scan_job':m.ScanJob}
 
 

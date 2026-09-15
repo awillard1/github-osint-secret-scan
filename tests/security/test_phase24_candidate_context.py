@@ -246,7 +246,7 @@ def test_forward_keyless_repair_preserves_ciphertext_and_relationships(tmp_path,
         command.upgrade(cfg,'head')
         command.downgrade(cfg,'20260914_0012')
         command.upgrade(cfg,'head')
-    assert current_db_revision(url)=='20260915_0014'
+    assert current_db_revision(url)=='20260915_0015'
     assert_database_safe(factory,[VALUE])
     with factory() as session:
         protected=session.get(SecretEvidence,sid)

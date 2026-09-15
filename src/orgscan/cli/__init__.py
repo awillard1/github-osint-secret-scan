@@ -1308,3 +1308,30 @@ def doctor_command(json_output: bool = typer.Option(False, "--json"),
             typer.echo(f"[{check['status'].upper()}] {check['name']}: {check['message']}{version}")
         typer.echo(f"Required checks: {'passed' if result['ok'] else 'failed'}; warnings: {result['warnings']}")
     raise typer.Exit(0 if result['ok'] else 1)
+
+
+recon_tools_app = typer.Typer(help="Inspect and explicitly manage recon executables")
+app.add_typer(recon_tools_app, name="recon-tools")
+
+
+@recon_tools_app.command("list")
+def recon_tools_list():
+    from orgscan.services.recon_tools import ReconToolsService
+    typer.echo(json.dumps(ReconToolsService(_settings()).inventory(),indent=2))
+
+
+@recon_tools_app.command("install")
+def recon_tools_install(tool_id: str):
+    from orgscan.services.recon_tools import ReconToolsService
+    try:result=ReconToolsService(_settings()).install(tool_id)
+    except ValueError as exc:
+        typer.echo(str(exc));raise typer.Exit(1)
+    typer.echo(json.dumps(result,indent=2))
+
+
+@recon_tools_app.command("verify")
+def recon_tools_verify(tool_id: str):
+    from orgscan.services.recon_tools import ReconToolsService
+    result=ReconToolsService(_settings()).test(tool_id)
+    typer.echo(json.dumps(result,indent=2))
+    if not result['ready']:raise typer.Exit(1)

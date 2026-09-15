@@ -51,7 +51,7 @@ def authorized_session_factory(factory):
                 return permitted(m.Assessment, record.assessment_id)
             if isinstance(record, m.Organization):
                 return auth.allows_tenant(record.tenant_key)
-            if isinstance(record,(m.Repository,m.Domain,m.Account)):
+            if isinstance(record,(m.Repository,m.Domain,m.Account,m.ReconAsset)):
                 return permitted(m.Organization,record.organization_id)
             if isinstance(record,m.Finding):
                 references = ((m.Repository,record.repository_id),(m.Domain,record.domain_id),(m.Account,record.account_id))

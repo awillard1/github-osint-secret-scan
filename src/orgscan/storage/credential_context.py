@@ -16,11 +16,11 @@ from orgscan.storage.visibility import visibility_ids
 # Full authorized populations contributing report text, labels, aggregates or
 # copied provenance. Numeric-only counts/risk scores add no credential sources.
 REPORT_SOURCES = (m.Finding, m.Evidence, m.Organization, m.Repository, m.Account,
-    m.Domain, m.DomainExposure, m.IdentityCorrelation, m.Relationship, m.ScanJob,
+    m.Domain, m.ReconAsset, m.DomainExposure, m.IdentityCorrelation, m.Relationship, m.ScanJob,
     m.ToolRun, m.ScheduledScan, m.ScheduledReport, m.QueueTask)
 FINDING_SOURCES = (m.Finding, m.Evidence, m.FindingHistory, m.RiskScore)
 ASSET_SOURCES = (m.Organization, m.Repository, m.Account, m.Domain,
-                 m.DomainExposure, m.IdentityCorrelation)
+                 m.DomainExposure, m.IdentityCorrelation, m.ReconAsset)
 PROJECTION_SOURCES = {
     'assessment': (*REPORT_SOURCES, m.Assessment, m.GitHubConnection, m.AssessmentTarget,
                    m.AssessmentEntity, m.AssessmentRun, m.ReconProfile, m.LocalAIConfiguration, m.AIAdvice),

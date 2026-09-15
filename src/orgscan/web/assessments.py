@@ -12,13 +12,13 @@ def esc(value):return html.escape(str(value if value is not None else ''),quote=
 def page(title,body,*,assessment=None):
     links=[('Dashboard','/dashboard'),('Assessments','/dashboard/assessments'),('Findings','/dashboard?high_signal_only=true'),
         ('Assets','/dashboard/graph'),('Discovery','/dashboard/assessments'),('Jobs','/dashboard/queues/active-scans'),
-        ('Reports','/dashboard/assessments'),('Settings','/dashboard/settings/github')]
+        ('Reports','/dashboard/assessments'),('Settings','/dashboard/settings/recon-tools')]
     nav='<nav>'+' · '.join(f'<a href="{url}">{label}</a>' for label,url in links)+'</nav>'
     if assessment:
         identity=assessment['id']
         nav+='<p><a href="/dashboard/assessments">Assessments</a> / '+esc(assessment['name'])+'</p>'
         nav+='<nav>'+' · '.join(f'<a href="/dashboard/assessments/{identity}/{slug}">{label}</a>' for slug,label in
-            [('overview','Overview'),('targets','Targets'),('discovery','Discovery'),('repositories','Repositories'),
+            [('overview','Overview'),('targets','Targets'),('discovery','Discovery'),('recon-results','Discovery Results'),('repositories','Repositories'),
              ('accounts','Accounts'),('domains','Domains'),('relationships','Relationships'),('scans','Scans'),('findings','Findings'),('reports','Reports'),('ai','Local AI')])+'</nav>'
     return _render_html_page(title,nav+f'<h1>{esc(title)}</h1>'+body)
 
@@ -82,18 +82,22 @@ def targets(assessment,payload,offset,result=None):
 def discovery(assessment,jobs,providers,profiles,saved=()):
     root=f'/dashboard/assessments/{assessment["id"]}'
     body='<p>Step 3/4: configure discovery, review saved targets, then launch. Jobs run in the configured background processing service.</p>'
-    body+='<p>Comprehensive recon selects all ready external providers, members, contributors, forks, commit identities and public search. Private/internal scope always requires an explicit selection.</p>'
-    body+=form(root+'/launch/discovery','<label>Saved profile<select name="saved_profile"><option value="">Use options below</option>'+''.join('<option>'+esc(row['name'])+'</option>' for row in saved)+'</select></label><select name="profile">'+''.join(f'<option>{esc(p)}</option>' for p in profiles)+'</select>'+
-        ''.join(f'<label><input type="checkbox" name="providers" value="{esc(r["name"])}" '+('' if r['status']=='ok' else 'disabled')+f'>{esc(r["name"])} ({esc(r["status"])})</label> ' for r in providers if r['name'] not in ('all','all-enriched','github-search'))+
+    from orgscan.web.recon import STYLE,badge
+    body=STYLE+body+'<p>Passive profiles use public data sources. Standard adds DNS resolution and HTTP probing. Comprehensive allows explicit crawler, port and template selection. Active components require authorization below.</p><p><a href="/dashboard/settings/recon-tools">Manage and install recon tools</a> · <a href="'+root+'/recon-results">View discovery results</a></p>'
+    body+=form(root+'/launch/discovery','<label>Saved profile<select name="saved_profile"><option value="">Use options below</option>'+''.join('<option>'+esc(row['name'])+'</option>' for row in saved)+'</select></label><select name="profile">'+''.join(f'<option value="{esc(p)}">{esc(p.replace("-"," " ).title())}</option>' for p in profiles)+'</select>'+
+        '<div class="recon-grid">'+''.join('<div class="recon-choice"><label><input type="checkbox" name="providers" value="'+esc(r['name'])+'"> '+esc(r.get('display_name',r['name']))+'</label>'+badge(r.get('mode','Passive'),'recon-passive' if r.get('mode','Passive')=='Passive' else 'recon-active')+' '+badge('Ready' if r['status']=='ok' else 'Needs attention','recon-ready' if r['status']=='ok' else 'recon-missing')+'</div>' for r in providers if r['name'] not in ('all','all-enriched','github-search','projectdiscovery'))+'</div>'+
+        '<label><input type="checkbox" name="active_authorized" value="true">I authorize active interaction with scoped assessment domains and their subdomains</label><label><input type="checkbox" name="run_available_only" value="true">Run available tools only; record unavailable selections</label>'+
         '<label><input type="checkbox" name="expand" value="true">Contributors, forks, commit identities</label>'+
         '<label><input type="checkbox" name="members" value="true">Visible organization members</label>'+
         '<label><input type="checkbox" name="contributor_repositories" value="true">Contributor-owned public repositories</label>'+
         '<label><input type="checkbox" name="public_search" value="true">Public GitHub search intelligence</label>'+
-        '<label><input type="checkbox" name="include_private" value="true">Include private/internal repositories (connection must permit)</label>'+input_field('profile_name','Save these options as')+'<button name="action" value="save_profile">Save recon profile</button>','Start discovery')
+        '<label><input type="checkbox" name="include_private" value="true">Include private/internal repositories (connection must permit)</label>'+input_field('profile_name','Save these options as')+'<button name="action" value="save_profile">Save recon profile</button><button name="action" value="install_missing">Install Missing</button>','Start discovery')
+    unavailable=assessment.get('discovery_profile',{}).get('unavailable_providers',[])
+    if unavailable:body+='<div class="recon-notice">Unavailable tools explicitly excluded: '+esc(', '.join(unavailable))+'</div>'
     selected=set(assessment.get('discovery_profile',{}).get('providers',[]))
     latest={}
     for run in reversed(jobs['items']):latest.update(run.get('stages',{}))
-    body+=table([{'Provider':r['name'],'Ready':r['status']=='ok','Selected':r['name'] in selected,'Status':latest.get(r['name'],{}).get('status','Not run'),'Result Count':latest.get(r['name'],{}).get('result_count','')} for r in providers if r['name'] not in ('all','all-enriched','github-search')],['Provider','Ready','Selected','Status','Result Count'])
+    body+=table([{'Provider':r['name'],'Mode':r.get('mode','Passive'),'Ready':r['status']=='ok','Selected':r['name'] in selected,'Status':latest.get(r['name'],{}).get('status','Not run'),'Result Count':latest.get(r['name'],{}).get('result_count','')} for r in providers if r['name'] not in ('all','all-enriched','github-search')],['Provider','Mode','Ready','Selected','Status','Result Count'])
     body+=job_table(root,jobs)
     return page(assessment['name']+' — Discovery',body,assessment=assessment)
 
@@ -106,7 +110,7 @@ def job_table(root,jobs):
     body+=table(jobs['items'],['id','kind','status','scan_job_id','attempts','failure_code','next_attempt_at','error'])
     for row in jobs['items']:
         if row.get('stages'):
-            body+='<h3>Discovery job '+str(row['id'])+'</h3>'+table([{'Stage':name,**state} for name,state in row['stages'].items()],['Stage','status','result_count','error'])
+            body+='<h3>Discovery job '+str(row['id'])+'</h3>'+table([{'Stage':name,**state} for name,state in row['stages'].items()],['Stage','status','version','input_count','result_count','started_at','completed_at','error'])
     body+=form(root+'/pause','','Pause future operations')+form(root+'/resume','','Resume')
     for r in jobs['items']:
         if r['status']=='failed':body+=form(root+f'/runs/{r["id"]}/retry','',f'Retry run {r["id"]}')

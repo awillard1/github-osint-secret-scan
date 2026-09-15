@@ -388,3 +388,13 @@ report generation and exact audited reveal. See
 [the current milestone matrix](assessment-control-plane-validation.md) for final
 validation counts and explicit operational/deployment limits. Migration 0014 remains
 additive; migrations through 0013 and the configured database are unchanged.
+
+## Recon toolchain integration (2026-09-15)
+
+Settings → Recon Tools, explicit verified Go installation, passive/active readiness,
+canonical recon assets, ordered assessment stages, scope controls, discovery result
+tabs and bounded optional AI recon context are implemented. See
+[recon toolchain](recon-toolchain.md) for operator instructions, configuration,
+upstream contracts and exact limitations (notably Amass v3-only, restricted local
+HTTP Nuclei templates, domain-only RDAP and POSIX/shared-directory locking).
+Migration head is 0015; configured deployment databases are not upgraded by this run.

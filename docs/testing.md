@@ -289,3 +289,15 @@ report generation and exact audited reveal. See
 [the current milestone matrix](assessment-control-plane-validation.md) for final
 validation counts and explicit operational/deployment limits. Migration 0014 remains
 additive; migrations through 0013 and the configured database are unchanged.
+
+## Recon toolchain
+
+`pytest tests/recon` covers detection, identity/version rejection, explicit install
+and failed-update preservation, platform-administrator permissions, active consent,
+missing tools, scope rejection before subprocess execution, canonical correlation,
+empty upstream blocking, limits, Nuclei findings/evidence, template policy,
+repository metadata, legacy projection safety, browser routes and additive migration
+preservation. No normal test installs recon executables or calls their live APIs.
+PyYAML is a declared runtime dependency for the restricted local template policy.
+See [Recon toolchain validation](recon-toolchain-validation.md) for the integration
+validation record and deployment limits.

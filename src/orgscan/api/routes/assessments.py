@@ -1,7 +1,7 @@
 """Thin JSON and server-rendered assessment adapters, under existing auth/CSRF."""
 from datetime import datetime
 from functools import wraps
-from fastapi import APIRouter,Request,HTTPException,UploadFile,File,Form,Query
+from fastapi import APIRouter,Request,HTTPException,BackgroundTasks,UploadFile,File,Form,Query
 from fastapi.responses import HTMLResponse,RedirectResponse,Response
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel,Field,ConfigDict
@@ -85,6 +85,55 @@ def call(function,*args,**kwargs):
 def create_assessment_router(settings):
     from orgscan.web.assessment_errors import AssessmentRoute
     router=APIRouter(route_class=AssessmentRoute);service=AssessmentService(settings);jobs=AssessmentJobs(settings);work=AssessmentWorkbench(settings)
+
+    from orgscan.services.recon_tools import ReconToolsService
+    from orgscan.recon.installer import ToolInstaller, require_tool_admin
+    from orgscan.web import recon as recon_ui
+    recon_tools=ReconToolsService(settings)
+
+    @router.get('/recon-tools')
+    def tool_inventory():return call(recon_tools.inventory)
+
+    @router.get('/dashboard/settings/recon-tools',response_class=HTMLResponse)
+    def tool_settings():
+        auth=current_auth.get() or LOCAL_CONTEXT
+        return recon_ui.tools(call(recon_tools.inventory),ToolInstaller(settings).status(),auth.allows_role('admin') and '*' in auth.tenants)
+
+    @router.get('/recon-tools/installation')
+    def installation_status():return ToolInstaller(settings).status()
+
+    @router.post('/recon-tools/{tool_id}/install')
+    def install_tool(tool_id:str):return call(recon_tools.install,tool_id)
+
+    @router.post('/recon-tools/{tool_id}/test')
+    def test_tool(tool_id:str):return call(recon_tools.test,tool_id)
+
+    @router.post('/dashboard/settings/recon-tools/{tool_id}/install')
+    def install_tool_form(tool_id:str,background:BackgroundTasks):
+        require_tool_admin()
+        call(recon_tools.registry.get,tool_id)
+        background.add_task(recon_tools.background_operation,tool_id,current_auth.get() or LOCAL_CONTEXT)
+        return RedirectResponse('/dashboard/settings/recon-tools',303)
+
+    @router.post('/dashboard/settings/recon-tools/{tool_id}/test')
+    def test_tool_form(tool_id:str):
+        call(recon_tools.test,tool_id)
+        return RedirectResponse('/dashboard/settings/recon-tools',303)
+
+    @router.post('/dashboard/settings/recon-tools/install-{group}')
+    def install_tool_group(group:str,background:BackgroundTasks):
+        require_tool_admin()
+        if group not in ('active','passive'):raise HTTPException(422,'Unknown tool group')
+        background.add_task(recon_tools.background_operation,group,current_auth.get() or LOCAL_CONTEXT,group=True)
+        return RedirectResponse('/dashboard/settings/recon-tools',303)
+
+    @router.get('/assessments/{identity}/recon-results')
+    def recon_results_api(identity:int,tab:str='overview',offset:int=0):
+        return call(work.recon_results,identity,tab=tab,offset=offset)
+
+    @router.get('/dashboard/assessments/{identity}/recon-results',response_class=HTMLResponse)
+    def recon_results_web(identity:int,tab:str='overview',offset:int=0):
+        return recon_ui.results(call(service.detail,identity),call(work.recon_results,identity,tab=tab,offset=offset),tab,offset)
 
     from orgscan.services.local_ai import AIService
     ai=AIService(settings)
@@ -334,14 +383,14 @@ def create_assessment_router(settings):
         return RedirectResponse(f'/dashboard/assessments/{identity}/repositories',303)
 
     @router.post('/dashboard/assessments/{identity}/launch/{kind}')
-    async def launch_post(identity:int,kind:str,request:Request):
+    async def launch_post(identity:int,kind:str,request:Request,background:BackgroundTasks):
         data=await request.form()
         options={}
         if kind=='discovery':
             options={'name':data.get('profile','quick-organization')}
             if data.get('saved_profile'):options={'saved_profile':data['saved_profile']}
             if data.getlist('providers'):options['providers']=data.getlist('providers')
-            options.update({key:True for key in ('expand','members','contributor_repositories','include_private','public_search') if data.get(key)=='true'})
+            options.update({key:True for key in ('expand','members','contributor_repositories','include_private','public_search','active_authorized','run_available_only') if data.get(key)=='true'})
         elif kind=='scan':
             options={'profile':data.get('profile','standard'),'scanners':data.getlist('scanners') or None,
                      'refs':[v.strip() for v in str(data.get('refs','')).split(',') if v.strip()],
@@ -351,6 +400,15 @@ def create_assessment_router(settings):
             if data.get('entity_id'):
                 try:options['entity_id']=int(data['entity_id'])
                 except ValueError:raise HTTPException(422,'Entity ID must be an integer') from None
+        if kind=='discovery' and data.get('action')=='install_missing':
+            require_tool_admin()
+            call(service.detail,identity)
+            if options.get('saved_profile'):raise HTTPException(422,'Select individual providers below to install missing tools')
+            if options.get('name') not in PROFILES:raise HTTPException(422,'Unknown discovery profile')
+            selected=options.get('providers',PROFILES[options['name']]['providers'])
+            for tool_id in selected:call(recon_tools.registry.get,tool_id)
+            background.add_task(recon_tools.background_operation,selected,current_auth.get() or LOCAL_CONTEXT)
+            return RedirectResponse('/dashboard/settings/recon-tools',303)
         if kind=='discovery' and data.get('action')=='save_profile':
             call(service.save_profile,call(service.detail,identity)['tenant_key'],str(data.get('profile_name','')).strip(),options)
             return RedirectResponse(f'/dashboard/assessments/{identity}/discovery',303)
