@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -115,6 +115,35 @@ class Settings(BaseSettings):
     recon_max_concurrent_jobs: int = Field(default=2, ge=1, le=32)
     nuclei_templates_path: str | None = None
     subfinder_provider_config: str | None = None
+    subfinder_sources: list[str] = Field(default_factory=list, max_length=20)
+    recon_resolvers: list[str] = Field(default_factory=list, max_length=10)
+    recon_http_ports: list[int] = Field(default_factory=list, max_length=20)
+
+    @field_validator('recon_http_ports')
+    @classmethod
+    def valid_recon_ports(cls, values):
+        if any(port < 1 or port > 65535 for port in values):
+            raise ValueError('Recon HTTP ports must be between 1 and 65535')
+        return list(dict.fromkeys(values))
+
+    @field_validator('recon_resolvers')
+    @classmethod
+    def valid_recon_resolvers(cls, values):
+        import ipaddress
+        for value in values:
+            host, separator, port = value.partition(':')
+            ipaddress.IPv4Address(host)
+            if separator and (not port.isdecimal() or not 1 <= int(port) <= 65535):
+                raise ValueError('Resolver must be an IPv4 address with an optional port')
+        return list(dict.fromkeys(values))
+
+    @field_validator('subfinder_sources')
+    @classmethod
+    def valid_subfinder_sources(cls, values):
+        import re
+        if any(not re.fullmatch(r'[a-z][a-z0-9]{0,39}', value) for value in values):
+            raise ValueError('Subfinder sources must be individual source identifiers')
+        return list(dict.fromkeys(values))
 
     def ensure_data_dir(self) -> Path:
         self.data_dir.mkdir(parents=True, exist_ok=True)

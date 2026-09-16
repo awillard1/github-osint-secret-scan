@@ -34,6 +34,7 @@ class ToolDefinition:
     guidance: str = ''
     adapter: str = 'legacy'
     stage_order: int = 0
+    required_flags: tuple[str, ...] = ()
 
     @property
     def installation_methods(self):
@@ -43,7 +44,15 @@ class ToolDefinition:
 def pd(name, display, category, description, mode, package=None, **kwargs):
     return ToolDefinition(name, display, category, description, 'https://github.com/projectdiscovery/'+name,
                           mode, (name,), package or 'github.com/projectdiscovery/'+name+'/cmd/'+name, adapter='recon',
-                          stage_order={'SUBDOMAIN_DISCOVERY':0,'DNS':1,'HTTP_PROBING':2,'PORT_DISCOVERY':3,'CRAWLING':3,'TEMPLATE_SCANNING':4}[category], **kwargs)
+                          stage_order={'SUBDOMAIN_DISCOVERY':0,'DNS':1,'HTTP_PROBING':2,'PORT_DISCOVERY':3,'CRAWLING':3,'TEMPLATE_SCANNING':4}[category],
+                          required_flags={
+                              'subfinder':('-d','-json','-silent','-duc','-s','-pc'),
+                              'dnsx':('-l','-json','-a','-aaaa','-cname','-mx','-ns','-txt','-duc','-r'),
+                              'httpx':('-l','-json','-status-code','-title','-tech-detect','-ip','-location','-duc','-r','-ports'),
+                              'naabu':('-list','-json','-scan-type','-Pn','-p','-rate','-duc','-r'),
+                              'katana':('-list','-jsonl','-d','-cs','-fs','-dr','-omit-raw','-omit-body','-rl','-c','-duc','-r'),
+                              'nuclei':('-l','-jsonl','-duc','-ni','-dr','-type','-rl','-c','-omit-raw','-no-color','-t','-r'),
+                          }[name], **kwargs)
 
 
 DEFINITIONS = (
@@ -156,6 +165,13 @@ class ReconToolRegistry:
             if output.returncode != 0 or not match or not identity:
                 return result
             result['version'] = match[1]
+            if tool.required_flags:
+                with tempfile.TemporaryDirectory(prefix='orgscan-contract-check-') as directory:
+                    help_output=processes.run([binary,'-h'],timeout=5,max_output_bytes=131072,
+                        cwd=directory,env=controlled_environment(directory))
+                advertised=set(re.findall(r'(?<!\S)(--?[a-zA-Z][a-zA-Z0-9-]*)',help_output.stdout+'\n'+help_output.stderr))
+                if help_output.returncode or not set(tool.required_flags)<=advertised:
+                    return {**result,'status':'unsupported_contract'}
             if tool_id=='amass' and not match[1].startswith('3.'):
                 return {**result,'status':'unsupported_version'}
             result.update(ready=not missing,status='configuration_required' if missing else 'ready')

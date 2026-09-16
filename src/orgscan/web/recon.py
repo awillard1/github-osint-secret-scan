@@ -35,7 +35,7 @@ def tools(rows,installation=None,can_install=False):
         if can_install and row['installable']:actions+=form(root+'/install','', 'Update' if row['installed'] else 'Install')
         actions+=form(root+'/test','','Test')
         status=row['status'].replace('_',' ').title()
-        body+='<tr><td><div class="recon-tool">'+esc(row['display_name'])+'</div><div class="recon-purpose">'+esc(row['description'])+'</div></td><td>'+badge(row['mode'],'recon-passive' if row['mode']=='Passive' else 'recon-active')+'</td><td>'+('Yes' if row['installed'] else 'No')+'</td><td>'+badge(status,'recon-ready' if row['ready'] else 'recon-missing')+'</td><td>'+esc(row['version'] or '—')+'</td><td>'+configuration+'</td><td><div class="recon-actions">'+actions+'</div></td></tr>'
+        body+='<tr><td><div class="recon-tool">'+esc(row['display_name'])+'</div><div class="recon-purpose">'+esc(row['description'])+'</div></td><td>'+badge(row['mode'],'recon-passive' if row['mode']=='Passive' else 'recon-active')+'</td><td>'+('Yes' if row['installed'] else 'No')+('<div class="recon-purpose"><code>'+esc(row['binary_path'])+'</code></div>' if row.get('binary_path') else '')+'</td><td>'+badge(status,'recon-ready' if row['ready'] else 'recon-missing')+'</td><td>'+esc(row['version'] or '—')+'</td><td>'+configuration+'</td><td><div class="recon-actions">'+actions+'</div></td></tr>'
     body+='</tbody></table></div><p class="recon-muted">Go installation uses official module paths and a private staging directory. Configure ORGSCAN_RECON_GO_BINARY to use a local Go toolchain. No sudo or startup installation.</p>'
     return page('Recon Tools',body)
 
@@ -55,7 +55,8 @@ def results(assessment,payload,tab='overview',offset=0):
             entity=row['entity'];meta=entity.get('metadata_json') or {};link=row.get('metadata_json') or {}
             sources=link.get('sources',[row.get('source')])
             if tab=='domains':
-                meta={'status':'Yes' if link.get('dns') else 'Not observed','title':str(link.get('http_status') or 'Not observed')}
+                dns=link.get('dns') or {}
+                meta={'status':'Yes' if dns.get('a') or dns.get('aaaa') else dns.get('rcode') or 'Not observed','title':str(link.get('http_status') or 'Not observed')}
             elif tab=='hosts':
                 meta={'status':meta.get('hostname') or 'Not observed','title':meta.get('port') or 'See Services'}
             body+='<tr><td>'+esc(entity.get('name'))+'</td><td>'+esc(meta.get('status') or meta.get('port') or link.get('dns') or '—')+'</td><td>'+esc(meta.get('title',''))+' '+esc(', '.join(meta.get('tech',[])))+'</td><td>'+''.join(badge(s) for s in sources)+'</td><td>'+esc(link.get('first_seen'))+'</td><td>'+esc(link.get('last_seen'))+'</td></tr>'

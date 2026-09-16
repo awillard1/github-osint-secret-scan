@@ -243,12 +243,13 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
 
     def _run_subfinder(self, domain_name: str) -> list[dict[str, Any]]:
         settings = self._require_settings()
-        binary = _resolve_binary(settings.subfinder_binary)
+        from orgscan.recon.registry import get_registry
+        binary = _resolve_binary(get_registry().binary('subfinder', settings) or settings.subfinder_binary)
         if binary is None:
             raise DomainProviderError("subfinder is not installed; configure ORGSCAN_SUBFINDER_BINARY or install the ProjectDiscovery binary.")
 
         completed = _run_provider_process(
-            [binary, "-d", domain_name, "-silent", "-oJ"],
+            [binary, "-d", domain_name, "-silent", "-oJ", "-duc"],
             check=False,
             capture_output=True,
             text=True,
@@ -273,7 +274,8 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
         if not hosts:
             return []
         settings = self._require_settings()
-        binary = _resolve_binary(settings.httpx_binary)
+        from orgscan.recon.registry import get_registry
+        binary = _resolve_binary(get_registry().binary('httpx', settings) or settings.httpx_binary)
         if binary is None:
             raise DomainProviderError("httpx is not installed; configure ORGSCAN_HTTPX_BINARY or install the ProjectDiscovery binary.")
 
@@ -282,7 +284,7 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
             input_path = Path(handle.name)
         try:
             completed = _run_provider_process(
-                [binary, "-silent", "-json", "-l", str(input_path)],
+                [binary, "-silent", "-json", "-l", str(input_path), "-duc"],
                 check=False,
                 capture_output=True,
                 text=True,

@@ -138,6 +138,8 @@ def setup(
     for command, present in details["required"].items():
         typer.echo(f"  - {command}: {'ok' if present else 'missing'}")
     typer.echo("optional_dependencies:")
+    for name, description in details['installation_profiles'].items():
+        typer.echo(f"  {name}: {description}")
     for command, present in details["optional"].items():
         typer.echo(f"  - {command}: {'ok' if present else 'missing'}")
     typer.echo(f"recommended_install: {details['recommended_install']}")
@@ -1303,7 +1305,13 @@ def doctor_command(json_output: bool = typer.Option(False, "--json"),
     if json_output:
         typer.echo(json.dumps(result,indent=2))
     else:
+        previous_section = None
         for check in result['checks']:
+            name = check['name']
+            section = 'AI' if name.startswith('local-ai') else 'SCANNERS' if name.startswith(('scanner:', 'semgrep-')) else 'RECON' if name.startswith(('recon:', 'provider:')) else 'CORE'
+            if section != previous_section:
+                typer.echo(section)
+                previous_section = section
             version = f" (version {check['version']})" if 'version' in check else ''
             typer.echo(f"[{check['status'].upper()}] {check['name']}: {check['message']}{version}")
         typer.echo(f"Required checks: {'passed' if result['ok'] else 'failed'}; warnings: {result['warnings']}")

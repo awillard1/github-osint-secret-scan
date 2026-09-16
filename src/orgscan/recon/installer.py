@@ -64,7 +64,12 @@ class ToolInstaller:
                     environment = {**controlled_environment(stage), 'GOBIN':str(target),
                         'GOPATH':str(stage/'go'),'GOCACHE':str(stage/'cache'),'GOTOOLCHAIN':'local',
                         'GOPROXY':'https://proxy.golang.org','GOSUMDB':'sum.golang.org','GOWORK':'off',
-                        'GOENV':'off','GOTOOLCHAIN_INTERNAL_SWITCH_VERSION':'','CGO_ENABLED':'1' if tool_id in ('katana','naabu') else '0'}
+                        'GOENV':'off','GOMAXPROCS':'2','GOFLAGS':'-p=2',
+                        'GOTOOLCHAIN_INTERNAL_SWITCH_VERSION':'','CGO_ENABLED':'1' if tool_id in ('katana','naabu') else '0'}
+                    telemetry = processes.run([go,'telemetry','off'],cwd=stage,env=environment,
+                        timeout=10,max_output_bytes=16384)
+                    if telemetry.returncode:
+                        raise ValueError('Unable to disable Go telemetry in the isolated installation environment')
                     output = processes.run([go,'install',tool.go_package+'@'+version],cwd=stage,env=environment,
                         timeout=self.settings.recon_install_timeout_seconds,max_output_bytes=self.settings.recon_max_output_bytes)
                     if output.returncode:
@@ -73,7 +78,7 @@ class ToolInstaller:
                     if executable.is_symlink() or not executable.is_file() or not os.access(executable,os.X_OK):
                         raise ValueError('Installer did not produce an executable')
                     state = self.registry.readiness(tool_id,self.settings,binary=str(executable))
-                    if not state['version']:
+                    if not state['version'] or state['status'] not in ('ready','configuration_required'):
                         raise ValueError('Installed executable identity/version verification failed')
                     destination = self.registry.bin_dir(self.settings)
                     destination.mkdir(mode=0o700,exist_ok=True)

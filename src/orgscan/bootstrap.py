@@ -162,6 +162,11 @@ def bootstrap(
         "optional_tools": tools,
         "scanner_readiness": inventory,
         "scanner_registry_warnings": list(get_registry().warnings),
+        "installation_profiles": {
+            "Minimal": "Python runtime dependencies and Git; built-in scanners and API providers. No recon binary required.",
+            "Recon": "Minimal plus selected tools from orgscan recon-tools list. Install explicitly; passive and active execution remain separate.",
+            "Full": "Recon plus optional scanners from orgscan scanners. Rules, API credentials and Ollama remain explicit configuration.",
+        },
         "recommended_install": recommended_install_command(package_manager, REQUIRED_COMMANDS),
         "optional_install_notes": OPTIONAL_INSTALL_NOTES,
         "venv_path": str(venv_path),

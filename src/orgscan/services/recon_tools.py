@@ -8,8 +8,14 @@ class ReconToolsService:
 
     def inventory(self):
         rows=self.registry.inventory(self.settings)
-        # Never expose configured filesystem paths or configuration values.
-        for row in rows:row.pop('binary_path',None)
+        from orgscan.security_context import current_auth, LOCAL_CONTEXT
+        from orgscan.redaction import redact
+        auth=current_auth.get() or LOCAL_CONTEXT
+        # Shared installation paths are visible only to platform administrators.
+        for row in rows:
+            if not auth.allows_role('admin') or '*' not in auth.tenants:
+                row.pop('binary_path',None)
+        rows=redact(rows,secrets_from=self.settings.as_dict(include_secrets=True))
         return rows
 
     def test(self,tool_id):

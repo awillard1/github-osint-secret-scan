@@ -23,6 +23,7 @@ PROFILES={
     'standard-organization':dict(repository_metadata=True,expand=True,members=True,providers=['local-metadata','crtsh','rdap','subfinder','dnsx','httpx']),
     'comprehensive-organization':dict(repository_metadata=True,expand=True,members=True,contributor_repositories=True,public_search=True,providers=['local-metadata','crtsh','rdap','subfinder','dnsx','httpx']),
     'custom':dict(expand=False,providers=[]),
+    'active-extended':dict(expand=False,providers=['dnsx','httpx','katana','naabu','nuclei']),
 }
 
 

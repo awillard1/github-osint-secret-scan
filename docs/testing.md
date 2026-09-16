@@ -301,3 +301,11 @@ preservation. No normal test installs recon executables or calls their live APIs
 PyYAML is a declared runtime dependency for the restricted local template policy.
 See [Recon toolchain validation](recon-toolchain-validation.md) for the integration
 validation record and deployment limits.
+
+## Live local recon certification
+
+`ORGSCAN_LIVE_RECON=1 pytest tests/live/test_recon_compatibility.py` explicitly
+requires the certified recon binaries. It starts disposable loopback DNS/HTTP/TLS
+services and uses an orgscan-owned inert Nuclei template; it never installs binaries
+or queries external targets. Missing required recon binaries fail this opt-in run.
+Normal pytest skips it. See [the workstation certification record](recon-toolchain-validation.md#live-workstation-certification--2026-09-16).

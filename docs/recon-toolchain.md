@@ -173,3 +173,18 @@ Live upstream compatibility, GHES deployments, Windows and distributed locking
 are not certified by mocked tests. The recon runner supports Linux/macOS POSIX
 execution; WSL should use the Linux toolchain. Browser acceptance uses real service,
 auth, migration and persistence with fake external process/network responses.
+
+## Certified local execution and resolver configuration
+
+The [live certification record](recon-toolchain-validation.md#live-workstation-certification--2026-09-16)
+lists installed versions, actual local execution and remaining external-service limits.
+Platform administrators see resolved binary paths in Settings. Readiness checks the
+required CLI flags as well as version identity; `unsupported_contract` blocks launch.
+
+Administrator settings `ORGSCAN_RECON_RESOLVERS` (JSON list of IPv4 addresses with
+optional ports), `ORGSCAN_RECON_HTTP_PORTS` (JSON list, 1–65535) and
+`ORGSCAN_SUBFINDER_SOURCES` (JSON list of individual source IDs) support controlled
+private/local environments. These are bounded structured options, not arbitrary
+CLI arguments. Nuclei receives a private resolver file. Empty defaults preserve
+ordinary upstream resolver/port/source behavior. The Active Extended profile
+selects DNSX/HTTPX/Katana/Naabu/Nuclei and still requires explicit active consent.

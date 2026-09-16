@@ -398,3 +398,12 @@ tabs and bounded optional AI recon context are implemented. See
 upstream contracts and exact limitations (notably Amass v3-only, restricted local
 HTTP Nuclei templates, domain-only RDAP and POSIX/shared-directory locking).
 Migration head is 0015; configured deployment databases are not upgraded by this run.
+
+## Live recon certification (2026-09-16)
+
+Real DNSX, HTTPX, Katana, Nuclei and Naabu passed loopback execution, parser,
+correlation and browser/queue/report acceptance on WSL2. Subfinder passed isolated
+empty-source/timeout contracts; Amass v3 installed and its passive CLI was verified.
+No external reconnaissance or live Ollama/GHES certification is claimed. Readiness
+now checks required CLI flags; setup describes Minimal/Recon/Full requirements.
+See [the exact versions, evidence and limits](recon-toolchain-validation.md#live-workstation-certification--2026-09-16).

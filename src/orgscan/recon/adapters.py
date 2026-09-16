@@ -71,7 +71,7 @@ class Adapter:
             'subfinder':['-d',root,'-json','-silent','-duc'],
             'dnsx':['-l',str(targets),'-json','-silent','-a','-aaaa','-cname','-mx','-ns','-txt','-duc'],
             'httpx':['-l',str(targets),'-json','-silent','-status-code','-title','-tech-detect','-ip','-location','-duc'],
-            'naabu':['-list',str(targets),'-json','-silent','-scan-type','CONNECT','-p','80,443,8080,8443','-rate','50','-duc'],
+            'naabu':['-list',str(targets),'-json','-silent','-scan-type','CONNECT','-Pn','-p','80,443,8080,8443','-rate','50','-duc'],
             'katana':['-list',str(targets),'-jsonl','-silent','-d','2','-cs',r'^https?://(?:[a-z0-9-]+\.)*'+re.escape(root)+r'(?::[0-9]+)?(?:/|$)','-fs','fqdn','-dr','-omit-raw','-omit-body','-rl','10','-c','2','-duc'],
             'amass':['enum','-passive','-d',root,'-nocolor','-dir',str(work/'amass')],
             'gau':['--subs','--providers','wayback,commoncrawl',root],
@@ -81,11 +81,21 @@ class Adapter:
             templates=validated_templates(self.settings.nuclei_templates_path,work/'templates')
             args=['-l',str(targets),'-jsonl','-silent','-duc','-ni','-dr','-type','http','-rl','10','-c','2','-omit-raw','-no-color']
             for template in templates:args.extend(['-t',str(template)])
+            if self.settings.recon_resolvers:
+                resolvers=work/'resolvers.txt'
+                resolvers.write_text('\n'.join(self.settings.recon_resolvers)+'\n')
+                args.extend(['-r',str(resolvers)])
             return [binary,*args]
         if tool not in commands:raise ReconError('Unsupported recon adapter')
         args=commands[tool]
         if tool=='subfinder' and self.settings.subfinder_provider_config:
             args+=['-pc',str(Path(self.settings.subfinder_provider_config).resolve())]
+        if tool=='subfinder' and self.settings.subfinder_sources:
+            args+=['-s',','.join(self.settings.subfinder_sources)]
+        if tool in ('dnsx','httpx','katana','naabu') and self.settings.recon_resolvers:
+            args+=['-r',','.join(self.settings.recon_resolvers)]
+        if tool=='httpx' and self.settings.recon_http_ports:
+            args+=['-ports',','.join('http:'+str(port) for port in self.settings.recon_http_ports)]
         return [binary,*args]
 
     def parse(self,tool,root,output):
@@ -102,6 +112,7 @@ class Adapter:
                 attributes={}
                 if tool=='dnsx':
                     attributes={'dns':{key:row[key] for key in ('a','aaaa','cname','mx','ns','txt','rcode') if key in row}}
+                    if row.get('status_code'):attributes['dns']['rcode']=row['status_code']
                 observations.append(Observation('domain',host,tool,attributes))
                 for value in [*row.get('a',[]),*row.get('aaaa',[])]:
                     try:value=str(ipaddress.ip_address(value))
@@ -114,7 +125,7 @@ class Adapter:
                 if tool=='httpx':
                     status=row.get('status_code') or row.get('status-code')
                     if type(status) is int and 100<=status<=599:attributes['status']=status
-                    attributes.update({key:row[key] for key in ('title','tech','location','host','a') if key in row})
+                    attributes.update({key:row[key] for key in ('title','tech','location','host','host_ip','a','aaaa','webserver','content_type') if key in row})
                 observations.append(Observation('http_service' if tool=='httpx' else 'endpoint',address,tool,attributes))
             elif tool=='naabu':
                 host=domain(row.get('host') or '')
