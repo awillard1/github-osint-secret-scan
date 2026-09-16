@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, Index, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -92,12 +92,28 @@ class Organization(TimestampMixin, Base):
     accounts: Mapped[list[Account]] = relationship(back_populates="organization")
 
 
+class DomainIdentity(Base):
+    """Global DNS identity only. Never an authorization or observation boundary."""
+    __tablename__ = "domain_identities"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    normalized_name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+
+
 class Domain(TimestampMixin, Base):
+    """Tenant-domain association; historical IDs remain stable for every reference."""
     __tablename__ = "domains"
+    __table_args__ = (
+        UniqueConstraint("tenant_key", "identity_id", name="uq_domain_tenant_identity"),
+        Index("uq_domain_legacy_identity", "identity_id", unique=True,
+              sqlite_where=text("tenant_key IS NULL"), postgresql_where=text("tenant_key IS NULL")),
+    )
+
+    identity_id: Mapped[int] = mapped_column(ForeignKey("domain_identities.id"), nullable=False)
+    tenant_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     organization_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
-    name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), index=True)
     ownership_confidence: Mapped[str] = mapped_column(String(32), default=ConfidenceLevel.UNVERIFIED.value)
     verification_status: Mapped[str] = mapped_column(String(32), default=VerificationStatus.UNVERIFIED.value)
     discovered_emails: Mapped[list[str]] = mapped_column(JSON, default=list)

@@ -54,7 +54,9 @@ def execute_domain_plan(storage, plan, *, settings=None):
     try:
         provider = get_domain_provider(plan.discovery_provider, settings)
         contextual = getattr(provider, 'discover_context', None)
-        outcome = contextual(storage, context) if contextual else provider.discover(storage, context.name)
+        from orgscan.storage.domain_identity import domain_scope
+        with domain_scope(storage, context):
+            outcome = contextual(storage, context) if contextual else provider.discover(storage, context.name)
         if getattr(outcome, "failure", None):
             # Keep partial observations/request provenance before a deferred retry.
             storage.session.commit()

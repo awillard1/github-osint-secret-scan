@@ -106,8 +106,9 @@ class DomainIntelligenceProvider:
         return redact(record), candidates
 
     def discover_context(self, storage: Storage, context) -> DomainProviderResult:
-        # Ownership has been validated and persisted before providers look up by name.
-        return self.discover(storage, context.name)
+        from orgscan.storage.domain_identity import domain_scope
+        with domain_scope(storage, context):
+            return self.discover(storage, context.name)
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
         if self.settings is not None:

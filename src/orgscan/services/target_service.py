@@ -34,7 +34,13 @@ class DomainContext:
 
 
 def resolve_domain_context(storage, plan):
-    domain = storage.get_domain(plan.domain_id) if plan.domain_id is not None else storage.get_domain_by_name(plan.target)
+    scope = {}
+    if plan.organization_id is not None:
+        scope['organization_id'] = plan.organization_id
+    elif plan.tenant_key is not None:
+        scope['tenant_key'] = plan.tenant_key
+    domain = (storage.get_domain(plan.domain_id) if plan.domain_id is not None
+              else storage.get_domain_by_name(plan.target, **scope))
     if plan.domain_id is not None and (domain is None or domain.name != plan.target):
         raise ValueError("Domain identity does not match target")
     organization_id = plan.organization_id if plan.organization_id is not None else domain.organization_id if domain else None
@@ -43,6 +49,12 @@ def resolve_domain_context(storage, plan):
         raise AuthorizationError("Organization is not available in this scope")
     if plan.tenant_key is not None and (org is None or org.tenant_key != plan.tenant_key):
         raise AuthorizationError("Domain organization does not match tenant scope")
+    if domain is not None and plan.domain_id is not None and domain.organization_id is None and organization_id is not None:
+        raise AuthorizationError('Legacy domain associations cannot be claimed through a scan plan')
+    if domain is not None and domain.organization_id is not None:
+        original = storage.get_organization(domain.organization_id)
+        if original is None or org is None or original.tenant_key != org.tenant_key:
+            raise AuthorizationError('Domain association does not match tenant scope')
     auth = current_auth.get()
     if auth is not None and not auth.allows_tenant(org.tenant_key if org else None):
         raise AuthorizationError('Domain is outside the authorized tenant scope')

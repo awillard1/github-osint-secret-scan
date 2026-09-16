@@ -309,3 +309,18 @@ requires the certified recon binaries. It starts disposable loopback DNS/HTTP/TL
 services and uses an orgscan-owned inert Nuclei template; it never installs binaries
 or queries external targets. Missing required recon binaries fail this opt-in run.
 Normal pytest skips it. See [the workstation certification record](recon-toolchain-validation.md#live-workstation-certification--2026-09-16).
+
+## Cross-tenant domain identity
+
+`tests/recon/test_domain_identity.py`, `test_domain_identity_migration.py` and
+`tests/security/test_domain_identity_isolation.py` cover shared identity/private
+associations, mixed providers, duplicate fingerprints, reports/API/graph/AI/Reveal,
+legacy isolation, rollback, immutable ownership and 2,000 observations across two
+400-target tenants. Migration fixtures cover case/trailing-dot overlap, historical
+exact-name duplicates across tenants, conflict preflight and unchanged private rows.
+
+Historical repair fixtures now use `tests/legacy_domains.py` with frozen 0015-era
+columns; they no longer use the current Domain mapper against old schemas. Repeat
+repair is tested before crossing 0016 because the ownership migration intentionally
+refuses downgrade. Frozen migrations are unchanged. Existing phase23–27 security,
+complete browser acceptance and explicit loopback recon tests remain required.

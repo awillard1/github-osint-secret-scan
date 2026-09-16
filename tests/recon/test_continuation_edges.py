@@ -45,7 +45,7 @@ def test_same_tenant_assessments_reuse_root_without_reassigning_owner(service):
         assert all(plan['organization_id']==first['organization_id'] for plan in plans)
 
 
-def test_foreign_tenant_root_is_never_reassigned_or_linked(service):
+def test_foreign_tenant_root_gets_independent_association(service):
     first=service.create('a','First');second=service.create('b','Second')
     service.import_targets(second['id'],'example.gov')
     with service.factory() as session:
@@ -54,10 +54,13 @@ def test_foreign_tenant_root_is_never_reassigned_or_linked(service):
         session.commit()
         assessment=session.get(m.Assessment,second['id'])
         target=session.scalar(select(m.AssessmentTarget))
-        with pytest.raises((AuthorizationError,ValueError)):
-            discover_target(storage,assessment,target,service.settings,configuration={'name':'custom','providers':['local-metadata']})
+        discover_target(storage,assessment,target,service.settings,configuration={'name':'custom','providers':['local-metadata']})
         assert original.organization_id==first['organization_id']
-        assert session.scalar(select(m.AssessmentEntity).where(m.AssessmentEntity.assessment_id==second['id'])) is None
+        link=session.scalar(select(m.AssessmentEntity).where(m.AssessmentEntity.assessment_id==second['id'],m.AssessmentEntity.entity_type=='domain'))
+        assert link.entity_id != original.id
+        other=session.get(m.Domain,link.entity_id)
+        assert other.identity_id==original.identity_id and other.tenant_key=='b'
+        assert session.scalar(select(func.count()).select_from(m.DomainIdentity))==1
 
 
 def test_template_configuration_write_limit_matches_reader(service,monkeypatch):
@@ -69,7 +72,7 @@ def test_template_configuration_write_limit_matches_reader(service,monkeypatch):
     assert template_locations(service.settings)==[]
 
 
-def test_unassigned_domain_retains_existing_claim_policy(service):
+def test_unassigned_domain_remains_private_legacy_association(service):
     assessment=service.create('a','Legacy unassigned')
     service.import_targets(assessment['id'],'example.gov')
     with service.factory() as session:
@@ -81,5 +84,5 @@ def test_unassigned_domain_retains_existing_claim_policy(service):
         target=session.scalar(select(m.AssessmentTarget))
         discover_target(storage,a,target,service.settings,configuration={'name':'custom','providers':['local-metadata']})
         session.commit()
-        assert domain.id==original_id and domain.organization_id==a.organization_id
-        assert session.scalar(select(func.count()).select_from(m.Domain))==1
+        assert domain.id==original_id and domain.organization_id is None
+        assert session.scalar(select(func.count()).select_from(m.Domain))==2

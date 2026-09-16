@@ -156,7 +156,9 @@ def test_provider_preserves_through_canonical_reference(setup, monkeypatch):
     monkeypatch.setattr(provider,'_run_httpx',lambda names:[{'input':names[0],'title':source,'url':'https://gate.example','status_code':200}])
     with factory() as session:
         storage=Storage(session);storage.create_domain('gate.example',organization_id=ids[0]);session.commit()
-        result=provider.discover(storage,'gate.example');session.commit()
+        from orgscan.services.target_service import DomainContext
+        domain=storage.get_domain_by_name('gate.example',organization_id=ids[0])
+        result=provider.discover_context(storage,DomainContext(domain.id,domain.name,ids[0],'a'));session.commit()
         assert VALUE not in str(result)
         assert VALUE not in storage.list_domain_exposures()[0].result_summary
         rows=session.scalars(select(SecretEvidence)).all()
@@ -234,7 +236,7 @@ def test_forward_schema_keeps_legacy_evidence_and_does_not_recover_old_secrets(t
         row=Storage(session).create_finding(CanonicalFinding(source_tool='fixture',category='secret',title='Historical',description='<redacted>'))
         session.commit();identity=row.id
     command.upgrade(cfg,'head');command.upgrade(cfg,'head')
-    assert current_db_revision(url)=='20260915_0015'
+    assert current_db_revision(url)=='20260916_0016'
     with factory() as session:
         assert session.get(Finding,identity).description=='<redacted>'
         assert session.scalars(select(SecretEvidence)).all()==[]
@@ -391,7 +393,9 @@ def test_provider_structured_password_survives_projection_safely(setup,monkeypat
         'password':VALUE,'database_name':'dataset '+VALUE}])
     with factory() as session:
         storage=Storage(session);storage.create_domain('gate.example',organization_id=ids[0]);session.commit()
-        result=provider.discover(storage,'gate.example');session.commit()
+        from orgscan.services.target_service import DomainContext
+        domain=storage.get_domain_by_name('gate.example',organization_id=ids[0])
+        result=provider.discover_context(storage,DomainContext(domain.id,domain.name,ids[0],'a'));session.commit()
         assert VALUE not in str(result)
         assert VALUE not in storage.list_domain_exposures()[0].result_summary
         row=session.scalars(select(SecretEvidence)).one();fid,sid=row.finding_id,row.id

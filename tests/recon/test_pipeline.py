@@ -123,7 +123,7 @@ def test_upgrade_preserves_0014(tmp_path):
     command.upgrade(_alembic_config(database),'head')
     with engine.connect() as c:assert c.execute(text('SELECT name FROM organizations')).scalar()=='fixture'
     assert 'recon_assets' in inspect(engine).get_table_names()
-    assert current_db_revision(database)=='20260915_0015'
+    assert current_db_revision(database)=='20260916_0016'
 
 
 def test_repository_metadata_never_executes_code(service):

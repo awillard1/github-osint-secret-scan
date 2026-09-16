@@ -127,12 +127,7 @@ class ReconIngestor:
     def domain(self,name,source,endpoint=None):
         name=public_domain(name or '')
         if not name:return
-        existing=self.storage.get_domain_by_name(name)
-        if existing and existing.organization_id!=self.assessment.organization_id:
-            # Global legacy domain identity may belong to another assessment/tenant.
-            owner=self.session.get(m.Organization,existing.organization_id) if existing.organization_id else None
-            if owner is None or owner.tenant_key!=self.assessment.tenant_key:return
-        row,_=self.storage.get_or_create_domain(name,**({} if existing else {'organization_id':self.assessment.organization_id}))
+        row,_=self.storage.get_or_create_domain(name,organization_id=self.assessment.organization_id)
         sources=list(dict.fromkeys([*(row.discovery_sources or []),source]))
         row.discovery_sources=sources
         self.control.link(self.assessment,'domain',row.id,source=source,confidence='heuristic',reasons=['Domain reference, not an ownership assertion'])
@@ -285,9 +280,9 @@ def correlate_domains(storage,assessment,parent,settings):
     for value in [parent.name,*(parent.discovered_subdomains or [])]:
         name=public_domain(value)
         if not name or (name!=parent.name and not name.endswith('.'+parent.name)):continue
-        existing=storage.get_domain_by_name(name)
+        existing=storage.get_domain_by_name(name,organization_id=assessment.organization_id)
         if existing:st.entity(assessment,'domain',existing.id)
-        child,_=storage.get_or_create_domain(name,**({} if existing else {'organization_id':assessment.organization_id}))
+        child,_=storage.get_or_create_domain(name,organization_id=assessment.organization_id)
         observations=[]
         for exposure in exposures:
             if re.search(r'(?<![A-Za-z0-9_.-])'+re.escape(name)+r'(?![A-Za-z0-9_.-])',exposure.result_summary or ''):
@@ -330,13 +325,7 @@ def discover_target(storage,assessment,target,settings,*,configuration=None,prog
     if mode=='public':options['include_private']=False
     elif configuration is None and mode=='private':options['include_private']=True
     if target.target_type=='domain':
-        domain=storage.get_domain_by_name(target.normalized_value)
-        if domain is not None and domain.organization_id is not None:
-            # Reuse a canonical tenant-owned domain without changing its owner.
-            # Foreign-tenant domains still fail closed.
-            domain=AssessmentStorage(storage.session).entity(assessment,'domain',domain.id)
-        else:
-            domain,_=storage.get_or_create_domain(target.normalized_value,organization_id=assessment.organization_id)
+        domain,_=storage.get_or_create_domain(target.normalized_value,organization_id=assessment.organization_id)
         AssessmentStorage(storage.session).link(assessment,'domain',domain.id,source='operator',confidence='verified')
         from orgscan.recon.pipeline import run_pipeline
         return run_pipeline(storage,assessment,domain,options,settings,progress)

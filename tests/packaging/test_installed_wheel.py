@@ -40,7 +40,7 @@ def run(args):
     assert result.exit_code == 0, result.output
     return result.stdout
 run(['init-db'])
-assert current_db_revision(Settings().database_url) == '20260915_0015'
+assert current_db_revision(Settings().database_url) == '20260916_0016'
 Path('fixture.txt').write_text('api_key = "prod-token-1234567890abcdef"')
 run(['scan','path','fixture.txt','--organization','Smoke','--repository','smoke/local','--json'])
 rows = json.loads(run(['findings','--json']))

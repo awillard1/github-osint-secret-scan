@@ -471,8 +471,9 @@ workbench queries. JSON/browser routes call those services; `storage/assessments
 adds explicit membership selection to the existing tenant-scoped reader. Membership
 subqueries use Core tables to avoid recursive ORM criteria in SQLite. Credential
 knowledge is complete within the authorized tenant before the selected assessment
-DTO is sanitized. Asset identity includes GitHub connection ID; legacy domains keep
-the existing global-uniqueness restriction and cannot change tenant ownership.
+DTO is sanitized. Asset identity includes GitHub connection ID. Domain names share a global
+`DomainIdentity`, while the compatibility `Domain` row is a private tenant
+association with stable historical IDs. See [domain identity](domain-identity.md).
 
 AssessmentRun links existing ScheduledScan/QueueTask execution, including optional
 AI operations. `ai/ollama.py` owns text transport and response validation;
@@ -503,3 +504,13 @@ stages ingest canonical observations before dependency execution. Additive migra
 0015 supplies tenant-owned ReconAsset records for IP/services/endpoints/certificates;
 existing Domains, Findings, Evidence and Relationships remain canonical. Explicit
 active authorization and local Nuclei template policy apply at launch and execution.
+
+## Domain identity separation (0016)
+
+`storage/domain_identity.py` owns normalized identity resolution and provider context.
+Global identity contains no tenant-private state. Existing Domain IDs remain private
+association IDs for findings, exposures, graph edges, jobs and assessments, avoiding
+reference rewrites. Tenant identity is immutable; legacy unassigned intelligence is
+never implicitly claimed by discovery. Observation lookup batches 200 names at a
+time within the complete tenant visibility policy. See the [field inventory and
+migration policy](domain-identity.md) for normalization conflicts and rollback limits.

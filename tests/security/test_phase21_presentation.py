@@ -1,3 +1,4 @@
+from tests.legacy_domains import domain as legacy_domain, exposure as legacy_exposure
 import json
 import pytest
 from alembic import command
@@ -62,16 +63,16 @@ def test_forward_0009_repair_is_repeatable_and_preserves_relationships(tmp_path,
     url=f'sqlite:///{tmp_path / "repair.db"}'; config=_alembic_config(url)
     command.upgrade(config,'20260914_0009');factory=create_session_factory(url)
     with factory() as session:
-        storage=Storage(session);domain=storage.create_domain('gate.example')
-        exposure=storage.create_domain_exposure(domain.id,'fixture',source_name='fixture',result_summary='safe',normalized_hash='e'*64)
+        storage=Storage(session);domain=legacy_domain(storage,'gate.example')
+        exposure=legacy_exposure(storage,domain.id,'fixture',source_name='fixture',result_summary='safe',normalized_hash='e'*64)
         finding=storage.create_finding(CanonicalFinding(source_tool='fixture',category='secret',title='safe',description='safe'))
         session.commit();identity,domain_id,finding_id=exposure.id,domain.id,finding.id
     legacy={'result_summary':'AWS_SECRET_ACCESS_KEY=synthetic-repair-value access_token=second-repair-value'}
     with factory.kw['bind'].begin() as connection:
         connection.execute(update(DomainExposure.__table__).values(**legacy))
         connection.execute(update(Finding.__table__).values(description='client_secret=synthetic-nested-repair',metadata_json={'nested':[{'copy':'synthetic-nested-repair'}]}))
-    command.upgrade(config,'head')
-    assert current_db_revision(url)=='20260915_0015'
+    command.upgrade(config,'20260914_0010')
+    assert current_db_revision(url)=='20260914_0010'
     with factory() as session:
         exposure=session.get(DomainExposure,identity)
         assert 'synthetic-repair-value' not in exposure.result_summary

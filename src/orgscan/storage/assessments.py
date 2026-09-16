@@ -10,7 +10,8 @@ ENTITY_MODELS = {'recon_asset':m.ReconAsset,'organization':m.Organization,'repos
 
 
 def fields(row):
-    return {c.key:getattr(row,c.key) for c in row.__table__.columns}
+    return {c.key:getattr(row,c.key) for c in row.__table__.columns
+            if not (isinstance(row,m.Domain) and c.key=="identity_id")}
 
 
 class AssessmentStorage:

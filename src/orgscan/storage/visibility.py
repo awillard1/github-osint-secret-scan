@@ -10,6 +10,13 @@ def visibility_ids(tenant_keys):
     for model in (m.Repository, m.Domain, m.Account, m.ReconAsset):
         table = model.__table__
         ids[model] = select(table.c.id).where(or_(table.c.organization_id.in_(orgs), table.c.organization_id.is_(None) if None in tenant_keys else false()))
+    domain = m.Domain.__table__
+    # The denormalized association tenant must agree with its organization anchor.
+    ids[m.Domain] = select(domain.c.id).where(
+        domain.c.id.in_(ids[m.Domain]),
+        or_(domain.c.tenant_key.in_([key for key in tenant_keys if key is not None]),
+            domain.c.tenant_key.is_(None) if None in tenant_keys else false()),
+    )
     finding = m.Finding.__table__
     finding_scope = or_(
         finding.c.organization_id.in_(orgs),

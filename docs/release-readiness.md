@@ -855,3 +855,17 @@ report generation and exact audited reveal. See
 [the current milestone matrix](assessment-control-plane-validation.md) for final
 validation counts and explicit operational/deployment limits. Migration 0014 remains
 additive; migrations through 0013 and the configured database are unchanged.
+
+## Cross-tenant domain identity migration (0016)
+
+The [domain identity migration](domain-identity.md) is a forward ownership-model
+change from frozen `20260915_0015` to `20260916_0016`. Back up, stop writers and test
+an upgraded copy before deployment. Normalized duplicate associations within one
+tenant/legacy scope and invalid names stop preflight; no arbitrary merge is allowed.
+Downgrade is deliberately refused; rollback uses a verified pre-upgrade backup.
+
+The configured database remains at 0015 and is not changed by this development run.
+Consequently configured doctor reports a required schema upgrade; doctor on the
+upgraded disposable database passes. Do not start development auto-migration against
+the configured database as a validation shortcut. SQLite upgrade and foreign-key
+integrity are tested; PostgreSQL live upgrade remains deployment validation.

@@ -94,7 +94,7 @@ def test_state_policy_rejects_manual_regression():
 
 def test_populated_lifecycle_upgrade(tmp_path):
     url = f"sqlite:///{tmp_path / 'legacy.db'}"
-    init_db(url)
+    command.upgrade(_alembic_config(url), "20260915_0015")
     factory = create_session_factory(url)
     with factory() as session:
         row = Storage(session).create_finding(observation())

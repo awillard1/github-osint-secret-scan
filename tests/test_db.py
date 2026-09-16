@@ -12,7 +12,7 @@ def test_init_db_runs_alembic_migrations_and_creates_new_columns(tmp_path) -> No
     inspector = inspect(engine)
 
     assert "alembic_version" in inspector.get_table_names()
-    assert current_db_revision(database_url) == "20260915_0015"
+    assert current_db_revision(database_url) == "20260916_0016"
     assert "target_ref" in {column["name"] for column in inspector.get_columns("scan_jobs")}
     assert "scope_json" in {column["name"] for column in inspector.get_columns("scan_jobs")}
     assert "metadata_json" in {column["name"] for column in inspector.get_columns("relationships")}
@@ -30,7 +30,7 @@ def test_evidence_identity_upgrade_preserves_legacy_records(tmp_path):
     from orgscan.schemas import CanonicalFinding
 
     database_url = f"sqlite:///{tmp_path / 'legacy.db'}"
-    init_db(database_url)
+    command.upgrade(_alembic_config(database_url), "20260915_0015")
     with create_session_factory(database_url)() as session:
         storage = Storage(session)
         finding = storage.create_finding(CanonicalFinding(

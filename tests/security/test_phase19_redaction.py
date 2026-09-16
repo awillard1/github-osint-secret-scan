@@ -1,3 +1,4 @@
+from tests.legacy_domains import domain as legacy_domain, exposure as legacy_exposure
 from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
@@ -114,8 +115,8 @@ def test_forward_0008_repair_preserves_rows_and_is_repeatable(tmp_path, caplog):
     factory = create_session_factory(url)
     with factory() as session:
         storage = Storage(session)
-        domain = storage.create_domain('legacy.example')
-        exposure = storage.create_domain_exposure(domain.id, 'fixture', source_name='fixture', result_summary='safe', normalized_hash='e'*64)
+        domain = legacy_domain(storage,'legacy.example')
+        exposure = legacy_exposure(storage,domain.id, 'fixture', source_name='fixture', result_summary='safe', normalized_hash='e'*64)
         job = storage.create_scan_job('path', '/safe', 'fixture')
         run = storage.create_tool_run('fixture', '/safe', scan_job_id=job.id)
         session.commit()
@@ -124,8 +125,8 @@ def test_forward_0008_repair_preserves_rows_and_is_repeatable(tmp_path, caplog):
         conn.execute(DomainExposure.__table__.update().values(result_summary=GH, evidence_url='https://alice:opaque-pass@host/?token=opaque-query'))
         conn.execute(ScanJob.__table__.update().values(target_id=AWS, parameters_json={'indicator':'opaque-legacy', 'copy':['opaque-legacy']}))
         conn.execute(ToolRun.__table__.update().values(target=GH, stderr_log='Bearer opaque-bearer'))
-    command.upgrade(config, 'head')
-    assert current_db_revision(url) == '20260915_0015'
+    command.upgrade(config, '20260914_0009')
+    assert current_db_revision(url) == '20260914_0009'
     with factory() as session:
         exposure = session.get(DomainExposure, exposure_id)
         job = session.get(ScanJob, job_id)

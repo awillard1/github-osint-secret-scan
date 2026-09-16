@@ -49,6 +49,7 @@ class ObservationStore:
     def __init__(self,storage,assessment,settings):
         self.storage=storage;self.session=storage.session;self.assessment=assessment;self.settings=settings
         self.control=AssessmentStorage(self.session)
+        self.control.tenant(assessment.tenant_key, 'analyst')
         self.session.info['secret_settings']=settings
 
     def ingest_many(self, observations):
@@ -62,6 +63,16 @@ class ObservationStore:
         self._domains={}
         self.control._entity_cache={};self.control._link_cache={}
         try:
+            # Resolve known/missing names in bounded batches, not once per provider
+            # observation. The visibility predicate keeps existing private rows scoped.
+            from orgscan.storage.visibility import visibility_ids
+            names=sorted({name for item in observations if item.kind=='domain' and (name:=domain(item.value))})
+            visible=visibility_ids([self.assessment.tenant_key])[m.Domain]
+            for offset in range(0,len(names),200):
+                batch=names[offset:offset+200]
+                self._domains.update(dict.fromkeys(batch))
+                for row in self.session.scalars(select(m.Domain).where(m.Domain.name.in_(batch),m.Domain.id.in_(visible))):
+                    self._domains[row.name]=row
             return [self.ingest(observation) for observation in observations]
         finally:
             self._domains=None
@@ -84,8 +95,10 @@ class ObservationStore:
         if observation.kind=='domain':
             cache=getattr(self,'_domains',None)
             row=cache.get(name) if cache is not None else None
-            if row is None:row=self.storage.get_domain_by_name(name)
+            known=cache is not None and name in cache
+            if row is None and not known:row=self.storage.get_domain_by_name(name, organization_id=self.assessment.organization_id)
             if row:self.control.entity(self.assessment,'domain',row.id)
+            elif known:row=self.storage.create_domain(name,organization_id=self.assessment.organization_id)
             else:row,_=self.storage.get_or_create_domain(name,organization_id=self.assessment.organization_id)
             if cache is not None:cache[name]=row
             kind='domain'

@@ -27,6 +27,10 @@ def pipeline_slot(settings):
 
 
 def run_pipeline(storage,assessment,parent,options,settings,progress):
+    from orgscan.storage.assessments import AssessmentStorage
+    control = AssessmentStorage(storage.session)
+    control.tenant(assessment.tenant_key, 'analyst')
+    control.entity(assessment, 'domain', parent.id)
     with pipeline_slot(settings):
         return _run(storage,assessment,parent,options,settings,progress)
 

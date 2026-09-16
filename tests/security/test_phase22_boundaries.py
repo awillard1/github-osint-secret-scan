@@ -1,3 +1,4 @@
+from tests.legacy_domains import domain as legacy_domain, exposure as legacy_exposure
 import json
 from pathlib import Path
 
@@ -123,8 +124,8 @@ def test_forward_repair_from_0010_preserves_data_and_is_repeatable(tmp_path, cap
     factory = create_session_factory(url)
     with factory() as session:
         storage = Storage(session)
-        domain = storage.create_domain('gate.example')
-        exposure = storage.create_domain_exposure(domain.id, 'fixture', source_name='fixture', result_summary='safe', normalized_hash='e'*64)
+        domain = legacy_domain(storage,'gate.example')
+        exposure = legacy_exposure(storage,domain.id, 'fixture', source_name='fixture', result_summary='safe', normalized_hash='e'*64)
         finding = storage.create_finding(CanonicalFinding(source_tool='fixture', category='exposure', title='Useful title', description='safe', domain_id=domain.id))
         evidence = storage.create_evidence(finding.id, 'fixture', repository_path='public/file.py', line_start=7)
         session.commit()
@@ -135,8 +136,8 @@ def test_forward_repair_from_0010_preserves_data_and_is_repeatable(tmp_path, cap
         connection.execute(update(Evidence).values(snippet=copied(7)))
     with factory() as session:
         assert VALUE in session.get(Finding, fid).description
-    command.upgrade(config, 'head')
-    assert current_db_revision(url) == '20260915_0015'
+    command.upgrade(config, '20260914_0011')
+    assert current_db_revision(url) == '20260914_0011'
     def state():
         with factory() as session:
             f, e, observation = session.get(Finding, fid), session.get(DomainExposure, eid), session.get(Evidence, evidence_id)

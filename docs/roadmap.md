@@ -423,3 +423,13 @@ allows canonical domain reuse across assessments in one tenant without reassigni
 ownership, and rejects oversized template configuration before replacing a valid
 file. Cross-tenant duplicate-domain creation remains unsupported; foreign-domain
 links and reassignment continue to fail closed. No schema change is involved.
+
+## Cross-tenant domain identity — 2026-09-16
+
+Revision 0016 separates global DNS identities from private Domain associations,
+retaining existing private IDs and references. Same-name assessments in different
+tenants now resolve independently; providers, observation hashes, findings and
+projections retain tenant boundaries. Legacy unassigned data remains local-only.
+See [domain identity](domain-identity.md) and the latest checkpoint validation
+sections for acceptance results and safe migration conflict handling. Organization,
+Repository and Account association models are reviewed but not migrated.

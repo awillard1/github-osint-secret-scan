@@ -49,7 +49,7 @@ def test_plugin_error_cannot_publish_arbitrary_scanner_message(tmp_path,monkeypa
 
 def test_upgrade_adds_durable_claim_and_sanitizes_legacy_evidence(tmp_path):
     url=f'sqlite:///{tmp_path / "upgrade.db"}'
-    init_db(url)
+    command.upgrade(_alembic_config(url), "20260915_0015")
     command.downgrade(_alembic_config(url),'20260911_0007')
     engine=create_engine(url)
     now=datetime.now(UTC).isoformat()
@@ -63,7 +63,7 @@ def test_upgrade_adds_durable_claim_and_sanitizes_legacy_evidence(tmp_path):
             {'value':'password="legacy-private-987654321"','raw':json.dumps({'nested':{'token':'legacy-private-987654321'}})})
         session.commit()
     init_db(url)
-    assert current_db_revision(url)=='20260915_0015'
+    assert current_db_revision(url)=='20260916_0016'
     with create_session_factory(url)() as session:
         storage=Storage(session)
         task=storage.list_queue_tasks()[0]

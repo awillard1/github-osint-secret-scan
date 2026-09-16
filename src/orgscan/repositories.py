@@ -34,6 +34,7 @@ from orgscan.models import (
 from orgscan.schemas import CanonicalFinding
 from orgscan.lifecycle import from_legacy, validate_transition, snapshot, LEGACY_STATUS
 from orgscan.security_context import current_auth
+from orgscan.storage.domain_identity import UNSPECIFIED
 
 
 class Storage:
@@ -85,6 +86,9 @@ class Storage:
         if value is None or getattr(existing, field) is not None:
             return
         model = type(existing)
+        if isinstance(existing, Organization) and field == 'tenant_key':
+            from orgscan.storage.domain_identity import validate_organization_domain_anchor
+            validate_organization_domain_anchor(self.session, existing.id, value)
         claimed = self.session.execute(update(model).where(model.id == existing.id,
             getattr(model, field).is_(None)).values({field:value}),
             execution_options={"synchronize_session":False})
@@ -111,21 +115,13 @@ class Storage:
         self.session.flush()
         return domain
 
-    def get_domain_by_name(self, name: str) -> Domain | None:
-        return self.session.scalar(select(Domain).where(Domain.name == name))
+    def get_domain_by_name(self, name: str, *, organization_id=UNSPECIFIED, tenant_key=UNSPECIFIED) -> Domain | None:
+        from orgscan.storage.domain_identity import find_domain
+        return find_domain(self, name, organization_id=organization_id, tenant_key=tenant_key)
 
     def get_or_create_domain(self, name: str, **kwargs: Any) -> tuple[Domain, bool]:
-        existing = self.get_domain_by_name(name)
-        if existing:
-            if kwargs.get("organization_id") is not None and getattr(existing, "organization_id") not in (None, kwargs["organization_id"]):
-                raise ValueError("Discovery ownership conflict; existing tenant association is immutable")
-            self._claim_unassigned_owner(existing, "organization_id", kwargs.get("organization_id"))
-            for key, value in kwargs.items():
-                if value is not None:
-                    setattr(existing, key, value)
-            self.session.flush()
-            return existing, False
-        return self.create_domain(name, **kwargs), True
+        from orgscan.storage.domain_identity import resolve_domain
+        return resolve_domain(self, name, **kwargs)
 
     def create_repository(self, full_name: str, **kwargs: Any) -> Repository:
         repository = Repository(full_name=full_name, **kwargs)
@@ -344,9 +340,18 @@ class Storage:
             return record
 
     def _create_finding(self, finding: CanonicalFinding) -> Finding:
-        existing = self.session.scalar(
-            select(Finding).where(Finding.normalized_hash == finding.normalized_hash)
-        )
+        if finding.domain_id is not None:
+            from hashlib import sha256
+            scoped_hash = sha256(f'domain:{finding.domain_id}:{finding.normalized_hash}'.encode()).hexdigest()
+            existing = self.session.scalar(select(Finding).where(
+                Finding.domain_id == finding.domain_id,
+                Finding.normalized_hash.in_((finding.normalized_hash, scoped_hash))))
+            if existing is None:
+                finding = finding.model_copy(update={'normalized_hash':scoped_hash, 'fingerprint':scoped_hash})
+        else:
+            existing = self.session.scalar(
+                select(Finding).where(Finding.normalized_hash == finding.normalized_hash)
+            )
         if existing:
             previous_job_id = existing.scan_job_id
             incoming_job = self.get_scan_job(finding.scan_job_id) if finding.scan_job_id else None
@@ -482,6 +487,12 @@ class Storage:
     ) -> DomainExposure:
         from orgscan.services.secret_evidence import SecretCandidateContext
         settings = self.session.info.get('secret_settings')
+        from hashlib import sha256
+        scoped_hash = sha256(f'domain:{domain_id}:{normalized_hash}'.encode()).hexdigest()
+        existing = self.session.scalar(select(DomainExposure).where(
+            DomainExposure.domain_id == domain_id,
+            DomainExposure.normalized_hash.in_((normalized_hash, scoped_hash))))
+        normalized_hash = existing.normalized_hash if existing else scoped_hash
         incoming = {'result_summary': result_summary, 'source': source, 'source_name': source_name, **kwargs}
         with SecretCandidateContext.from_source(incoming, settings=settings, candidates=protected_candidates) as context:
             safe = context.sanitize(incoming, preserve_root_keys=True)
@@ -492,7 +503,6 @@ class Storage:
                     source_tool=source, source_name=source_name, category='secret', domain_id=domain_id,
                     title='Protected credential in provider evidence', description=result_summary,
                     fingerprint=normalized_hash, normalized_hash=normalized_hash), protected_candidates=context._candidates)
-            existing = self.session.scalar(select(DomainExposure).where(DomainExposure.normalized_hash == normalized_hash))
             if existing:
                 for key, value in kwargs.items():
                     if value is not None:

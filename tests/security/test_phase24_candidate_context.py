@@ -1,3 +1,4 @@
+from tests.legacy_domains import domain as legacy_domain, exposure as legacy_exposure
 """Protected capture must redact copies without losing exact authorized reveal."""
 import base64
 import html
@@ -222,11 +223,11 @@ def test_forward_keyless_repair_preserves_ciphertext_and_relationships(tmp_path,
     factory=create_session_factory(url)
     with factory() as session:
         session.info['secret_settings']=settings;storage=Storage(session)
-        org=storage.create_organization('A',tenant_key='a');domain=storage.create_domain('gate.example',organization_id=org.id)
+        org=storage.create_organization('A',tenant_key='a');domain=legacy_domain(storage,'gate.example',organization_id=org.id)
         finding=storage.create_finding(CanonicalFinding(source_tool='plugin',category='secret',title='Copied '+VALUE,
             description=VALUE,domain_id=domain.id,organization_id=org.id),protected_candidates=capture({'password':VALUE},settings=settings))
         evidence=storage.create_evidence(finding.id,'plugin',repository_path='src/file.txt',snippet=REDACTED)
-        exposure=storage.create_domain_exposure(domain.id,'plugin',source_name='plugin',result_summary=REDACTED,normalized_hash=finding.normalized_hash)
+        exposure=legacy_exposure(storage,domain.id,'plugin',source_name='plugin',result_summary=REDACTED,normalized_hash=finding.normalized_hash)
         relationship=storage.create_relationship('finding',str(finding.id),'domain',str(domain.id),'observed-on')
         second_edge=storage.create_relationship('finding',str(finding.id),'domain',str(domain.id),'also-observed')
         other=storage.create_finding(CanonicalFinding(source_tool='public',category='exposure',title='Useful public title',description='Useful public evidence'))
@@ -243,10 +244,10 @@ def test_forward_keyless_repair_preserves_ciphertext_and_relationships(tmp_path,
     monkeypatch.delenv('ORGSCAN_SECRET_ENCRYPTION_KEY',raising=False)
     with monkeypatch.context() as no_key:
         no_key.setattr('orgscan.services.secret_evidence.encryption_key',lambda *a:pytest.fail('Repair must not require a key'))
-        command.upgrade(cfg,'head')
+        command.upgrade(cfg,'20260914_0013')
         command.downgrade(cfg,'20260914_0012')
         command.upgrade(cfg,'head')
-    assert current_db_revision(url)=='20260915_0015'
+    assert current_db_revision(url)=='20260916_0016'
     assert_database_safe(factory,[VALUE])
     with factory() as session:
         protected=session.get(SecretEvidence,sid)

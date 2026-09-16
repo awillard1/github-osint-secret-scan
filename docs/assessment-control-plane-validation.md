@@ -1,6 +1,6 @@
 # Assessment control plane validation — 2026-09-15 continuation
 
-> Current status: see **Autonomous edge-case follow-up** at the end of this file.
+> Current status: see **Cross-tenant domain identity migration** at the end of this file.
 > Earlier sections preserve historical implementation and certification results.
 > Migration 0015 is committed and is not an editable development migration.
 
@@ -294,3 +294,78 @@ projection, tenant isolation, Reveal, report/AI redaction and queue regressions.
 Migration head remains **20260915_0015**. No migration, tool installation, external
 reconnaissance, firewall change, commit, tag replacement or push occurs in this
 follow-up. Changes are left reviewable in the working tree.
+
+## Cross-tenant domain identity migration (2026-09-16)
+
+This section supersedes the historical cross-tenant-domain BLOCKED entries above.
+The complete design, field classification and other-asset review are documented in
+[Global domain identity and tenant associations](domain-identity.md).
+
+| Area | Classification | Evidence / boundary |
+|---|---|---|
+| Model before | Historical | One globally unique Domain combined identity and private ownership |
+| Model after | COMPLETE | One global DomainIdentity; independent tenant Domain associations retain historical IDs and private fields |
+| Field classification | COMPLETE | Every prior column and relationship classified; no private field moved to global identity |
+| Provider contract | COMPLETE | Shared scoped resolver; bound/restored context for legacy providers; ambiguous name-only reads fail; owned provider writes require context |
+| Tenant isolation | COMPLETE | A/B independently assess one name; unassociated C sees nothing; global identity inventory is inaccessible to tenant sessions |
+| Observations / correlation | COMPLETE | Association-scoped deduplication and source attributes; identical upstream hashes cannot update another tenant's observation |
+| Findings / encrypted evidence | COMPLETE | Domain finding hashes are association-scoped; old hashes remain compatible; cross-tenant Reveal denied, exact owner Reveal succeeds, ciphertext unchanged |
+| Relationships / assessments | COMPLETE | Private association IDs retain all references; graph, membership, jobs, reports and AI use existing tenant boundaries |
+| Legacy data | COMPLETE | Unassigned records remain legacy/local-only; tenant discovery creates a separate association without claiming private history |
+| Migration | COMPLETE for tested SQLite schemas | Forward 0015 → 0016; historical case/exact-name overlap across tenants supported; all private rows/references retained; same-tenant collisions and invalid names stop before DDL |
+| Recon providers | COMPLETE | Mocked Subfinder/Amass/DNSX/HTTPX/Katana/Naabu/Nuclei across two tenants; existing real loopback contracts pass |
+| UI | COMPLETE | Ordinary domain labels and tenant-only observations/counts; no other-tenant association disclosure; existing browser workflow retained |
+| Performance | COMPLETE | 400 targets + 1,000 observations per tenant; 400 shared identities / 800 associations / 2,000 provider observations; 4,006 SELECTs; 200-name lookup batches and bounded transaction-local caches |
+| Other assets | REVIEWED, not migrated | Organization, Repository, Account need general association models; assessment membership is already association-based; ReconAsset is scoped under its current model |
+| Deployment | OPERATOR CONFIGURATION REQUIRED | Configured DB stays at 0015; explicit backup/review/migration required before running new code against it |
+| Historical conflicts | OPERATOR CONFIGURATION REQUIRED | Invalid names or duplicate normalized associations within one tenant/legacy scope require explicit reconciliation; no arbitrary merge |
+| External systems | OPERATOR CONFIGURATION REQUIRED | PostgreSQL live migration, live GHES/external enumeration and Windows Ollama remain uncertified; no external recon or network changes |
+
+Validation:
+
+- **Full pytest: 918 passed, 14 skipped, 2 existing dependency warnings; 812.92 seconds.**
+  This includes the complete security, projection, historical/new migration,
+  browser operator acceptance, correlation and queue suites.
+- Focused final feature run: **27 passed**; the final legacy-organization ownership
+  guard and related isolation run: **16 passed**. Four new migration cases preserve
+  references/ciphertext or reject ambiguous/invalid input before DDL.
+- Explicit loopback recon/browser/scanner acceptance: **8 passed, 5 skipped**.
+  Optional Ollama and four absent scanners account for the live skips. No external
+  reconnaissance was performed; Subfinder external discovery and Amass network
+  enumeration remain operator-configured, with deterministic contracts/mocks retained.
+- Two concurrent tenant insertions also produced one global identity and two private
+  associations in a disposable SQLite database. Same-tenant insertion conflicts may
+  still require transaction retry; no merge or ownership reassignment occurs.
+- Domain model versus migrated schema: **zero differences**. Post-upgrade SQLite
+  foreign-key integrity passed. Existing protected-evidence repair/reveal tests also
+  pass through the new head; frozen migrations/snapshots are unchanged.
+- Doctor on upgraded disposable data: **ok=true, 21 warnings**. Configured doctor:
+  **ok=false solely for 0015 versus required 0016**, 21 warnings; configured data was
+  not migrated. Optional tool/configuration warnings remain explicit.
+- Wheel/sdist build, clean runtime-only install, compile and whitespace checks passed.
+  Clean install includes migration, CLI/API, local scanning, reports and encrypted
+  evidence/exact Reveal.
+
+The first broad regression run found nine failures in historical-schema fixtures,
+legacy downgrade assumptions and direct owned-provider calls. Those tests now seed
+frozen old columns, repeat historical repair before the intentionally irreversible
+0016 boundary, and supply explicit provider association context. Security assertions
+were retained. Subsequent complete runs passed; no failing test was skipped/deleted.
+
+**PARTIAL:** live PostgreSQL deployment certification is not performed.
+**BLOCKED:** no independent work remains for the tested SQLite workflow. A deployment
+with ambiguous normalized associations intentionally stops for explicit reconciliation.
+**OPERATOR CONFIGURATION REQUIRED:** backup/review/migration of actual data and the
+external services identified above. Ordinary same-domain multi-tenant assessment is
+implemented and tested; this is not a claim of universal deployment certification.
+
+Local validation logs: `/tmp/orgscan-domain-identity-acceptance.log`,
+`/tmp/orgscan-domain-live-acceptance.log`, `/tmp/orgscan-domain-final-focused.log`,
+`/tmp/orgscan-domain-anchor.log`, `/tmp/orgscan-domain-schema-parity.log`,
+`/tmp/orgscan-domain-disposable-doctor.json`, `/tmp/orgscan-domain-configured-doctor.json`,
+`/tmp/orgscan-domain-build-final.log` and `/tmp/orgscan-recon-clean-install.log`.
+
+No configured application data, frozen migration, Protected SecretEvidence schema,
+secret key/reveal policy, repository/account/organization ownership schema or remote
+Git history was modified. Changes remain uncommitted for review. Migration downgrade
+is refused because it could collapse tenant ownership; use a verified backup.

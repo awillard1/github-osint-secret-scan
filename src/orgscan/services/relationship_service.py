@@ -76,7 +76,7 @@ class GitHubExpansionEngine:
                 continue
             if not domain_name:
                 continue
-            domain, _ = self.storage.get_or_create_domain(domain_name)
+            domain, _ = self.storage.get_or_create_domain(domain_name, organization_id=record.organization_id)
             count += self._edge(("repository", record.id), ("domain", domain.id), RelationshipType.MENTIONS,
                                 "heuristic", endpoint, "Domain in repository homepage/description URL", domain=domain_name)
         return record, count
@@ -136,7 +136,7 @@ class GitHubExpansionEngine:
             domain_name = public_domain(email.rsplit("@", 1)[1])
             if not domain_name:
                 continue
-            domain, _ = self.storage.get_or_create_domain(domain_name)
+            domain, _ = self.storage.get_or_create_domain(domain_name, organization_id=repository.organization_id)
             evidence = {"commit_sha": commit.get("sha"), "domain": domain_name}
             relationships += self._edge(
                 ("repository", repository.id), ("domain", domain.id), RelationshipType.MENTIONS,
