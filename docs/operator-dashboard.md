@@ -1,5 +1,32 @@
 # Operator dashboard
 
+## Operator console presentation
+
+The console adds a shared autoescaped Jinja shell for the live dashboard, assessment
+index, queue drill-downs, operator queue cards and finding detail. Existing services remain the
+source of queue membership, risk, lifecycle and authorization decisions. Shared
+design tokens support light and dark preferences, compact tables, visible state and
+severity chips, keyboard focus and responsive navigation. Queue cards lead the
+dashboard; the assessment index highlights failed jobs and links to each workbench.
+Finding detail groups priority, workflow, context, redacted evidence and history.
+Its decision form returns to the same finding after a successful update; optional
+JavaScript refreshes detail in place when no protected reveal controls are present.
+Findings with protected evidence retain full-page navigation so reveal cleanup and
+initialization continue to work. Reader
+sessions do not see this form; decisions still use the protected POST endpoint and
+CSRF check. Protected values remain behind audited reveal.
+
+Static CSS and JavaScript are served under `/static`. JavaScript is optional and
+does not determine queue state, permissions or risk. An unenhanced POST still uses
+the normal redirect. Exported HTML remains
+self-contained and omits browser session controls. Jinja2 is a runtime dependency;
+installed wheels must include the templates and static assets.
+
+This is an incremental migration. Assessment detail tabs, scan-job detail, graph,
+settings, login and the standalone HTML report still assemble escaped HTML in
+Python. Their routes and forms remain supported. Deployment-specific visual and
+accessibility review remains needed.
+
 The existing server-rendered `/dashboard` now starts with an operator overview.
 `DashboardService` applies shared lifecycle/risk policy over the request's authorized
 storage session; templates only render the resulting counts and queues.

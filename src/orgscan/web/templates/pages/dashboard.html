@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading">
+<div>
+<p class="eyebrow">Exposure monitoring</p>
+<h1>Operator overview</h1>
+<p class="muted">Prioritize new exposure, regressions and work awaiting review.</p>
+</div>
+<a class="button" href="/dashboard/assessments/new">New assessment</a>
+</div>
+{% if artifact_scan_result %}<div class="banner success" role="status">
+<strong>Artifact scan completed.</strong> {{ artifact_scan_result.artifact_name|default('artifact') }} produced {{ artifact_scan_result.findings|default(0) }} finding(s) in scan job #{{ artifact_scan_result.scan_job_id|default('n/a') }}.</div>{% elif artifact_scan_error %}<div class="banner error" role="alert">
+<strong>Artifact scan failed.</strong> {{ artifact_scan_error }}</div>{% endif %}
+{% if finding_action_result %}<div class="banner success" role="status">
+<strong>Finding workflow updated.</strong> Finding #{{ finding_action_result.id|default('n/a') }} is now {{ finding_action_result.status|default('updated') }} / {{ finding_action_result.triage_state|default('updated') }}.</div>{% elif finding_action_error %}<div class="banner error" role="alert">
+<strong>Finding workflow update failed.</strong> {{ finding_action_error }}</div>{% endif %}
+{% if access_context_note %}<div class="banner info">
+<strong>Access context.</strong> {{ access_context_note }}</div>{% endif %}
+{% if operations %}{% set payload = operations %}{% set selected = none %}{% include 'components/operator_overview.html' %}{% endif %}
+<div class="metric-grid" aria-label="Exposure metrics">
+<div class="metric-tile">
+<span>Findings</span>
+<strong>{{ summary.counts.findings|default(0) }}</strong>
+</div>
+<div class="metric-tile">
+<span>Open findings</span>
+<strong>{{ summary.workflow_breakdown.open|default(0) }}</strong>
+</div>
+<div class="metric-tile critical">
+<span>Critical findings</span>
+<strong>{{ summary.severity_breakdown.critical|default(0) }}</strong>
+</div>
+<div class="metric-tile critical">
+<span>High risk findings</span>
+<strong>{{ operations.queues['high-risk'].count if operations else summary.actionable_high_risk_count|default(0) }}</strong>
+</div>
+<div class="metric-tile">
+<span>Scheduled scans</span>
+<strong>{{ summary.counts.scheduled_scans|default(0) }}</strong>
+</div>
+</div>
+<section class="panel">
+<div class="section-header">
+<div>
+<h2>Live filters</h2>
+<p class="muted">Refine the finding table while retaining the operator queues above.</p>
+</div>
+<a href="/summary">Summary JSON</a>
+</div>
+<form method="get" action="/dashboard" class="filter-grid">
+<label>Status<input name="status" value="{{ filters.status|default('') }}">
+</label>
+<label>Severity<input name="severity" value="{{ filters.severity|default('') }}">
+</label>
+<label>Category<input name="category" value="{{ filters.category|default('') }}">
+</label>
+<label>Confidence<input name="confidence" value="{{ filters.confidence|default('') }}">
+</label>
+<label>Minimum confidence<select name="min_confidence">{% for value in ['verified','likely','heuristic','unverified'] %}<option value="{{ value }}" {% if filters.min_confidence|default('likely') == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select>
+</label>
+<label>Limit<input type="number" min="1" max="500" name="limit" value="{{ filters.limit|default(100) }}">
+</label>
+<label>Trend days<input type="number" min="1" max="365" name="days" value="{{ filters.days|default(30) }}">
+</label>
+<label class="checkbox">
+<input type="checkbox" name="high_signal_only" value="true" {% if filters.high_signal_only %}checked{% endif %}>High signal only</label>
+<button type="submit">Apply filters</button>
+</form>
+</section>
+<section class="panel">
+<div class="section-header">
+<div>
+<h2>Recent findings</h2>
+<p class="muted">Current filtered observations. Open a finding to review evidence and decide.</p>
+</div>
+<a href="/findings?limit={{ filters.limit|default(100) }}">Findings JSON</a>
+</div>{% if findings %}<div class="table-scroll">
+<table>
+<thead>
+<tr>
+<th>Finding</th>
+<th>Severity</th>
+<th>Confidence</th>
+<th>Risk</th>
+<th>Workflow</th>
+<th>Source</th>
+<th>Detected</th>
+</tr>
+</thead>
+<tbody>{% for row in findings %}<tr>
+<td>
+<a class="signal-title" href="/dashboard/findings/{{ row.id }}">{{ row.title }}</a>
+<br>
+<small class="muted">#{{ row.id }} · {{ row.category }}</small>
+</td>
+<td>
+<span class="severity-chip" data-severity="{{ row.severity }}">{{ row.severity }}</span>
+</td>
+<td>{{ row.confidence }}</td>
+<td>
+<strong>{{ row.risk_score }}</strong>
+</td>
+<td>
+<span class="state-chip" data-state="{{ row.lifecycle_state|default(row.status) }}">{{ row.lifecycle_state|default(row.status) }}</span>
+<br>
+<small class="muted">{{ row.triage_owner|default('Unassigned',true) }}</small>
+</td>
+<td>{{ row.source_tool }}</td>
+<td>{{ row.detected_at }}</td>
+</tr>{% endfor %}</tbody>
+</table>
+</div>{% else %}<div class="empty-state">
+<strong>No matching findings</strong>
+<p>Adjust the filters or run an assessment.</p>
+</div>{% endif %}</section>
+<div class="dashboard-columns">
+<section class="panel">
+<div class="section-header">
+<h2>Recent scan activity</h2>
+<a href="/dashboard/queues/active-scans">Active scans</a>
+</div>{% if summary.recent_scan_jobs %}<div class="table-scroll">
+<table>
+<thead>
+<tr>
+<th>Job</th>
+<th>Scanner</th>
+<th>Target</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>{% for job in summary.recent_scan_jobs[:10] %}<tr>
+<td>
+<a href="/dashboard/scan-jobs/{{ job.id }}">#{{ job.id }}</a>
+</td>
+<td>{{ job.scanner_name }}</td>
+<td>{{ job.target_type }} · {{ job.target_id }}</td>
+<td>
+<span class="state-chip" data-state="{{ job.status }}">{{ job.status }}</span>
+</td>
+</tr>{% endfor %}</tbody>
+</table>
+</div>{% else %}<p class="muted">No scan activity yet.</p>{% endif %}</section>
+<section class="panel">
+<h2>Top risky findings</h2>{% if summary.top_risky_findings %}<ol class="compact-list">{% for row in summary.top_risky_findings %}<li>
+<a href="/dashboard/findings/{{ row.id }}">{{ row.title }}</a>
+<span class="risk-mini">{{ row.risk_score }} risk</span>
+<small>{{ row.source_tool }}</small>
+</li>{% endfor %}</ol>{% else %}<p class="muted">No ranked findings.</p>{% endif %}</section>
+</div>
+<div class="dashboard-columns">
+<section class="panel">
+<h2>Finding trends</h2>{% if trends %}<div class="table-scroll">
+<table>
+<thead>
+<tr>
+<th>Date</th>
+<th>Total</th>
+<th>Severity mix</th>
+</tr>
+</thead>
+<tbody>{% for row in trends %}<tr>
+<td>{{ row.date }}</td>
+<td>{{ row.total }}</td>
+<td>{% for severity, count in row.by_severity.items() %}<span class="severity-chip" data-severity="{{ severity }}">{{ severity }} {{ count }}</span> {% endfor %}</td>
+</tr>{% endfor %}</tbody>
+</table>
+</div>{% else %}<p class="muted">No recent findings.</p>{% endif %}</section>
+<section class="panel">
+<h2>Top risky assets</h2>{% if summary.top_risky_assets %}<ul class="compact-list">{% for row in summary.top_risky_assets %}<li>
+<strong>{{ row.repository }}</strong>
+<span>{{ row.findings }} findings</span>
+</li>{% endfor %}</ul>{% else %}<p class="muted">No ranked assets.</p>{% endif %}</section>
+</div>
+<section class="panel">
+<div class="section-header">
+<div>
+<h2>Relationship graph edges</h2>
+<p class="muted">{{ graph.nodes|length if graph else 0 }} nodes · {{ graph.edges|length if graph else 0 }} edges</p>
+</div>
+<a href="/dashboard/graph">Open graph view</a>
+</div>{% if graph and graph.edges %}<div class="table-scroll">
+<table>
+<thead>
+<tr>
+<th>From</th>
+<th>Relation</th>
+<th>To</th>
+<th>Confidence</th>
+</tr>
+</thead>
+<tbody>{% for edge in graph.edges %}<tr>
+<td>{{ edge['from'] }}</td>
+<td>{{ edge.relation_type }}</td>
+<td>{{ edge['to'] }}</td>
+<td>{{ edge.confidence }}</td>
+</tr>{% endfor %}</tbody>
+</table>
+</div>{% else %}<p class="muted">No relationships recorded.</p>{% endif %}</section>
+<details class="panel">
+<summary>Artifact upload analysis</summary>
+<p class="muted">Upload a file or supported archive for immediate secret-pattern analysis.</p>
+<form method="post" action="/dashboard/artifact-scans" enctype="multipart/form-data" class="filter-grid">{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<label>Artifact file<input type="file" name="artifact" required>
+</label>
+<label>Scanner<select name="scanner">{% for scanner in scanner_options %}<option value="{{ scanner.name }}" {% if scanner.selected %}selected{% endif %} {% if not scanner.available %}disabled{% endif %}>{{ scanner.name }}{% if not scanner.available %} (not ready){% endif %}</option>{% endfor %}</select>
+</label>
+<label>Organization<input name="organization" placeholder="example-org">
+</label>
+<label>Repository<input name="repository" placeholder="example-org/app">
+</label>
+<label>Provider<input name="provider" value="github">
+</label>
+<button type="submit">Upload and scan</button>
+</form>
+</details>
+<details class="panel">
+<summary>Inventory and tooling</summary>
+<div class="dashboard-columns">
+<div>
+<h3>Entity counts</h3>
+<ul class="compact-list">{% for key, value in summary.counts.items() %}<li>{{ key }} <strong>{{ value }}</strong>
+</li>{% endfor %}</ul>
+<h3>Organizations</h3>
+<ul>{% for item in summary.organizations %}<li>{{ item }}</li>{% else %}<li>None</li>{% endfor %}</ul>
+<h3>Domain exposures</h3>
+<ul>{% for item in summary.domain_exposures %}<li>{{ item }}</li>{% else %}<li>None</li>{% endfor %}</ul>
+<h3>Identity correlations</h3>
+<ul>{% for item in summary.identity_correlations %}<li>{{ item.username|default('unknown', true) }} / {{ item.email|default('unknown', true) }} ({{ item.relation_type }})</li>{% else %}<li>None</li>{% endfor %}</ul>
+</div>
+<div>
+<h3>Severity breakdown</h3>
+<ul class="compact-list">{% for key, value in summary.severity_breakdown.items() %}<li>{{ key }} <strong>{{ value }}</strong>
+</li>{% endfor %}</ul>
+<h3>Category breakdown</h3>
+<ul class="compact-list">{% for key, value in summary.category_breakdown.items() %}<li>{{ key }} <strong>{{ value }}</strong>
+</li>{% endfor %}</ul>
+<h3>Workflow status</h3>
+<ul class="compact-list">{% for key, value in summary.workflow_breakdown.items() %}<li>{{ key }} <strong>{{ value }}</strong>
+</li>{% endfor %}</ul>
+<h3>Source tools</h3>
+<ul class="compact-list">{% for key, value in summary.source_tool_breakdown.items() %}<li>{{ key }} <strong>{{ value }}</strong>
+</li>{% endfor %}</ul>
+</div>
+</div>
+<h3>Open-source tooling readiness</h3>{% if tooling and tooling.optional_tools %}<div class="table-scroll">
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Category</th>
+<th>Status</th>
+<th>Configured command</th>
+<th>Configuration</th>
+<th>Install guidance</th>
+</tr>
+</thead>
+<tbody>{% for item in tooling.optional_tools %}<tr>
+<td>{{ item.name }}</td>
+<td>{{ item.category }}</td>
+<td>{{ 'installed' if item.installed else 'missing' }}</td>
+<td>{{ item.configured_command|default('',true) }}</td>
+<td>{{ item.env_var|default('PATH',true) }}</td>
+<td>{{ item.install_note|default('',true) }}</td>
+</tr>{% endfor %}</tbody>
+</table>
+</div>{% else %}<p class="muted">No tooling data available.</p>{% endif %}<p>
+<a href="/scanners">Scanners JSON</a> · <a href="/relationships/graph">Graph JSON</a> · <a href="/trends/findings?days={{ filters.days|default(30) }}">Trend JSON</a>
+</p>
+</details>
+{% endblock %}

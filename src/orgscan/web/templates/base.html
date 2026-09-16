@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>{% block title %}{{ title }}{% endblock %} · orgscan</title>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/queues.css">
+  <link rel="stylesheet" href="/static/css/detail.css">
+  <link rel="stylesheet" href="/static/css/console.css">
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+  <div class="app-shell">
+    <header class="app-header">
+      <a class="brand" href="/dashboard" aria-label="orgscan dashboard">
+        <span class="brand-mark">O</span>
+        <span>orgscan<small>EXPOSURE CONSOLE</small></span>
+      </a>
+      <nav class="main-nav" aria-label="Primary">
+        <a href="/dashboard" {% if active_section == 'dashboard' %}aria-current="page"{% endif %}>Overview</a>
+        <a href="/dashboard/assessments" {% if active_section == 'assessments' %}aria-current="page"{% endif %}>Assessments</a>
+        <a href="/dashboard?high_signal_only=true" {% if active_section == 'findings' %}aria-current="page"{% endif %}>Findings</a>
+        <a href="/dashboard/graph">Relationships</a>
+        <a href="/dashboard/queues/active-scans" {% if active_section == 'queues' %}aria-current="page"{% endif %}>Scan jobs</a>
+      </nav>
+      {% if auth %}
+      <div class="identity">
+        <span>{{ auth.name }}</span>
+        {% if auth.allows_role('admin') and '*' in auth.tenants %}<a href="/dashboard/users">Users</a>{% endif %}
+        <form method="post" action="/logout">
+          {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+          <button class="quiet-button">Sign out</button>
+        </form>
+      </div>
+      {% endif %}
+    </header>
+    <main id="content" class="app-content">{% block content %}{% endblock %}</main>
+  </div>
+  <script src="/static/js/app.js" defer></script>
+</body>
+</html>

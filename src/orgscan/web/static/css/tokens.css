@@ -1,0 +1,36 @@
+:root{
+  color-scheme:light;
+  --bg:#f3f5f6;
+  --surface:#fff;
+  --surface-muted:#f8faf9;
+  --ink:#172328;
+  --muted:#52636b;
+  --line:#d5dee0;
+  --accent:#145b66;
+  --accent-ink:#fff;
+  --critical:#9d2730;
+  --high:#a45118;
+  --medium:#765a0b;
+  --low:#306b72;
+  --focus:#146fb2;
+  --shadow:0 3px 14px rgba(16,40,49,.06)
+}
+@media(prefers-color-scheme:dark){
+  :root{
+    color-scheme:dark;
+    --bg:#10191d;
+    --surface:#19252a;
+    --surface-muted:#203036;
+    --ink:#edf3f4;
+    --muted:#a9bbc0;
+    --line:#385057;
+    --accent:#70c8d1;
+    --accent-ink:#112124;
+    --critical:#ff9299;
+    --high:#f5ad74;
+    --medium:#e6cc73;
+    --low:#8fd5da;
+    --focus:#a2d8ff;
+    --shadow:none
+  }
+}

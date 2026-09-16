@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Form, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from orgscan.api.schemas import (
     DashboardFindingWorkflowRequest,
@@ -122,7 +122,8 @@ def create_finding_router(service: OrgscanApiService) -> APIRouter:
         confidence: str | None = Form(None),
         high_signal_only: bool = Form(False),
         min_confidence: str = Form("likely"),
-    ) -> HTMLResponse:
+        return_to_detail: bool = Form(False),
+    ) -> Response:
         try:
             result = service._dashboard_finding_workflow(
                 finding_id,
@@ -135,6 +136,8 @@ def create_finding_router(service: OrgscanApiService) -> APIRouter:
             )
             if result is None:
                 raise HTTPException(status_code=404, detail="Finding not found")
+            if return_to_detail:
+                return RedirectResponse(f"/dashboard/findings/{finding_id}", status_code=303)
             return HTMLResponse(
                 service._dashboard_html(
                     limit=limit,

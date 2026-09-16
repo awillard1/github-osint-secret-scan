@@ -1,0 +1,72 @@
+.operator-overview{
+  padding:1.25rem;
+  margin-bottom:1.5rem
+}
+.operator-overview .section-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:1rem
+}
+.queue-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(275px,1fr));
+  gap:.75rem
+}
+.queue-card{
+  margin:0;
+  padding:.9rem;
+  border:1px solid var(--line);
+  border-left:4px solid var(--accent);
+  border-radius:.5rem;
+  background:var(--surface-muted);
+  box-shadow:none
+}
+.queue-card[data-queue=regressions],.queue-card[data-queue=high-risk],.queue-card[data-queue=failed-scans]{
+  border-left-color:var(--critical)
+}
+.queue-card-heading{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:.5rem
+}
+.queue-card-heading h3{
+  font-size:.95rem;
+  margin:0
+}
+.queue-card-heading h3 a{
+  text-decoration:none;
+  color:var(--ink)
+}
+.queue-card-heading strong{
+  font-size:1.45rem;
+  font-variant-numeric:tabular-nums
+}
+.queue-preview{
+  list-style:none;
+  padding:0;
+  margin:.55rem 0 0
+}
+.queue-preview li{
+  padding:.35rem 0;
+  border-top:1px solid var(--line);
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:.35rem;
+  font-size:.8rem
+}
+.queue-preview li a{
+  flex:1 1 170px
+}
+.risk-mini{
+  font-weight:700;
+  color:var(--critical)
+}
+@media(max-width:650px){
+  .operator-overview .section-header{
+    align-items:start;
+    flex-direction:column
+  }
+}

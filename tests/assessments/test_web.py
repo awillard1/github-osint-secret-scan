@@ -37,6 +37,14 @@ def test_workbench_empty_and_invalid_filters(service):
     with pytest.raises(ValueError):work.assets(a['id'],limit=-1)
 
 
+def test_assessment_index_escapes_names(service, client):
+    service.create('a', '<img src=x onerror=alert(1)>')
+    response = client.get('/dashboard/assessments')
+    assert response.status_code == 200
+    assert '&lt;img src=x onerror=alert(1)&gt;' in response.text
+    assert '<img src=x onerror=alert(1)>' not in response.text
+
+
 def test_selection_filters_and_scanplan(service,client):
     from types import SimpleNamespace
     from orgscan import models as m

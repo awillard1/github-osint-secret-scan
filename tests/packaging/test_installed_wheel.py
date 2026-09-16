@@ -15,6 +15,8 @@ def test_wheel_contains_migrations_and_runs_local_smoke(tmp_path):
         assert 'orgscan/_migrations/versions/20260911_0007_finding_lifecycle.py' in archive.namelist()
         assert 'orgscan/alembic.ini' in archive.namelist()
         assert 'orgscan/scanners/rules/starter.json' in archive.namelist()
+        assert 'orgscan/web/templates/pages/dashboard.html' in archive.namelist()
+        assert 'orgscan/web/static/css/app.css' in archive.namelist()
         assert not any('__pycache__' in name for name in archive.namelist())
     installed = tmp_path/'installed'
     subprocess.run([sys.executable,'-m','pip','install','--no-index','--no-deps','--no-compile','--target',str(installed),str(wheel)],check=True,capture_output=True,text=True,timeout=60)
@@ -31,6 +33,7 @@ from orgscan.config import Settings
 from orgscan.db import current_db_revision
 from orgscan.scanners.heuristic_rules import DEFAULT_RULES, load_rules
 from orgscan.services import doctor_service
+from orgscan.web.render import render
 assert load_rules(DEFAULT_RULES)
 doctor_service.scanner_inventory = lambda settings: []
 doctor_service.provider_readiness = lambda settings: []
@@ -53,6 +56,7 @@ run(['export','report.sarif','--format','sarif'])
 assert json.loads(Path('report.sarif').read_text())['version'] == '2.1.0'
 assert json.loads(run(['doctor','--json']))['ok']
 assert '/findings' in create_app(Settings().database_url).openapi()['paths']
+assert 'No assessments yet' in render('pages/assessment_home.html',title='Assessments',payload={'items':[],'total':0},tenant='default',offset=0)
 print('installed wheel smoke passed')
 '''
     env = {key:value for key,value in os.environ.items() if not key.startswith('ORGSCAN_')}

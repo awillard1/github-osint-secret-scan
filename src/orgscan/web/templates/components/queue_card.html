@@ -1,0 +1,11 @@
+<section class="queue-card" data-queue="{{ name }}">
+<div class="queue-card-heading">
+<h3>
+<a href="/dashboard/queues/{{ name }}?days={{ days }}">{{ queue.label }}</a>
+</h3>
+<strong>{{ queue.count }}</strong>
+</div>
+{% if queue['items'] %}<ul class="queue-preview">{% for item in queue['items'] %}<li>
+<a href="{{ item.href }}">{{ item.label }}</a>
+<span class="state-chip" data-state="{{ item.state }}">{{ item.state }}</span>{% if item.risk_score is defined %}<span class="risk-mini">Risk {{ item.risk_score }}</span>{% endif %}</li>{% endfor %}</ul>{% else %}<p class="muted">No items in this queue.</p>{% endif %}
+</section>

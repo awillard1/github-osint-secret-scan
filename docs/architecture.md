@@ -37,7 +37,7 @@ Responsibilities:
 
 Not responsible for core workflow decisions.
 
-The live [operator dashboard](operator-dashboard.md) consumes `DashboardService` queues over authorized storage; templates do not classify risk or lifecycle states.
+The live [operator dashboard](operator-dashboard.md) consumes `DashboardService` queues over authorized storage; templates do not classify risk or lifecycle states. The browser layer now has `web/render.py`, autoescaped Jinja templates and shared static design tokens. The live dashboard, queue, assessment-index and finding-detail pages use those templates; legacy pages migrate incrementally. FastAPI mounts packaged static assets at `/static`. Browser POST actions continue through the existing auth, CSRF and service boundaries; exported report HTML does not depend on browser assets.
 
 ### 2. Application services
 

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading">
+<div>
+<p class="eyebrow">Investigation workspace</p>
+<h1>Assessments</h1>
+<p class="muted">Track authorized targets, discovery, scans, findings and reports together.</p>
+</div>
+<a class="button" href="/dashboard/assessments/new?tenant={{ tenant|urlencode }}">New assessment</a>
+</div>
+<section class="panel" aria-label="Assessment inventory">
+{% if payload['items'] %}<table>
+<thead>
+<tr>
+<th>Assessment</th>
+<th>Status</th>
+<th>Targets</th>
+<th>Assets</th>
+<th>Jobs</th>
+<th>Needs attention</th>
+<th>Last activity</th>
+</tr>
+</thead>
+<tbody>
+{% for item in payload['items'] %}<tr>
+<td>
+<a class="signal-title" href="/dashboard/assessments/{{ item.id }}/overview">{{ item.name }}</a>
+<br>
+<small class="muted">{{ item.created_by }} · #{{ item.id }}</small>
+</td>
+<td>
+<span class="state-chip" data-state="{{ item.status }}">{{ item.status }}</span>
+</td>
+<td>{{ item.counts.targets }}</td>
+<td>{{ item.counts.assets }}</td>
+<td>{{ item.counts.jobs }}</td>
+<td>{{ item.job_states.failed if item.job_states else 0 }}</td>
+<td>{{ item.updated_at }}</td>
+</tr>{% endfor %}
+</tbody>
+</table>{% else %}<div class="empty-state">
+<strong>No assessments yet</strong>
+<p>Create an assessment to organize targets and evidence.</p>
+<a class="button" href="/dashboard/assessments/new?tenant={{ tenant|urlencode }}">Create assessment</a>
+</div>{% endif %}
+</section>
+<nav class="pagination" aria-label="Assessment pages">{% if offset %}<a href="?tenant={{ tenant|urlencode }}&amp;offset={{ [0, offset - 50]|max }}">Previous</a>{% endif %}<span>{{ offset + 1 if payload.total else 0 }}–{{ [offset + 50, payload.total]|min }} of {{ payload.total }}</span>{% if offset + 50 < payload.total %}<a href="?tenant={{ tenant|urlencode }}&amp;offset={{ offset + 50 }}">Next</a>{% endif %}</nav>
+{% endblock %}

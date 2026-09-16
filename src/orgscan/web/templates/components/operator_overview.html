@@ -1,0 +1,11 @@
+<section aria-label="Operator overview" class="operator-overview">
+<div class="section-header">
+<div>
+<p class="eyebrow">Prioritize</p>
+<h2>Operator overview</h2>
+<p class="muted">New observations cover the past {{ payload.days }} days. Other queues show current state.</p>
+</div>
+<a href="/dashboard/assessments/new" class="button">New assessment</a>
+</div>
+<div class="queue-grid">{% for name, queue in payload.queues.items() %}{% if not selected or selected == name %}{% include 'components/queue_card.html' %}{% endif %}{% endfor %}</div>
+</section>

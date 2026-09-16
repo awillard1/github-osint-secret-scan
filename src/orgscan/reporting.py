@@ -276,6 +276,28 @@ def render_dashboard_html(
     access_context_note: str | None = None,
     tooling: dict[str, Any] | None = None,
 ) -> str:
+    if live:
+        from orgscan.web.render import render
+
+        return render(
+            "pages/dashboard.html",
+            title="Dashboard",
+            active_section="dashboard",
+            summary=summary,
+            findings=findings,
+            trends=trends or [],
+            graph=graph or {},
+            filters=filters or {},
+            operations=operations,
+            artifact_scan_result=artifact_scan_result,
+            artifact_scan_error=artifact_scan_error,
+            finding_action_result=finding_action_result,
+            finding_action_error=finding_action_error,
+            scanner_options=scanner_options or [{"name": "custom-patterns", "available": True, "selected": True}],
+            access_context_note=access_context_note,
+            tooling=tooling or {},
+        )
+
     def items(mapping: dict[str, Any]) -> str:
         return "".join(f"<li><strong>{html.escape(str(key))}</strong>: {html.escape(str(value))}</li>" for key, value in mapping.items())
 
@@ -541,6 +563,7 @@ def render_dashboard_html(
   <head>
     <meta charset=\"utf-8\">
     <title>orgscan dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
       body {{ font-family: Inter, system-ui, sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }}
       main {{ max-width: 1400px; margin: 0 auto; padding: 2rem; }}
@@ -574,6 +597,7 @@ def render_dashboard_html(
       @media (max-width: 1024px) {{ .hero, .grid, .filters, .upload-form {{ grid-template-columns: 1fr 1fr; }} }}
       @media (max-width: 640px) {{ main {{ padding: 1rem; }} .hero, .grid, .filters, .upload-form {{ grid-template-columns: 1fr; }} .section-header {{ flex-direction: column; align-items: flex-start; }} }}
     </style>
+    {('<link rel="stylesheet" href="/static/css/tokens.css"><link rel="stylesheet" href="/static/css/app.css"><link rel="stylesheet" href="/static/css/queues.css"><link rel="stylesheet" href="/static/css/dashboard.css">') if live else ''}
   </head>
   <body>
     <main>
@@ -743,6 +767,7 @@ def _render_html_page(title: str, body: str) -> str:
   <head>
     <meta charset="utf-8">
     <title>{html.escape(title)}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
       body {{ font-family: Inter, system-ui, sans-serif; margin: 0; background: #f8fafc; color: #0f172a; }}
       main {{ max-width: 1200px; margin: 0 auto; padding: 2rem; }}
@@ -758,6 +783,10 @@ def _render_html_page(title: str, body: str) -> str:
       .pill {{ display: inline-block; padding: 0.2rem 0.55rem; border-radius: 999px; background: #eff6ff; border: 1px solid #bfdbfe; margin: 0 0.35rem 0.35rem 0; }}
       @media (max-width: 800px) {{ main {{ padding: 1rem; }} .grid, .hero {{ grid-template-columns: 1fr; }} }}
     </style>
+    <link rel="stylesheet" href="/static/css/tokens.css">
+    <link rel="stylesheet" href="/static/css/app.css">
+    <link rel="stylesheet" href="/static/css/queues.css">
+    <link rel="stylesheet" href="/static/css/dashboard.css">
   </head>
   <body>
     <main>{body}</main>
@@ -767,80 +796,20 @@ def _render_html_page(title: str, body: str) -> str:
 
 @safe_presentation
 def render_finding_detail_html(payload: dict[str, Any]) -> str:
+    from orgscan.web.render import render
+
     finding = payload["finding"]
-    evidence_rows = "".join(
-        "<tr>"
-        f"<td>{html.escape(str(item.get('source') or ''))}</td>"
-        f"<td>{html.escape(str(item.get('repository_path') or ''))}</td>"
-        f"<td>{html.escape(str(item.get('line_start') or ''))}</td>"
-        f"<td><pre>{html.escape(str(item.get('snippet') or ''))}</pre></td>"
-        "</tr>"
-        for item in payload.get("evidence", [])
-    ) or "<tr><td colspan='4'>No evidence available</td></tr>"
-    risk_rows = "".join(
-        "<tr>"
-        f"<td>{html.escape(str(item.get('entity_type') or ''))}</td>"
-        f"<td>{html.escape(str(item.get('entity_id') or ''))}</td>"
-        f"<td>{html.escape(str(item.get('score') or ''))}</td>"
-        f"<td>{html.escape(str(item.get('rationale') or ''))}</td>"
-        "</tr>"
-        for item in payload.get("risk_scores", [])
-    ) or "<tr><td colspan='4'>No risk score records available</td></tr>"
-    metadata = json.dumps(finding.get("metadata") or {}, indent=2, sort_keys=True)
-    raw_payload = json.dumps(finding.get("raw_payload") or {}, indent=2, sort_keys=True)
-    body = f"""
-    <p><a href="/dashboard">← Back to dashboard</a></p>
-    <section>
-      <h1>Finding #{html.escape(str(finding['id']))}</h1>
-      <p class="subtle">{html.escape(str(finding['title']))}</p>
-      <div class="hero">
-        <section><h3>Severity</h3><p>{html.escape(str(finding['severity']))}</p></section>
-        <section><h3>Confidence</h3><p>{html.escape(str(finding['confidence']))}</p></section>
-        <section><h3>Risk score</h3><p>{html.escape(str(finding.get('risk_score') or 0))}</p></section>
-      </div>
-    </section>
-    <div class="grid">
-      <section>
-        <h2>Workflow</h2>
-        <p>Lifecycle: {html.escape(str(finding.get("lifecycle_state", "NEW")))}</p>
-        <pre>{html.escape(json.dumps({key: finding.get(key) for key in ("first_seen_at", "last_seen_at", "remediated_at", "regressed_at")}, indent=2))}</pre>
-        <h3>Transition history</h3><pre>{html.escape(json.dumps(payload.get("history", []), indent=2))}</pre>
-        <ul>
-          <li>Status: {html.escape(str(finding['status']))}</li>
-          <li>Triage: {html.escape(str(finding['triage_state']))}</li>
-          <li>Owner: {html.escape(str(finding.get('triage_owner') or 'unassigned'))}</li>
-          <li>Detected: {html.escape(str(finding['detected_at']))}</li>
-        </ul>
-      </section>
-      <section>
-        <h2>Context</h2>
-        <ul>
-          <li>Category: {html.escape(str(finding['category']))}</li>
-          <li>Source tool: {html.escape(str(finding['source_tool']))}</li>
-          <li>Repository ID: {html.escape(str(finding.get('repository_id') or ''))}</li>
-          <li>Scan job ID: {html.escape(str(finding.get('scan_job_id') or ''))}</li>
-        </ul>
-      </section>
-    </div>
-    <section>
-      <h2>Description</h2>
-      <p>{html.escape(str(finding['description']))}</p>
-      <p><strong>Remediation:</strong> {html.escape(str(finding.get('remediation_hint') or 'No remediation hint recorded.'))}</p>
-    </section>
-    <section>
-      <h2>Evidence</h2>
-      <table><thead><tr><th>Source</th><th>Path</th><th>Line</th><th>Snippet</th></tr></thead><tbody>{evidence_rows}</tbody></table>
-    </section>
-    <section>
-      <h2>Risk scores</h2>
-      <table><thead><tr><th>Entity type</th><th>Entity ID</th><th>Score</th><th>Rationale</th></tr></thead><tbody>{risk_rows}</tbody></table>
-    </section>
-    <div class="grid">
-      <section><h2>Metadata</h2><pre>{html.escape(metadata)}</pre></section>
-      <section><h2>Raw payload</h2><pre>{html.escape(raw_payload)}</pre></section>
-    </div>
-    """
-    return _render_html_page(f"Finding {finding['id']}", body)
+    return render(
+        "pages/finding_detail.html",
+        title=f"Finding {finding['id']}",
+        active_section="findings",
+        finding=finding,
+        evidence=payload.get("evidence", []),
+        history=payload.get("history", []),
+        risk_scores=payload.get("risk_scores", []),
+        metadata=json.dumps(finding.get("metadata") or {}, indent=2, sort_keys=True),
+        raw_payload=json.dumps(finding.get("raw_payload") or {}, indent=2, sort_keys=True),
+    )
 
 
 @safe_presentation
