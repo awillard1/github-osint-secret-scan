@@ -99,6 +99,11 @@ def create_assessment_router(settings):
         auth=current_auth.get() or LOCAL_CONTEXT
         return recon_ui.tools(call(recon_tools.inventory),ToolInstaller(settings).status(),auth.allows_role('admin') and '*' in auth.tenants)
 
+    @router.post('/dashboard/settings/recon-tools/nuclei/templates')
+    def template_configuration(locations:str=Form('')):
+        call(recon_tools.configure_templates,[p.strip() for p in locations.splitlines() if p.strip()])
+        return RedirectResponse('/dashboard/settings/recon-tools',303)
+
     @router.get('/recon-tools/installation')
     def installation_status():return ToolInstaller(settings).status()
 
@@ -412,6 +417,10 @@ def create_assessment_router(settings):
         if kind=='discovery' and data.get('action')=='save_profile':
             call(service.save_profile,call(service.detail,identity)['tenant_key'],str(data.get('profile_name','')).strip(),options)
             return RedirectResponse(f'/dashboard/assessments/{identity}/discovery',303)
+        if kind=='discovery' and data.get('action')!='confirmed':
+            review=call(jobs.discovery_review,identity,options=options)
+            if review['active_tools']:
+                return HTMLResponse(ui.discovery_review(call(service.detail,identity),review))
         if kind=='scan' and data.get('action')!='confirmed':
             return HTMLResponse(ui.scan_review(call(service.detail,identity),call(jobs.preview,identity,options=options)))
         call(jobs.launch,identity,kind,options=options)

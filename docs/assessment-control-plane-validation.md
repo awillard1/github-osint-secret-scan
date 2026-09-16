@@ -1,5 +1,27 @@
 # Assessment control plane validation — 2026-09-15 continuation
 
+## Autonomous continuation classification (2026-09-16)
+
+This review preserves the historical acceptance results below. Initial backlog:
+
+| Remaining item | Classification | Disposition |
+|---|---|---|
+| Existing assessment creation, bulk targets, connections, scope, scans, progress, findings, Reveal, triage, reports, AI adapters | COMPLETE | Retain existing acceptance/security coverage |
+| Nuclei local template Settings editor and binary/template readiness | PARTIAL | Implement shared persisted configuration and browser controls |
+| Active launch review and upstream execution provenance | PARTIAL | Implement explicit review and bounded causal input records |
+| Domain observation detail and HTTP/DNS presentation | PARTIAL | Enrich canonical results using existing safe projection |
+| Hundreds of mixed targets and 1,000-observation performance acceptance | PARTIAL | Extend deterministic integration coverage |
+| Combined GitHub mock, real loopback, Reveal/report/AI acceptance | PARTIAL | Extend acceptance evidence without external targets |
+| Live GHES instances, authorized external Amass/Subfinder discovery, Windows Ollama endpoint | OPERATOR CONFIGURATION | No network/firewall changes or external recon |
+| Optional scanner binaries, local Nuclei templates, workers, credentials and resource budgets | OPERATOR CONFIGURATION | Accurate readiness; no automatic installation |
+| Distributed PostgreSQL/Redis deployment certification | OPERATOR CONFIGURATION | Requires deployment environment |
+| Cross-tenant duplicate globally unique domains | BLOCKED | Requires separately reviewed ownership/schema migration; retain fail-closed boundary |
+| Uncover, tlsx, asnmap; Amass newer than v3 | BLOCKED | Unsupported by current compatibility policy; do not advertise support |
+| Standalone IP registration targets, distributed installer jobs, interactive graph | COMPLETE | Existing bounded domain-RDAP, local installer and table graph contracts; outside accepted product scope |
+
+No new tool adapter is NOT STARTED within the supported inventory. Historical
+limits are retained rather than represented as new product regressions.
+
 ## Outcome
 
 The disposable browser operator acceptance workflow passes. The continuation keeps
@@ -189,3 +211,48 @@ scoped provider stages, canonical recon assets and migration 0015. Its validatio
 and remaining compatibility limits are recorded separately in
 [Recon toolchain validation](recon-toolchain-validation.md); the earlier migration
 and CLI statements above describe the preceding assessment release.
+
+## Completion-run acceptance (2026-09-16)
+
+The initial PARTIAL items above are now implemented and covered by tests:
+
+| Area | Final classification | Evidence / boundary |
+|---|---|---|
+| Operator workflow | COMPLETE | Authenticated browser handlers: assessment, mixed targets, discovery, scope, scan review/launch, progress, finding detail, Reveal, triage, five reports and optional AI |
+| Nuclei configuration | COMPLETE | Platform-admin UI saves multiple approved local directories; atomic private configuration shared by workers/doctor; binary/template readiness separate; no downloads |
+| Active recon | COMPLETE | Explicit review and confirmation, operator/time snapshot, scoped inputs, resolved-host dependency for HTTPX/Naabu; installed does not mean enabled |
+| Correlation / provenance UI | COMPLETE | Per-provider domain attributes, address/status/technology/confidence/timestamps, expandable observations; stage input entity IDs, digest and upstream providers |
+| Multi-target / multi-GHES | COMPLETE | 400 unique mixed locations, duplicate imports, GitHub.com + GHES A + GHES B; bounded pages |
+| Correlation performance | COMPLETE | 100 targets, 1,000 observations, ten providers, exactly 100 canonical domains; fewer than 1,000 SELECTs; bounded transaction-local identity reuse |
+| Combined local acceptance | COMPLETE | Three mocked GitHub instances + real DNSX/HTTPX/Katana/Nuclei on loopback + real local scanner + exact encrypted Reveal + JSON/HTML/CSV/PDF/SARIF + sanitized mocked Ollama |
+| Live recon contracts | COMPLETE | Local DNSX, HTTPX, Katana, Naabu, Nuclei; deterministic Subfinder contract; Amass passive command/parser/correlation mocked |
+| External deployments and authorized external enumeration | OPERATOR CONFIGURATION | Live GHES, external Subfinder/Amass, optional binaries, Windows-host Ollama endpoint, shared worker paths and deployment resources |
+| Legacy foreign-tenant duplicate domains | BLOCKED | Existing global uniqueness still fails closed; separate ownership migration required |
+| Unsupported tool/platform extensions | BLOCKED | tlsx/asnmap/Uncover and newer Amass remain explicitly unsupported |
+
+**Partial workflows:** none identified within the supported operator workflow. This
+is local/mocked acceptance, not certification of external services or all deployment
+platforms. GitHub transport is mocked in the combined live workflow; recon binaries
+and local repository scanning are real. Reports and AI are checked independently
+for absence of the synthetic protected credential. No configured database was
+migrated, no optional tools installed, and no external reconnaissance performed.
+
+Validation results:
+
+- Focused assessment/recon/projection run: **126 passed** (before the final two
+  path/Amass regressions); final new-feature suite: **10 passed**.
+- Complete live suite: **8 passed, 5 skipped**, 103.74 seconds. Skips: optional
+  live Ollama and four unavailable scanner executables.
+- Full regression suite: **899 passed, 14 skipped**, two existing dependency deprecation warnings, 703.10 seconds. Established security and migration
+  suites are included; projection safety also passed in the focused run.
+- Doctor: **required checks passed, 21 warnings**. Nuclei reports **Binary Ready;
+  Templates Missing or invalid** on the unchanged workstation configuration.
+- Build: passed. Final clean runtime-only install: passed (runtime dependencies, migrations, CLI/API, scanning, reports and encrypted Reveal).
+- Compile and whitespace checks: passed. Migration head remains
+  **20260915_0015**; no schema change or configured-data migration.
+
+Remaining product boundary: legacy cross-tenant duplicate-domain ownership.
+Optional tool availability, Nuclei template choice, live GHES and Windows/WSL
+Ollama reachability require operator configuration; they do not prevent the
+independently tested workflow. A fresh loopback-only `/api/tags` check remained unreachable. No Windows
+networking/firewall changes were made.

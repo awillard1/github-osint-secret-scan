@@ -51,6 +51,22 @@ class ObservationStore:
         self.control=AssessmentStorage(self.session)
         self.session.info['secret_settings']=settings
 
+    def ingest_many(self, observations):
+        """Reuse validated identities only within one bounded synchronous batch.
+
+        Candidate extraction and sanitization still run for every observation.
+        Caches never survive the batch, commit, retry or ownership changes.
+        """
+        if len(observations)>self.settings.recon_max_domains+self.settings.recon_max_urls+self.settings.recon_max_hosts:
+            raise ValueError('LIMIT REACHED: observation batch')
+        self._domains={}
+        self.control._entity_cache={};self.control._link_cache={}
+        try:
+            return [self.ingest(observation) for observation in observations]
+        finally:
+            self._domains=None
+            self.control._entity_cache=None;self.control._link_cache=None
+
     def ingest(self, observation):
         from orgscan.services.secret_evidence import SecretCandidateContext
         if observation.kind=='domain':
@@ -66,9 +82,12 @@ class ObservationStore:
         if not name:return None
         if len(name)>2048:raise ValueError('LIMIT REACHED: entity name')
         if observation.kind=='domain':
-            row=self.storage.get_domain_by_name(name)
+            cache=getattr(self,'_domains',None)
+            row=cache.get(name) if cache is not None else None
+            if row is None:row=self.storage.get_domain_by_name(name)
             if row:self.control.entity(self.assessment,'domain',row.id)
             else:row,_=self.storage.get_or_create_domain(name,organization_id=self.assessment.organization_id)
+            if cache is not None:cache[name]=row
             kind='domain'
         else:
             digest=sha256(name.encode()).hexdigest()
@@ -79,7 +98,10 @@ class ObservationStore:
                 self.session.add(row);self.session.flush()
             kind='recon_asset'
         old=fields(row)
-        previous_link=self.session.scalar(select(m.AssessmentEntity).where(m.AssessmentEntity.assessment_id==self.assessment.id,m.AssessmentEntity.entity_type==kind,m.AssessmentEntity.entity_id==row.id))
+        links=self.control._link_cache
+        previous_link=links.get((self.assessment.id,kind,row.id)) if links is not None else None
+        if previous_link is None:
+            previous_link=self.session.scalar(select(m.AssessmentEntity).where(m.AssessmentEntity.assessment_id==self.assessment.id,m.AssessmentEntity.entity_type==kind,m.AssessmentEntity.entity_id==row.id))
         source={'value':name,'attributes':observation.attributes,'before':old,'previous_association':fields(previous_link) if previous_link else {}}
         with SecretCandidateContext.from_source(source,settings=self.settings):
             safe=CredentialContext([source]).sanitize(source)
@@ -97,7 +119,10 @@ class ObservationStore:
             link=self.control.link(self.assessment,kind,row.id,source=observation.provider,
                                    confidence=observation.confidence,reasons=['Provider observation; not ownership proof'])
             if kind=='domain' and safe['attributes']:
-                link.metadata_json={**link.metadata_json,**safe['attributes']}
+                metadata={**link.metadata_json,**safe['attributes']}
+                observations=dict(metadata.get('observations',{}))
+                observations[observation.provider]={**observations[observation.provider],'attributes':safe['attributes']}
+                link.metadata_json={**metadata,'observations':observations}
                 if len(json.dumps(link.metadata_json))>16000:raise ValueError('LIMIT REACHED: domain observation record')
             self.session.flush()
         return kind,row

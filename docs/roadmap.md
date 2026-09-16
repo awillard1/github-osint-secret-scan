@@ -407,3 +407,13 @@ empty-source/timeout contracts; Amass v3 installed and its passive CLI was verif
 No external reconnaissance or live Ollama/GHES certification is claimed. Readiness
 now checks required CLI flags; setup describes Minimal/Recon/Full requirements.
 See [the exact versions, evidence and limits](recon-toolchain-validation.md#live-workstation-certification--2026-09-16).
+
+## Recon operator completion (2026-09-16)
+
+Settings now edits multiple approved local Nuclei template directories. Active
+discovery has a separate review, queued authorization attribution and canonical
+input provenance. Comprehensive Passive preserves passive-only execution. Domain
+results expose provider observation details; repeated observations use bounded
+batch identity reuse. Scale coverage includes 400 mixed GitHub/GHES/domain targets
+and 1,000 observations correlated into 100 domains. Final certification evidence
+is maintained in the two assessment/recon validation documents.

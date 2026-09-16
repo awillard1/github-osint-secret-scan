@@ -22,6 +22,7 @@ PROFILES={
     'passive-organization':dict(repository_metadata=True,expand=True,members=True,providers=['local-metadata','crtsh','rdap','subfinder','wayback']),
     'standard-organization':dict(repository_metadata=True,expand=True,members=True,providers=['local-metadata','crtsh','rdap','subfinder','dnsx','httpx']),
     'comprehensive-organization':dict(repository_metadata=True,expand=True,members=True,contributor_repositories=True,public_search=True,providers=['local-metadata','crtsh','rdap','subfinder','dnsx','httpx']),
+    'comprehensive-passive':dict(repository_metadata=True,expand=True,members=True,contributor_repositories=True,public_search=True,providers=['local-metadata','crtsh','rdap','whois','subfinder','amass','wayback']),
     'custom':dict(expand=False,providers=[]),
     'active-extended':dict(expand=False,providers=['dnsx','httpx','katana','naabu','nuclei']),
 }
@@ -42,7 +43,7 @@ def profile_options(settings,configuration):
     active=[p for p in providers if registry.get(p).mode!=PASSIVE]
     if active and options.get('active_authorized') is not True:
         raise ValueError('Active recon requires explicit operator authorization')
-    if name in ('passive-only','passive-organization') and active:
+    if name in ('passive-only','passive-organization','comprehensive-passive') and active:
         raise ValueError('Passive profiles cannot contain active tools')
     missing=[p for p in providers if p not in inventory or inventory[p]['status']!='ok']
     if missing and options.get('run_available_only') is True:

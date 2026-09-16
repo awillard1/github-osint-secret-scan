@@ -30,6 +30,10 @@ def tools(rows,installation=None,can_install=False):
         configuration='<details><summary>Configure</summary><p>'+esc(row['guidance'] or 'Set administrator environment configuration, then refresh readiness.')+'</p>'
         for key in (*row['configuration_requirements'],*row['optional_api_keys']):configuration+='<p><code>ORGSCAN_'+esc(key.upper())+'</code></p>'
         if row['executables']:configuration+='<p><code>ORGSCAN_'+esc(identity.upper())+'_BINARY</code></p>'
+        if identity=='nuclei':
+            configuration+='<p>Binary: '+('Ready' if row.get('binary_ready') else 'Unavailable')+'</p><p>Templates: '+esc(row.get('templates_status','Not configured'))+'</p>'
+            if can_install:
+                configuration+=form(root+'/templates','<label>Template locations (one absolute directory per line)<textarea name="locations" rows="4">'+esc('\n'.join(row.get('template_locations',[])))+'</textarea></label><p>Only approved local GET/HEAD templates. Saving does not download or enable scanning. Leave empty to disable.</p>','Save template locations')
         configuration+='</details>'
         actions='<a href="'+esc(row['homepage'])+'" target="_blank" rel="noopener noreferrer">Docs</a>'
         if can_install and row['installable']:actions+=form(root+'/install','', 'Update' if row['installed'] else 'Install')
@@ -49,16 +53,21 @@ def results(assessment,payload,tab='overview',offset=0):
         body+='<p><a href="'+root+'/discovery">Configure providers and launch discovery →</a></p>'
     elif not payload['items']:body+='<div class="recon-notice">No observations yet. Select a discovery profile and run it against your saved targets.</div>'
     else:
-        columns={'domains':['Domain','Resolved?','HTTP?','Sources','First seen','Last seen'],'hosts':['Host / IP','DNS','Ports / HTTP','Sources','First seen','Last seen'],'services':['Service','Status / Port','Technology','Sources','First seen','Last seen'],'web':['URL','Status','Title / Technology','Sources','First seen','Last seen']}[tab]
+        columns={'domains':['Domain / Observations','Resolved? / Addresses','HTTP status / Technology','Sources','First seen','Last seen'],'hosts':['Host / IP','DNS','Ports / HTTP','Sources','First seen','Last seen'],'services':['Service','Status / Port','Technology','Sources','First seen','Last seen'],'web':['URL','Status','Title / Technology','Sources','First seen','Last seen']}[tab]
         body+='<div class="recon-panel"><table class="recon-table"><thead><tr>'+''.join('<th>'+c+'</th>' for c in columns)+'</tr></thead><tbody>'
         for row in payload['items']:
             entity=row['entity'];meta=entity.get('metadata_json') or {};link=row.get('metadata_json') or {}
             sources=link.get('sources',[row.get('source')])
             if tab=='domains':
                 dns=link.get('dns') or {}
-                meta={'status':'Yes' if dns.get('a') or dns.get('aaaa') else dns.get('rcode') or 'Not observed','title':str(link.get('http_status') or 'Not observed')}
+                addresses=[*dns.get('a',[]),*dns.get('aaaa',[])]
+                meta={'status':', '.join(addresses) if addresses else dns.get('rcode') or 'Not observed','title':str(link.get('http_status') or 'Not observed'),'tech':link.get('tech',[])}
             elif tab=='hosts':
                 meta={'status':meta.get('hostname') or 'Not observed','title':meta.get('port') or 'See Services'}
-            body+='<tr><td>'+esc(entity.get('name'))+'</td><td>'+esc(meta.get('status') or meta.get('port') or link.get('dns') or '—')+'</td><td>'+esc(meta.get('title',''))+' '+esc(', '.join(meta.get('tech',[])))+'</td><td>'+''.join(badge(s) for s in sources)+'</td><td>'+esc(link.get('first_seen'))+'</td><td>'+esc(link.get('last_seen'))+'</td></tr>'
+            detail=''
+            if tab=='domains':
+                import json
+                detail='<details><summary>Observations · '+esc(row.get('confidence','unverified'))+'</summary><pre>'+esc(json.dumps(link.get('observations',{}),indent=2))+'</pre></details>'
+            body+='<tr><td>'+esc(entity.get('name'))+detail+'</td><td>'+esc(meta.get('status') or meta.get('port') or link.get('dns') or '—')+'</td><td>'+esc(meta.get('title',''))+' '+esc(', '.join(meta.get('tech',[])))+'</td><td>'+''.join(badge(s) for s in sources)+'</td><td>'+esc(link.get('first_seen'))+'</td><td>'+esc(link.get('last_seen'))+'</td></tr>'
         body+='</tbody></table></div>'+paging(root+'/recon-results?tab='+tab,payload['total'],offset)
     return page('Discovery Results',body,assessment=assessment)

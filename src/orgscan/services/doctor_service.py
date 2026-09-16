@@ -153,7 +153,7 @@ def doctor(settings, *, require_queue=False):
     add('semgrep-runtime','warning','Semgrep requires explicit local rules; validate the configured rules against the installed version. Telemetry is off unless explicitly enabled')
     from orgscan.recon.registry import get_registry as recon_registry
     for row in recon_registry().inventory(settings):
-        add('recon:'+row['tool_id'],'ok' if row['ready'] else 'warning',row['status'],version=row['version'],mode=row['mode'])
+        add('recon:'+row['tool_id'],'ok' if row['ready'] else 'warning',('Binary Ready; Templates Missing or invalid' if row.get('binary_ready') and row.get('templates_status')!='Ready' and row['tool_id']=='nuclei' else row['status']),version=row['version'],mode=row['mode'])
     for row in provider_readiness(settings):
         add('provider:'+row['name'],row['status'],row['scope'],missing=row['missing'])
     return {'ok':not any(row['status']=='error' for row in checks), 'checks':checks,

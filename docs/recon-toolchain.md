@@ -21,11 +21,14 @@ execution. No startup or normal test installs recon binaries.
 In **Assessment → Discovery**, select a profile and individual providers. Missing
 selected tools prevent launch. **Run available tools only** is an explicit choice;
 unavailable selections remain recorded in the profile. Crawling and Nuclei require
-HTTPX in the selection. Active providers require the authorization checkbox, even
-when already installed. Passive profiles reject active selections.
+HTTPX in the selection. Active providers require the authorization checkbox and a separate launch review, even
+when already installed. The review shows target and previously observed HTTP-service
+counts; confirmation records the operator and authorization timestamp on queued jobs. Passive profiles reject active selections.
 
 - **Passive Organization**: GitHub metadata/relationships, repository metadata,
   stored references, crt.sh, RDAP, Subfinder and Wayback.
+- **Comprehensive Passive**: adds visible members, contributor repositories, public
+  search, WHOIS and Amass v3; unavailable selections still block unless explicitly omitted.
 - **Standard Organization**: adds DNSX and HTTPX, with active authorization.
 - **Comprehensive Organization**: adds GitHub member/contributor/search expansion;
   operators select Katana, Naabu and Nuclei explicitly.
@@ -104,8 +107,14 @@ Subfinder optionally reads an administrator-provided
 `ORGSCAN_SUBFINDER_PROVIDER_CONFIG`. Process environments do not inherit arbitrary
 application credentials, proxy variables or user tool configuration.
 
-Nuclei requires `ORGSCAN_NUCLEI_TEMPLATES_PATH`. The supported policy is an explicit
-local directory containing 1–100 YAML HTTP templates (at most 64 KiB each): GET/HEAD,
+In **Settings → Recon Tools → Nuclei → Configure**, a platform administrator can
+save up to 20 absolute local template directories (one per line). An empty list
+disables execution. Configuration is validated and atomically stored with private
+permissions in `<tools directory>/templates.json`, shared by API, workers and doctor.
+All processes must share that directory. It overrides the backward-compatible
+`ORGSCAN_NUCLEI_TEMPLATES_PATH` environment setting. No configured application database
+is changed. Readiness distinguishes **Binary Ready** from **Templates Missing**.
+The supported policy permits a combined 1–100 YAML HTTP templates (at most 64 KiB each): GET/HEAD,
 `{{BaseURL}}/…` paths, matchers/extractors and no raw requests, redirects, payloads,
 code, headless, workflow, OAST or other protocols. Validated templates are copied
 into the private working directory. Automatic template downloads and updates are
@@ -188,3 +197,17 @@ private/local environments. These are bounded structured options, not arbitrary
 CLI arguments. Nuclei receives a private resolver file. Empty defaults preserve
 ordinary upstream resolver/port/source behavior. The Active Extended profile
 selects DNSX/HTTPX/Katana/Naabu/Nuclei and still requires explicit active consent.
+
+## Continuation: provenance and bounded correlation
+
+Later active runs reuse only assessment-linked domains within the authorized root.
+When DNSX is selected, both HTTPX and Naabu wait for resolved hosts. Stages retain
+canonical input entity IDs, an input-set digest and completed upstream provider IDs.
+Domains show per-provider attributes, DNS addresses, HTTP status/technologies,
+confidence and timestamps in expandable observation details.
+
+Repeated domain observations use transaction-local identity/link caches during a
+bounded ingestion batch. Every observation still runs candidate extraction and
+sanitization; caches are cleared on success and failure and do not span jobs.
+The scale regression covers 100 targets and 1,000 observations from ten providers,
+with fewer than 1,000 SELECTs and 100 canonical domains. Result pages remain bounded.

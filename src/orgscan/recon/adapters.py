@@ -77,8 +77,8 @@ class Adapter:
             'gau':['--subs','--providers','wayback,commoncrawl',root],
         }
         if tool=='nuclei':
-            from orgscan.recon.templates import validated_templates
-            templates=validated_templates(self.settings.nuclei_templates_path,work/'templates')
+            from orgscan.recon.configuration import approved_templates
+            templates=approved_templates(self.settings,work/'templates')
             args=['-l',str(targets),'-jsonl','-silent','-duc','-ni','-dr','-type','http','-rl','10','-c','2','-omit-raw','-no-color']
             for template in templates:args.extend(['-t',str(template)])
             if self.settings.recon_resolvers:

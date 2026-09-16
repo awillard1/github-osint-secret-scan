@@ -89,10 +89,11 @@ Profiles: quick-organization, organization-comprehensive, github-only,
 domain-only, passive-only and custom. Registered provider readiness drives
 selection. Saved profiles can be listed/stored through `/recon-profiles` and
 launched with `options.saved_profile`. Unavailable providers/scanners fail
-validation. A comprehensive profile selects every ready registered external provider (excluding
-aggregate aliases and the separate connection-bound GitHub search action), members,
-contributor-owned public repositories and public search. Explicit provider choices
-override that set. Private scope still requires an explicit checkbox. Profiles can
+validation. Profiles have explicit registry-backed provider defaults; they never enable tools
+merely because a binary is installed. Comprehensive Passive includes members,
+contributor-owned public repositories and public search. Active selections require
+explicit authorization and browser review before launch. Explicit provider choices
+override profile defaults. See [Recon toolchain](recon-toolchain.md) for current profiles. Private scope still requires an explicit checkbox. Profiles can
 be saved and selected in the discovery UI. Launch options are snapshotted per job.
 
 GitHub discovery ingests repository metadata, owner accounts, forks/parents,

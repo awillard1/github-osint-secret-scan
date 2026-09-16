@@ -44,13 +44,25 @@ def _run(storage,assessment,parent,options,settings,progress):
     domains={root};resolved=set();http=set();counts={'domain':{root}};failures=[]
     deadline=time.monotonic()+settings.recon_pipeline_timeout_seconds
     domain_entities={root:('domain',parent)};ip_entities={};http_entities={}
+    # Reuse prior passive discoveries only through assessment membership and root scope.
+    from sqlalchemy import select
+    from orgscan import models as m
+    from orgscan.storage.visibility import visibility_ids
+    query=select(m.Domain).join(m.AssessmentEntity,m.AssessmentEntity.entity_id==m.Domain.id).where(
+        m.AssessmentEntity.assessment_id==assessment.id,m.AssessmentEntity.entity_type=='domain',
+        m.Domain.id.in_(visibility_ids([assessment.tenant_key])[m.Domain]))
+    for candidate in storage.session.scalars(query.execution_options(yield_per=100)):
+        if scoped_host(candidate.name,root):
+            domains.add(candidate.name);domain_entities[candidate.name]=('domain',candidate)
+            if len(domains)>settings.recon_max_domains:raise ReconError('LIMIT REACHED: scoped domains','limit_reached')
+    counts['domain']=set(domains)
     storage.session.commit()
     for tool in ordered:
         definition=registry.get(tool)
         if definition.mode!=PASSIVE and not options.get('active_authorized'):
             raise ReconError('Active recon requires explicit operator authorization','scope_required')
         if tool in ('katana','nuclei'):inputs=sorted(http)
-        elif tool=='httpx' and 'dnsx' in selected:inputs=sorted(resolved)
+        elif tool in ('httpx','naabu') and 'dnsx' in selected:inputs=sorted(resolved)
         elif tool in ('dnsx','httpx','naabu'):inputs=sorted(domains)
         else:inputs=[root]
         if not inputs:
@@ -62,7 +74,11 @@ def _run(storage,assessment,parent,options,settings,progress):
                 state=registry.readiness(tool,settings)
                 if tool in TOOLS and not state['ready']:
                     raise ReconError('Selected tool is no longer ready','missing_tool')
-                stage.update(tool=tool,version=state['version'],input_count=len(inputs),mode=definition.mode)
+                stage.update(tool=tool,version=state['version'],input_count=len(inputs),mode=definition.mode,
+                    upstream_providers=[p for p in ordered[:ordered.index(tool)] if progress.states.get(p,{}).get('status')=='completed'],
+                    input_digest=sha256('\n'.join(inputs).encode()).hexdigest(),
+                    input_entities=[{'type':entity[0],'id':entity[1].id} for value in inputs
+                        if (entity:=http_entities.get(value) or domain_entities.get(value))])
                 if time.monotonic()>=deadline:raise ReconError('LIMIT REACHED: pipeline timeout','limit_reached')
                 if tool not in TOOLS:
                     plan=resolve_scan_plan(target=root,target_type='domain',domain_id=parent.id,organization_id=assessment.organization_id,
@@ -78,6 +94,8 @@ def _run(storage,assessment,parent,options,settings,progress):
                     observations=adapter.run(tool,root,inputs,timeout=max(1,deadline-time.monotonic()))
                 if len(observations)>settings.recon_max_urls+settings.recon_max_domains+settings.recon_max_hosts:
                     raise ReconError('LIMIT REACHED: normalized output','limit_reached')
+                domain_observations=[o for o in observations if o.kind=='domain']
+                prepared_domains={o.value:entity for o,entity in zip(domain_observations,ingest.ingest_many(domain_observations))}
                 for observation in observations:
                     counts.setdefault(observation.kind,set()).add(observation.value)
                     limit={'domain':settings.recon_max_domains,'ip_address':settings.recon_max_hosts,
@@ -97,7 +115,7 @@ def _run(storage,assessment,parent,options,settings,progress):
                         endpoint=ingest.ingest(Observation('endpoint',observation.value,'nuclei'))
                         ingest.edge(('finding',row),endpoint,'observed_in','nuclei')
                         continue
-                    entity=ingest.ingest(observation)
+                    entity=prepared_domains.get(observation.value) if observation.kind=='domain' else ingest.ingest(observation)
                     if not entity:continue
                     if observation.kind=='domain':
                         domains.add(observation.value);domain_entities[observation.value]=entity
@@ -111,7 +129,7 @@ def _run(storage,assessment,parent,options,settings,progress):
                         http.add(observation.value);http_entities[observation.value]=entity
                         host=urlsplit(observation.value).hostname
                         if scoped_host(host,root):
-                            observed_domain=ingest.ingest(Observation('domain',host,tool,{'http_status':observation.attributes.get('status')}))
+                            observed_domain=ingest.ingest(Observation('domain',host,tool,{'http_status':observation.attributes.get('status'),'tech':observation.attributes.get('tech',[]),'http_url':observation.value}))
                             domain_entities[host]=observed_domain
                         ingest.edge(domain_entities.get(host),entity,'serves_http',tool)
                         endpoint=ingest.ingest(Observation('endpoint',observation.value,tool,observation.attributes))

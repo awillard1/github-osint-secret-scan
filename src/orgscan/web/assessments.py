@@ -252,3 +252,18 @@ def scan_review(assessment,preview):
         for item in value if isinstance(value,list) else [value]:controls+=input_field(key,'',item,type='hidden')
     body+=form(root+'/launch/scan',controls,'Start scan')
     return page(assessment['name']+' — Review scan',body,assessment=assessment)
+
+
+def discovery_review(assessment,review):
+    from orgscan.web.recon import STYLE,badge
+    options=review['options'];hidden=''
+    for key,value in options.items():
+        if key=='name':key='profile'
+        if isinstance(value,bool):value='true' if value else 'false'
+        for item in value if isinstance(value,list) else [value]:
+            hidden+='<input type="hidden" name="'+esc(key)+'" value="'+esc(str(item))+'">'
+    body=STYLE+'<h2>Review active validation</h2><p>Targets: '+str(review['targets'])+' · Previously observed HTTP services: '+str(review['http_endpoints'])+'</p><p>Counts can change as upstream stages finish. Tools run only against scoped, validated inputs.</p>'
+    body+='<h3>Active tools</h3>'+''.join(badge(tool,'recon-active') for tool in review['active_tools'])
+    body+='<p>Crawling, port discovery and template checks interact with targets. Nuclei uses only configured local templates. Third-party references are not authorized targets.</p>'
+    body+=form('/dashboard/assessments/'+str(assessment['id'])+'/launch/discovery',hidden+'<input type="hidden" name="action" value="confirmed">','Start Active Validation')
+    return page('Review active validation',body,assessment=assessment)

@@ -6,7 +6,10 @@ import json
 
 def validated_templates(directory, destination=None):
     if not directory:raise ValueError('Configure an explicit local Nuclei template directory')
-    root=Path(directory).resolve()
+    supplied=Path(directory)
+    if any(p.is_symlink() for p in (supplied,*supplied.parents)):
+        raise ValueError('Unsafe Nuclei template directory')
+    root=supplied.resolve()
     if not root.is_dir():raise ValueError('Nuclei template directory is unavailable')
     paths=sorted(root.rglob('*.yaml'))
     if not paths or len(paths)>100:raise ValueError('Select between 1 and 100 approved local HTTP templates')

@@ -201,13 +201,17 @@ def test_live_naabu_connect(tmp_path, lab):
         server.shutdown(); server.server_close(); thread.join(timeout=2)
 
 
-def test_live_browser_workflow(service, lab, tmp_path, caplog):
+def test_live_browser_workflow(service, lab, tmp_path, caplog, monkeypatch):
     import re
     from fastapi.testclient import TestClient
     from orgscan.api import create_app
     from orgscan.queueing import enqueue_due_scheduled_scans, run_worker
     from orgscan.services.assessments.jobs import AssessmentJobs
     settings = configure(service.settings, lab)
+    import base64, os
+    from pydantic import SecretStr
+    settings.preserve_secrets=True
+    settings.secret_encryption_key=SecretStr(base64.urlsafe_b64encode(os.urandom(32)).decode())
     settings.assessment_allow_local_paths = True
     settings.api_tokens_json = json.dumps([{'name':'operator','token':'local-certification-token','role':'admin','tenants':['*']}])
     repository = tmp_path/'inert-repository'
@@ -223,18 +227,44 @@ def test_live_browser_workflow(service, lab, tmp_path, caplog):
     assert response.status_code == 303
     identity = int(response.headers['location'].split('/')[3])
     root = f'/dashboard/assessments/{identity}'
-    response = post(root+'/targets', {'text':ROOT+'\n'+str(repository)})
+    from orgscan.services.assessments.github import ConnectionClient
+    hosts=['github.com','ghes-a.example','ghes-b.example']
+    for index,host in enumerate(hosts):
+        assert post('/dashboard/settings/github',{'tenant':'a','name':host,'connection_type':'github' if index==0 else 'ghes',
+            'web_base_url':'https://'+host,'api_base_url':'https://api.github.com' if index==0 else 'https://'+host+'/api/v3'}).status_code==303
+    touched=set()
+    def github(self,path):
+        from urllib.parse import urlsplit
+        touched.add(self.web_url)
+        route=urlsplit(path).path
+        if route.endswith('/languages'):return {'Python':100}
+        if '/git/trees/' in route:return {'tree':[]}
+        if route.endswith(('/contributors','/commits','/forks','/members','/branches')):return []
+        if route.startswith('/search/'):return {'items':[],'total_count':0}
+        if route.startswith('/repos/'):
+            return {'full_name':'org/repo','name':'repo','html_url':self.web_url+'/org/repo','clone_url':self.web_url+'/org/repo.git',
+                'owner':{'login':'org','type':'Organization'},'default_branch':'main','visibility':'public','private':False,'homepage':'http://'+ROOT}
+        return []
+    monkeypatch.setattr(ConnectionClient,'_request_json',github)
+    response = post(root+'/targets', {'text':'\n'.join([ROOT,str(repository),*['https://'+host+'/org/repo' for host in hosts]])})
     assert response.status_code == 200
-    assert service.targets(identity)['total'] == 2
+    assert service.targets(identity)['total'] == 5
+    assert post(root+'/launch/discovery',{'profile':'comprehensive-passive','providers':['local-metadata']}).status_code==303
+    enqueue_due_scheduled_scans(settings,limit=20)
+    run_worker(settings,burst=True,max_jobs=20)
+    assert touched=={'https://'+host for host in hosts}
     inventory = browser.get('/dashboard/settings/recon-tools')
     assert inventory.status_code == 200 and str(TOOLS/'bin/httpx') in inventory.text
     for _ in range(2):
-        response = post(root+'/launch/discovery', {'profile':'custom','providers':['dnsx','httpx','katana','nuclei'],'active_authorized':'true'})
+        options={'profile':'custom','providers':['dnsx','httpx','katana','nuclei'],'active_authorized':'true'}
+        review=post(root+'/launch/discovery',options)
+        assert review.status_code==200 and 'Start Active Validation' in review.text
+        response = post(root+'/launch/discovery', {**options,'action':'confirmed'})
         assert response.status_code == 303, response.text
         enqueue_due_scheduled_scans(settings, limit=20)
         run_worker(settings, burst=True, max_jobs=20)
     progress = AssessmentJobs(settings).progress(identity)
-    assert progress['states'] == {'completed':4}, progress
+    assert progress['states'] == {'completed':15}, progress
     stages = [stage for item in progress['items'] for name,stage in item['stages'].items() if name == 'nuclei']
     assert len(stages) == 2 and all(stage['output_count'] == 1 for stage in stages)
     work = AssessmentWorkbench(settings)
@@ -242,7 +272,9 @@ def test_live_browser_workflow(service, lab, tmp_path, caplog):
     for tab in ('overview','domains','hosts','services','web'):
         response = browser.get(root+'/recon-results?tab='+tab)
         assert response.status_code == 200
-    assert post(root+'/selection', {'included':'true'}).status_code == 303
+    assert post(root+'/selection', {'included':'false'}).status_code == 303
+    local=[r for r in work.assets(identity)['items'] if r['entity']['provider']=='local'][0]
+    assert post(root+'/selection', {'included':'true','selection_mode':'checked','selected_ids':[local['entity_id']]}).status_code == 303
     scan = {'profile':'quick','scanners':['custom-patterns']}
     assert post(root+'/launch/scan', scan).status_code == 200
     assert post(root+'/launch/scan', {**scan,'action':'confirmed'}).status_code == 303
@@ -254,9 +286,27 @@ def test_live_browser_workflow(service, lab, tmp_path, caplog):
     for finding in findings:
         response = browser.get(root+f'/findings/{finding["id"]}')
         assert response.status_code == 200 and 'LocalCertificationSynthetic739!' not in response.text
-    for format in ('json','html','pdf','sarif'):
+    for finding in findings:
+        secrets=browser.get(f'/findings/{finding["id"]}/secrets').json()['secrets']
+        if secrets:
+            revealed=browser.post(f'/findings/{finding["id"]}/secrets/{secrets[0]["id"]}/reveal',headers={'X-CSRF-Token':csrf})
+            assert revealed.status_code==200 and revealed.json()['value']=='LocalCertificationSynthetic739!'
+            break
+    else:raise AssertionError('Real local scan did not preserve encrypted evidence')
+    for format in ('json','html','csv','pdf','sarif'):
         response = browser.get(f'/assessments/{identity}/reports/{format}')
         assert response.status_code == 200 and b'LocalCertificationSynthetic739!' not in response.content
+    from orgscan.ai.ollama import OllamaProvider
+    from tests.assessments.test_local_ai import ADVICE
+    requests=[]
+    def generate(self,text):
+        assert 'LocalCertificationSynthetic739!' not in text
+        requests.append(text);return ADVICE
+    monkeypatch.setattr(OllamaProvider,'generate',generate)
+    assert post('/dashboard/settings/local-ai',{'tenant':'a','enabled':'true','base_url':'http://localhost:11434','model':'fixture'}).status_code==200
+    assert post(root+'/launch/ai',{'purpose':'summary'}).status_code==303
+    enqueue_due_scheduled_scans(settings,limit=20);run_worker(settings,burst=True,max_jobs=20)
+    assert len(requests)==1
     assert all(name.endswith(ROOT) for name in lab['queries'])
     assert 'LocalCertificationSynthetic739!' not in caplog.text
 

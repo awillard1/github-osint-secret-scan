@@ -72,7 +72,7 @@ def test_complete_browser_operator_workflow(service,monkeypatch,caplog):
             storage.create_domain_exposure(domain.id,self.name,source_name=self.name,result_summary=child,normalized_hash=hashlib.sha256((self.name+child).encode()).hexdigest())
             return DomainProviderResult([child],[])
     monkeypatch.setattr('orgscan.providers.get_domain_provider',lambda name,settings:Provider(name))
-    assert post(root+'/launch/discovery',{'profile':'organization-comprehensive','providers':['local-metadata','crtsh','securitytxt'],'active_authorized':'true'}).status_code==303
+    assert post(root+'/launch/discovery',{'profile':'organization-comprehensive','providers':['local-metadata','crtsh','securitytxt'],'active_authorized':'true','action':'confirmed'}).status_code==303
     enqueue_due_scheduled_scans(settings,limit=100);run_worker(settings,burst=True,max_jobs=100)
     jobs=AssessmentJobs(settings);progress=jobs.progress(identity,limit=100)
     assert progress['states']=={'completed':8},progress

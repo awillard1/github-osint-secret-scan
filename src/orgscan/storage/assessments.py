@@ -17,6 +17,8 @@ class AssessmentStorage:
     def __init__(self, session, auth=None):
         self.session=session
         self.auth=auth or current_auth.get() or LOCAL_CONTEXT
+        self._entity_cache=None
+        self._link_cache=None
 
     def tenant(self, tenant, role='reader'):
         if not tenant or tenant=='*' or not self.auth.allows_tenant(tenant) or not self.auth.allows_role(role):
@@ -54,23 +56,30 @@ class AssessmentStorage:
 
     def entity(self, assessment, kind, identity):
         from orgscan.storage.visibility import visibility_ids
+        key=(assessment.tenant_key,kind,identity)
+        if self._entity_cache is not None and key in self._entity_cache:return self._entity_cache[key]
         model=ENTITY_MODELS[kind]
         ids=visibility_ids([assessment.tenant_key])
         row=self.session.scalar(select(model).where(model.id==identity,model.id.in_(ids[model])))
         if row is None:
             raise AuthorizationError('Entity is outside the assessment tenant')
+        if self._entity_cache is not None:self._entity_cache[key]=row
         return row
 
     def link(self, assessment, kind, identity, *, connection_id=None, source='operator', confidence='unverified', reasons=None):
         self.entity(assessment,kind,identity)
         if connection_id is not None:
             self.connection(connection_id,assessment.tenant_key)
-        row=self.session.scalar(select(m.AssessmentEntity).where(m.AssessmentEntity.assessment_id==assessment.id,
-            m.AssessmentEntity.entity_type==kind,m.AssessmentEntity.entity_id==identity))
+        key=(assessment.id,kind,identity)
+        row=self._link_cache.get(key) if self._link_cache is not None else None
+        if row is None:
+            row=self.session.scalar(select(m.AssessmentEntity).where(m.AssessmentEntity.assessment_id==assessment.id,
+                m.AssessmentEntity.entity_type==kind,m.AssessmentEntity.entity_id==identity))
         if row is None:
             row=m.AssessmentEntity(assessment_id=assessment.id,entity_type=kind,entity_id=identity,
                 connection_id=connection_id,source=source,confidence=confidence,metadata_json={'reasons':reasons or []})
             self.session.add(row);self.session.flush()
+        if self._link_cache is not None:self._link_cache[key]=row
         from datetime import UTC,datetime
         now=datetime.now(UTC).isoformat()
         metadata=dict(row.metadata_json or {})

@@ -129,12 +129,20 @@ class ReconToolRegistry:
     def readiness(self, tool_id, settings, *, binary=None):
         tool = self.get(tool_id)
         missing = [key for key in tool.configuration_requirements if not getattr(settings,key,None)]
-        if tool_id == 'nuclei' and settings.nuclei_templates_path:
-            path = Path(settings.nuclei_templates_path)
-            if not path.is_dir() or path.is_symlink():
+        template_state = None
+        if tool_id == 'nuclei':
+            from orgscan.recon.configuration import approved_templates
+            missing = []
+            try:
+                approved_templates(settings)
+                template_state = 'Ready'
+            except (ValueError, OSError):
                 missing.append('nuclei_templates_path')
+                template_state = 'Not configured or invalid'
         result = {'tool_id':tool_id,'ready':False,'status':'missing','installed':False,'version':None,
                   'missing':missing,'installable':bool(tool.go_package),'binary_path':None}
+        if template_state is not None:
+            result.update(templates_status=template_state, binary_ready=False)
         if platform.system() not in tool.supported_platforms:
             return {**result,'status':'unsupported_platform'}
         if not tool.executables:
@@ -174,6 +182,7 @@ class ReconToolRegistry:
                     return {**result,'status':'unsupported_contract'}
             if tool_id=='amass' and not match[1].startswith('3.'):
                 return {**result,'status':'unsupported_version'}
+            result['binary_ready'] = True
             result.update(ready=not missing,status='configuration_required' if missing else 'ready')
         except (OSError,processes.TimeoutExpired,processes.OutputLimitExceeded):
             pass

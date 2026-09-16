@@ -26,6 +26,9 @@ class AssessmentJobs(AssessmentService):
                     if saved is None:raise ValueError('Saved discovery profile not found')
                     options=saved.configuration
                 configuration=profile_options(self.settings,options or a.discovery_profile)
+                if configuration.get('active_authorized'):
+                    from orgscan.security_context import LOCAL_CONTEXT
+                    configuration={**configuration,'authorized_by':(current_auth.get() or LOCAL_CONTEXT).name,'authorized_at':datetime.now(UTC).isoformat()}
                 a.discovery_profile=configuration
                 statement=select(m.AssessmentTarget).where(m.AssessmentTarget.assessment_id==identity,m.AssessmentTarget.validation_status=='valid')
             elif kind=='scan':
@@ -62,6 +65,21 @@ class AssessmentJobs(AssessmentService):
         # Queue publication is an independent durable step; pending schedules survive
         # unavailable Redis and can be picked up by the existing enqueuer.
         return {'scheduled':len(created),'assessment_id':identity,'state':'pending-enqueue'}
+
+    def discovery_review(self,identity,*,options=None):
+        from orgscan.recon.registry import get_registry,PASSIVE
+        with self.factory() as s:
+            st=AssessmentStorage(s);a=st.assessment(identity,'analyst')
+            options=options or {}
+            if options.get('saved_profile'):
+                saved=s.scalar(select(m.ReconProfile).where(m.ReconProfile.tenant_key==a.tenant_key,m.ReconProfile.name==options['saved_profile']))
+                if saved is None:raise ValueError('Saved discovery profile not found')
+                options=saved.configuration
+            configuration=profile_options(self.settings,options)
+            active=[p for p in configuration['providers'] if get_registry().get(p).mode!=PASSIVE]
+            targets=s.scalar(select(func.count()).select_from(m.AssessmentTarget).where(m.AssessmentTarget.assessment_id==identity,m.AssessmentTarget.validation_status=='valid'))
+            endpoints=s.scalar(select(func.count()).select_from(m.ReconAsset).join(m.AssessmentEntity,m.AssessmentEntity.entity_id==m.ReconAsset.id).where(m.AssessmentEntity.assessment_id==identity,m.AssessmentEntity.entity_type=='recon_asset',m.ReconAsset.kind=='http_service'))
+            return st.safe({'targets':targets,'http_endpoints':endpoints,'active_tools':active,'options':configuration},a.tenant_key)
 
     def _scan_plan(self,a,repo,options,*,readiness=None):
         plan=resolve_scan_plan(target=(repo.metadata_json or {}).get('local_path') if repo.provider=='local' else 'upload:'+(repo.metadata_json or {}).get('artifact_digest','') if repo.provider=='artifact' else repo.full_name,target_type='path' if repo.provider=='local' else 'artifact' if repo.provider=='artifact' else 'mirror',profile=options.get('profile','standard'),

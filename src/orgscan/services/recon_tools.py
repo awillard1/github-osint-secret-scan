@@ -15,8 +15,18 @@ class ReconToolsService:
         for row in rows:
             if not auth.allows_role('admin') or '*' not in auth.tenants:
                 row.pop('binary_path',None)
+        if auth.allows_role('admin') and '*' in auth.tenants:
+            from orgscan.recon.configuration import template_locations
+            for row in rows:
+                if row['tool_id']=='nuclei':
+                    try:row['template_locations']=template_locations(self.settings)
+                    except (ValueError,OSError):row['template_locations']=[]
         rows=redact(rows,secrets_from=self.settings.as_dict(include_secrets=True))
         return rows
+
+    def configure_templates(self,locations):
+        from orgscan.recon.configuration import save_template_locations
+        return save_template_locations(self.settings,locations)
 
     def test(self,tool_id):
         row=self.registry.readiness(tool_id,self.settings)
