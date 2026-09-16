@@ -14,7 +14,13 @@ def render_operator_queues(payload: dict, *, selected: str | None = None) -> str
             + '</li>' for row in queue["items"]
         ) or '<li>No items in this queue.</li>'
         link = f'/dashboard/queues/{name}?days={payload["days"]}'
-        sections.append(f'<section><h3><a href="{link}">{queue["label"]}</a> ({queue["count"]})</h3><ul>{rows}</ul></section>')
-    return (f'<section aria-label="Operator overview"><h2>Operator overview</h2>'
-            f'<p>New observations cover the past {payload["days"]} days. Other queues show current state.</p>'
-            '<div class="grid">'+''.join(sections)+'</div></section>')
+        sections.append(
+            f'<div class="queue-card"><h3><a href="{link}">{queue["label"]}</a> <span class="count-pill">({queue["count"]})</span></h3><ul class="queue-list">{rows}</ul></div>'
+        )
+    return (
+        f'<section class="panel" aria-label="Operator overview">'
+        f'<div class="section-header"><div><h2>Operator overview</h2><p class="subtle">New observations cover the past {payload["days"]} days. Other queues show current state.</p></div></div>'
+        f'<div class="queue-grid">{"".join(sections)}</div>'
+        f'</section>'
+    )
+
