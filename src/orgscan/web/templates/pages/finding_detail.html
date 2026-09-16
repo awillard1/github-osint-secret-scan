@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading">
+<div>
+<p class="eyebrow">Finding #{{ finding.id }}</p>
+<h1>{{ finding.title }}</h1>
+<div class="signal-meta">
+<span class="severity-chip" data-severity="{{ finding.severity }}">{{ finding.severity }}</span>
+<span class="state-chip" data-state="{{ finding.lifecycle_state|default('NEW') }}">{{ finding.lifecycle_state|default('NEW') }}</span>
+<span>{{ finding.confidence }} confidence</span>
+<span>{{ finding.source_tool }}</span>
+</div>
+</div>
+<a class="button secondary" href="/dashboard">Back to overview</a>
+</div>
+<div class="detail-grid">
+<section class="panel">
+<p class="eyebrow">Priority</p>
+<strong class="detail-risk">{{ finding.risk_score|default(0, true) }}</strong>
+<span class="muted"> risk score</span>
+<dl class="facts">
+<div>
+<dt>First seen</dt>
+<dd>{{ finding.first_seen_at|default('Unknown', true) }}</dd>
+</div>
+<div>
+<dt>Last seen</dt>
+<dd>{{ finding.last_seen_at|default('Unknown', true) }}</dd>
+</div>
+<div>
+<dt>Detected</dt>
+<dd>{{ finding.detected_at }}</dd>
+</div>
+</dl>
+</section>
+<section class="panel">
+<p class="eyebrow">Workflow</p>
+<dl class="facts">
+<div>
+<dt>Status</dt>
+<dd>{{ finding.status }}</dd>
+</div>
+<div>
+<dt>Triage</dt>
+<dd>{{ finding.triage_state }}</dd>
+</div>
+<div>
+<dt>Owner</dt>
+<dd>{{ finding.triage_owner|default('Unassigned', true) }}</dd>
+</div>
+<div>
+<dt>Analyst note</dt>
+<dd>{{ finding.triage_notes|default('—', true) }}</dd>
+</div>
+<div>
+<dt>Remediated</dt>
+<dd>{{ finding.remediated_at|default('—', true) }}</dd>
+</div>
+<div>
+<dt>Regressed</dt>
+<dd>{{ finding.regressed_at|default('—', true) }}</dd>
+</div>
+</dl>
+</section>
+</div>
+<section class="panel">
+<h2>Investigation context</h2>
+<p>{{ finding.description }}</p>
+<dl class="facts">
+<div>
+<dt>Category</dt>
+<dd>{{ finding.category }}</dd>
+</div>
+<div>
+<dt>Repository ID</dt>
+<dd>{{ finding.repository_id|default('—', true) }}</dd>
+</div>
+<div>
+<dt>Scan job</dt>
+<dd>{% if finding.scan_job_id %}<a href="/dashboard/scan-jobs/{{ finding.scan_job_id }}">{{ finding.scan_job_id }}</a>{% else %}—{% endif %}</dd>
+</div>
+<div>
+<dt>Remediation</dt>
+<dd>{{ finding.remediation_hint|default('No remediation hint recorded.', true) }}</dd>
+</div>
+</dl>
+</section>
+{% if not auth or auth.allows_role('analyst') %}<section class="panel">
+<h2>Record a decision</h2>
+<form method="post" action="/dashboard/findings/{{ finding.id }}/workflow" class="decision-form" data-enhance="decision">{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<input type="hidden" name="return_to_detail" value="true">
+<label>Action<select name="action">
+<option value="triage">Triage</option>
+<option value="suppress">Suppress</option>
+<option value="accept-risk">Accept risk</option>
+<option value="reopen">Reopen</option>
+</select>
+</label>
+<label>Owner<input name="owner" value="{{ finding.triage_owner|default('', true) }}">
+</label>
+<label>Note or reason<input name="note" required>
+</label>
+<button type="submit">Save decision</button>
+</form>
+</section>{% endif %}
+<section class="panel">
+<h2>Evidence</h2>
+<p class="muted">Stored snippets are redacted. Protected values require an explicit audited reveal.</p>{% if evidence %}<div class="table-scroll">
+<table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Path</th>
+<th>Line</th>
+<th>Snippet</th>
+</tr>
+</thead>
+<tbody>{% for item in evidence %}<tr>
+<td>{{ item.source }}</td>
+<td>{{ item.repository_path|default('—', true) }}</td>
+<td>{{ item.line_start|default('—', true) }}</td>
+<td>
+<pre>{{ item.snippet|default('', true) }}</pre>
+</td>
+</tr>{% endfor %}</tbody>
+</table>
+</div>{% else %}<p class="muted">No evidence available.</p>{% endif %}</section>
+<div class="detail-grid">
+<section class="panel">
+<h2>Transition history</h2>{% if history %}<ol class="timeline">{% for item in history %}<li>
+<pre>{{ item|tojson(indent=2) }}</pre>
+</li>{% endfor %}</ol>{% else %}<p class="muted">No transitions recorded.</p>{% endif %}</section>
+<section class="panel">
+<h2>Risk scores</h2>{% if risk_scores %}<ul>{% for item in risk_scores %}<li>{{ item.entity_type }} #{{ item.entity_id }} · {{ item.score }} · {{ item.rationale }}</li>{% endfor %}</ul>{% else %}<p class="muted">No risk score records available.</p>{% endif %}</section>
+</div>
+<details class="panel">
+<summary>Stored metadata and raw payload</summary>
+<div class="detail-grid">
+<div>
+<h3>Metadata</h3>
+<pre>{{ metadata }}</pre>
+</div>
+<div>
+<h3>Raw payload</h3>
+<pre>{{ raw_payload }}</pre>
+</div>
+</div>
+</details>
+{% endblock %}

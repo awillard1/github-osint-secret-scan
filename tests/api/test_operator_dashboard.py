@@ -20,6 +20,7 @@ def test_dashboard_queues_escape_and_scope(tmp_path):
     settings = Settings(database_url=url,api_tokens_json=json.dumps([{'name':'reader','token':'reader-token','role':'reader','tenants':['a']}]))
     client = TestClient(create_app(url,settings=settings))
     assert client.get('/operator/overview').status_code == 401
+    assert client.get('/static/css/app.css').status_code == 200
     client.headers['X-Orgscan-Token'] = 'reader-token'
     overview = client.get('/operator/overview').json()
     assert overview['queues']['triage']['count'] == 1
@@ -29,6 +30,32 @@ def test_dashboard_queues_escape_and_scope(tmp_path):
         assert 'a&lt;script&gt;' in page.text
         assert 'b&lt;script&gt;' not in page.text
         assert '<script>alert' not in page.text
+    assert 'Operator queue' in client.get('/dashboard/queues/triage').text
+    assert client.get('/static/css/app.css').status_code == 200
+    detail = client.get('/dashboard/findings/1')
+    assert detail.status_code == 200
+    assert 'Record a decision' not in detail.text
     assert client.get('/dashboard/queues/missing').status_code == 404
     assert client.get('/operator/overview?days=0').status_code == 422
     assert client.post('/dashboard/findings/1/workflow',data={'action':'triage'}).status_code == 403
+
+
+def test_finding_decision_returns_to_detail(tmp_path):
+    url = f"sqlite:///{tmp_path / 'decision.db'}"
+    init_db(url)
+    with create_session_factory(url)() as session:
+        storage = Storage(session)
+        org = storage.create_organization('a', tenant_key='a')
+        finding = storage.create_finding(CanonicalFinding(source_tool='fixture', category='secret', title='Review me', description='safe', organization_id=org.id))
+        session.flush()
+        finding_id = finding.id
+        session.commit()
+    settings = Settings(database_url=url, api_tokens_json=json.dumps([{'name':'analyst','token':'analyst-token','role':'analyst','tenants':['a']}]))
+    client = TestClient(create_app(url, settings=settings), headers={'X-Orgscan-Token':'analyst-token'})
+    detail = client.get(f'/dashboard/findings/{finding_id}')
+    assert 'Record a decision' in detail.text
+    assert 'data-enhance="decision"' in detail.text
+    response = client.post(f'/dashboard/findings/{finding_id}/workflow', data={'action':'triage','note':'Reviewed','return_to_detail':'true'}, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers['location'] == f'/dashboard/findings/{finding_id}'
+    assert 'Reviewed' in client.get(response.headers['location']).text

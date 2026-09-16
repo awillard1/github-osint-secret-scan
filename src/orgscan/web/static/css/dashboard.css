@@ -1,0 +1,120 @@
+body{
+  background:var(--bg);
+  color:var(--ink)
+}
+main{
+  max-width:1500px;
+  padding:clamp(1rem,2.5vw,2.5rem)
+}
+main>h1{
+  font-size:clamp(1.8rem,3vw,2.6rem);
+  letter-spacing:-.04em;
+  margin-bottom:.1rem
+}
+main>.subtle{
+  margin-bottom:1.5rem
+}
+main>nav{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:.7rem;
+  margin:-.5rem 0 1.5rem;
+  padding:.75rem 0;
+  border-bottom:1px solid var(--line);
+  font-weight:650
+}
+main>nav a{
+  color:var(--accent);
+  text-decoration:none
+}
+main>nav form{
+  margin-left:auto
+}
+.card,main section{
+  background:var(--surface);
+  border-color:var(--line);
+  border-radius:.7rem;
+  box-shadow:var(--shadow)
+}
+main th,main td{
+  border-color:var(--line)
+}
+main th{
+  background:var(--surface-muted)
+}
+main tbody tr:nth-child(even){
+  background:var(--surface-muted)
+}
+main .subtle{
+  color:var(--muted)
+}
+main .metric{
+  border-top:4px solid var(--accent)
+}
+main .metric.critical{
+  background:var(--surface);
+  border-top-color:var(--critical)
+}
+main .metric.warning{
+  background:var(--surface);
+  border-top-color:var(--high)
+}
+main .metric.info{
+  background:var(--surface)
+}
+main .metric h3{
+  font-size:.75rem;
+  color:var(--muted);
+  text-transform:uppercase;
+  letter-spacing:.08em
+}
+main .metric p{
+  font-variant-numeric:tabular-nums;
+  color:var(--ink)
+}
+main .banner.success{
+  background:var(--surface-muted);
+  color:var(--ink);
+  border-color:var(--low)
+}
+main .banner.error{
+  background:var(--surface-muted);
+  color:var(--critical);
+  border-color:var(--critical)
+}
+main .banner.info{
+  background:var(--surface-muted);
+  color:var(--ink);
+  border-color:var(--accent)
+}
+main .quick-links a{
+  color:var(--accent)
+}
+main button{
+  background:var(--accent);
+  color:var(--accent-ink);
+  border-radius:.4rem
+}
+main input,main select,main textarea{
+  background:var(--surface);
+  color:var(--ink);
+  border-color:var(--line);
+  border-radius:.4rem
+}
+main table{
+  display:block;
+  overflow-x:auto
+}
+main section h2{
+  font-size:1.2rem;
+  letter-spacing:-.02em
+}
+main .finding-action{
+  min-width:220px
+}
+@media(max-width:640px){
+  main>nav form{
+    margin-left:0
+  }
+}

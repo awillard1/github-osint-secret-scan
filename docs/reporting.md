@@ -2,6 +2,8 @@
 
 CLI exports, static dashboards, HTTP report downloads and scheduled exports use
 `ReportService` / `query_report` over the existing canonical finding/evidence storage.
+The live browser dashboard uses Jinja templates and packaged static assets; exported
+HTML reports remain standalone and do not load the browser console stylesheet.
 Formats: `json`, `csv`, `html`, `sarif`, `pdf-executive`, `pdf-technical`.
 The existing `pdf` format and `write_pdf` import remain executive-PDF aliases.
 

@@ -4,6 +4,7 @@ import json
 from urllib.parse import urlencode
 from orgscan.reporting import _render_html_page
 from orgscan.security_context import current_auth
+from orgscan.web.render import render
 
 
 def esc(value):return html.escape(str(value if value is not None else ''),quote=True)
@@ -43,12 +44,7 @@ def paging(base,total,offset,limit=50):
 
 
 def index(payload,tenant,offset):
-    rows=[{'Name':r['name'],'Status':r['status'],'Targets':r['counts']['targets'],'Assets':r['counts']['assets'],'Jobs':r['counts']['jobs'],
-           'Last Activity':r['updated_at'],'ID':r['id'],'Owner':r['created_by'],'Needs Attention':r.get('job_states',{}).get('failed',0),'Job States':r.get('job_states',{})} for r in payload['items']]
-    body=f'<a href="/dashboard/assessments/new?{urlencode({"tenant":tenant})}">+ New Assessment</a>'
-    body+=table(rows,['ID','Name','Status','Owner','Targets','Assets','Jobs','Job States','Needs Attention','Last Activity'])
-    body+=''.join(f'<p><a href="/dashboard/assessments/{r["id"]}/overview">Open {esc(r["name"])}</a></p>' for r in payload['items'])
-    return page('Assessments',body+paging('/dashboard/assessments?'+urlencode({'tenant':tenant}),payload['total'],offset))
+    return render('pages/assessment_home.html', title='Assessments', active_section='assessments', payload=payload, tenant=tenant, offset=offset)
 
 
 def new(tenant):

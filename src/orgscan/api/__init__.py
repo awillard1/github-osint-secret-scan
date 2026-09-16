@@ -1030,6 +1030,10 @@ def create_app(database_url: str, settings: Settings | None = None) -> FastAPI:
     from orgscan.services.auth_service import AuthService
     service = OrgscanApiService(database_url, settings=settings)
     app = FastAPI(title="orgscan", version="0.1.0")
+    from pathlib import Path
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/static", StaticFiles(directory=Path(__file__).resolve().parents[1] / "web" / "static"), name="static")
     auth_service = AuthService(service.settings)
     app.state.auth_service = auth_service
     app.add_middleware(AuthenticationMiddleware, auth_service=auth_service)
@@ -1227,7 +1231,7 @@ def create_app(database_url: str, settings: Settings | None = None) -> FastAPI:
         from orgscan.web.secret_reveal import render_secret_controls
         page = render_finding_detail_html(payload)
         controls = render_secret_controls(service.settings, finding_id)
-        return HTMLResponse(page.replace('</body>', controls + '</body>'))
+        return HTMLResponse(page.replace('</main>', controls + '</main>'))
 
     @app.get("/scan-jobs/{scan_job_id}")
     def scan_job_detail(scan_job_id: int) -> dict[str, object]:

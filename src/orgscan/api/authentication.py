@@ -32,7 +32,7 @@ class AuthenticationMiddleware:
         self.app, self.auth = app, auth_service
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("path") in {"/health","/login"}:
+        if scope["type"] != "http" or scope.get("path") in {"/health","/login"} or scope.get("path", "").startswith("/static/"):
             return await self.app(scope,receive,send)
         request = Request(scope,receive)
         header = request.headers.get("x-orgscan-token")

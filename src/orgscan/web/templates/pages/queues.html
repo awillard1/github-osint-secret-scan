@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading">
+<div>
+<p class="eyebrow">Operator queue</p>
+<h1>{{ queue.label }}</h1>
+<p class="muted">{{ queue.count }} items · {{ days }} day observation window</p>
+</div>
+<a class="button secondary" href="/dashboard">Back to overview</a>
+</div>
+<section class="panel" aria-label="{{ queue.label }} results">
+  {% if queue['items'] %}<ol class="signal-list">
+  {% for item in queue['items'] %}<li class="signal-row">
+<div>
+<a class="signal-title" href="{{ item.href }}">{{ item.label }}</a>
+<div class="signal-meta">
+<span class="state-chip" data-state="{{ item.state }}">{{ item.state }}</span>{% if item.severity %}<span class="severity-chip" data-severity="{{ item.severity }}">{{ item.severity }}</span>{% endif %}{% if item.confidence %}<span>{{ item.confidence }} confidence</span>{% endif %}</div>
+</div>{% if item.risk_score is defined %}<strong class="risk-score">{{ item.risk_score }} <small>RISK</small>
+</strong>{% endif %}</li>{% endfor %}
+  </ol>{% else %}<div class="empty-state">
+<strong>Queue clear</strong>
+<p>No items in this view. Try another queue or a longer observation window.</p>
+</div>{% endif %}
+</section>
+<nav class="pagination" aria-label="Queue pages">{% if offset %}<a href="?days={{ days }}&amp;offset={{ [0, offset - 50]|max }}">Previous</a>{% endif %}<span>{{ offset + 1 if queue.count else 0 }}–{{ [offset + 50, queue.count]|min }} of {{ queue.count }}</span>{% if offset + 50 < queue.count %}<a href="?days={{ days }}&amp;offset={{ offset + 50 }}">Next</a>{% endif %}</nav>
+{% endblock %}

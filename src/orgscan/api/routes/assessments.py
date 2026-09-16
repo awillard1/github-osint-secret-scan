@@ -274,7 +274,7 @@ def create_assessment_router(settings):
         from orgscan.security_context import current_csrf
         csrf=current_csrf.get()
         if csrf:controls=controls.replace('<button type="submit">','<input type="hidden" name="csrf_token" value="'+ui.esc(csrf)+'"><button type="submit">')
-        return page.replace('</body>',context+controls+'</body>')
+        return page.replace('</main>',context+controls+'</main>')
 
     @router.get('/assessments/{identity}/relationships')
     def relationships(identity:int,limit:int=100,offset:int=0,entity_type:str|None=None,entity_id:int|None=None,relation_type:str|None=None,confidence:str|None=None):return call(work.graph,identity,limit=limit,offset=offset,entity_type=entity_type,entity_id=entity_id,relation_type=relation_type,confidence=confidence)

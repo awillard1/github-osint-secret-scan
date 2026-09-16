@@ -433,3 +433,13 @@ projections retain tenant boundaries. Legacy unassigned data remains local-only.
 See [domain identity](domain-identity.md) and the latest checkpoint validation
 sections for acceptance results and safe migration conflict handling. Organization,
 Repository and Account association models are reviewed but not migrated.
+
+## Operator console presentation — 2026-09-16
+
+The live dashboard, operator overview cards, queue drill-down, assessment index and finding detail
+now use autoescaped Jinja templates and a shared responsive light/dark visual system.
+Finding detail has a protected decision form that returns to the same record; the
+existing service still owns lifecycle policy. Browser static assets are packaged
+with the application. Legacy assessment tabs, scan-job detail, graph, settings,
+login and standalone HTML reporting still use escaped Python HTML and need a later
+incremental migration. No schema, scanner, CLI or report-format change is involved.
