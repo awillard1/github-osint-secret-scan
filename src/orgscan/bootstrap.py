@@ -7,7 +7,10 @@ import sys
 import venv
 from pathlib import Path
 
+from orgscan.redaction import safe_url, redact
 from orgscan.config import Settings
+from orgscan.scanners import get_registry
+from orgscan.services.scanner_service import scanner_inventory
 
 REQUIRED_COMMANDS = ("git", "curl", "openssl")
 OPTIONAL_COMMANDS = (
@@ -19,9 +22,6 @@ OPTIONAL_COMMANDS = (
     "trufflehog",
     "yara",
     "rg",
-    "subfinder",
-    "httpx",
-    "whois",
 )
 OPTIONAL_INSTALL_NOTES = {
     "jq": "Package manager install is usually sufficient.",
@@ -32,9 +32,6 @@ OPTIONAL_INSTALL_NOTES = {
     "trufflehog": "Prefer the official upstream installation method rather than OS packages for current versions.",
     "yara": "Install the YARA CLI to enable rule-based artifact and secret matching.",
     "rg": "Install ripgrep to enable fast heuristic scanning for internal hostnames and org-specific indicators.",
-    "subfinder": "Use ProjectDiscovery's official release or package instructions for passive subdomain discovery.",
-    "httpx": "Use ProjectDiscovery's official release or package instructions for HTTP probing and metadata collection.",
-    "whois": "Install the standard whois client package to enable registrar and nameserver enrichment.",
 }
 OPTIONAL_TOOL_METADATA = {
     "jq": {
@@ -48,48 +45,6 @@ OPTIONAL_TOOL_METADATA = {
         "description": "Optional queue backend for scheduled scan workers.",
         "env_var": "ORGSCAN_REDIS_URL",
         "settings_attr": None,
-    },
-    "gitleaks": {
-        "category": "scanner",
-        "description": "Generic secret scanner for files and uploaded artifacts.",
-        "env_var": "ORGSCAN_GITLEAKS_BINARY",
-        "settings_attr": "gitleaks_binary",
-    },
-    "detect-secrets": {
-        "category": "scanner",
-        "description": "Baseline-oriented secret scanner with plugin coverage.",
-        "env_var": "ORGSCAN_DETECT_SECRETS_BINARY",
-        "settings_attr": "detect_secrets_binary",
-    },
-    "semgrep": {
-        "category": "scanner",
-        "description": "Code and configuration rule scanner for policy findings.",
-        "env_var": "ORGSCAN_SEMGREP_BINARY",
-        "settings_attr": "semgrep_binary",
-    },
-    "trufflehog": {
-        "category": "scanner",
-        "description": "Secret scanner with verified-detector support.",
-        "env_var": "ORGSCAN_TRUFFLEHOG_BINARY",
-        "settings_attr": "trufflehog_binary",
-    },
-    "subfinder": {
-        "category": "provider",
-        "description": "Passive subdomain discovery for ProjectDiscovery enrichment.",
-        "env_var": "ORGSCAN_SUBFINDER_BINARY",
-        "settings_attr": "subfinder_binary",
-    },
-    "httpx": {
-        "category": "provider",
-        "description": "HTTP probing and metadata enrichment for discovered hosts.",
-        "env_var": "ORGSCAN_HTTPX_BINARY",
-        "settings_attr": "httpx_binary",
-    },
-    "whois": {
-        "category": "provider",
-        "description": "Registrar and nameserver enrichment for tracked domains.",
-        "env_var": "ORGSCAN_WHOIS_BINARY",
-        "settings_attr": "whois_binary",
     },
 }
 
@@ -105,9 +60,28 @@ def command_status(command: str) -> bool:
     return shutil.which(command) is not None
 
 
-def optional_tool_inventory(settings: Settings) -> list[dict[str, object]]:
+def optional_tool_inventory(settings: Settings, *, inventory=None) -> list[dict[str, object]]:
     tools: list[dict[str, object]] = []
-    for command in OPTIONAL_COMMANDS:
+    scanner_tools = {}
+    for row in (scanner_inventory(settings) if inventory is None else inventory):
+        metadata = row["metadata"]
+        binary = metadata["binary"]
+        if binary and binary not in REQUIRED_COMMANDS:
+            scanner_tools[binary] = {
+                "name": binary,
+                "category": "scanner",
+                "description": metadata["description"] or metadata["display_name"],
+                "configured_command": row["configured_command"],
+                "env_var": metadata["binary_env_var"],
+                "installed": row["readiness"]["binary_path"] is not None,
+                "install_note": OPTIONAL_INSTALL_NOTES.get(binary, "Configure the scanner's declared requirements."),
+                "ready": row["readiness"]["ready"],
+                "status": row["readiness"]["status"],
+            }
+    for command in dict.fromkeys((*OPTIONAL_COMMANDS, *scanner_tools)):
+        if command in scanner_tools:
+            tools.append(scanner_tools[command])
+            continue
         metadata = OPTIONAL_TOOL_METADATA.get(command, {})
         configured_value = getattr(settings, str(metadata.get("settings_attr")), None) if metadata.get("settings_attr") else command
         resolved_command = str(configured_value or command)
@@ -122,7 +96,18 @@ def optional_tool_inventory(settings: Settings) -> list[dict[str, object]]:
                 "install_note": OPTIONAL_INSTALL_NOTES.get(command, ""),
             }
         )
-    return tools
+    from orgscan.recon.registry import get_registry as recon_registry
+    registry = recon_registry()
+    tools = [row for row in tools if row['name'] not in registry.definitions]
+    for row in registry.inventory(settings):
+        if not row['executables']:
+            continue
+        tools.append({'name':row['tool_id'],'category':'provider','description':row['description'],
+            'configured_command':getattr(settings,row['tool_id']+'_binary',row['tool_id']),
+            'env_var':'ORGSCAN_'+row['tool_id'].upper()+'_BINARY','installed':row['installed'],
+            'ready':row['ready'],'status':row['status'],'version':row['version'],
+            'install_note':row['guidance'] or 'Explicit installation: orgscan recon-tools install '+row['tool_id']})
+    return redact(tools, secrets_from=settings.model_dump())
 
 
 def recommended_install_command(package_manager: str | None, commands: tuple[str, ...]) -> str:
@@ -167,19 +152,28 @@ def bootstrap(
             text=True,
         )
 
+    inventory = scanner_inventory(settings)
+    tools = optional_tool_inventory(settings, inventory=inventory)
     return {
         "platform": platform.platform(),
         "package_manager": package_manager,
         "required": {command: command_status(command) for command in REQUIRED_COMMANDS},
-        "optional": {command: command_status(command) for command in OPTIONAL_COMMANDS},
-        "optional_tools": optional_tool_inventory(settings),
+        "optional": {str(tool["name"]): tool["installed"] for tool in tools},
+        "optional_tools": tools,
+        "scanner_readiness": inventory,
+        "scanner_registry_warnings": list(get_registry().warnings),
+        "installation_profiles": {
+            "Minimal": "Python runtime dependencies and Git; built-in scanners and API providers. No recon binary required.",
+            "Recon": "Minimal plus selected tools from orgscan recon-tools list. Install explicitly; passive and active execution remain separate.",
+            "Full": "Recon plus optional scanners from orgscan scanners. Rules, API credentials and Ollama remain explicit configuration.",
+        },
         "recommended_install": recommended_install_command(package_manager, REQUIRED_COMMANDS),
         "optional_install_notes": OPTIONAL_INSTALL_NOTES,
         "venv_path": str(venv_path),
         "venv_exists": venv_path.exists(),
         "install_returncode": None if install_result is None else install_result.returncode,
         "mode": "verify-only" if verify_only else "install",
-        "database_url": settings.database_url,
+        "database_url": safe_url(settings.database_url),
         "data_dir": str(settings.data_dir),
         "next_steps": [
             "Create and activate the virtual environment." if not venv_path.exists() else "Activate the existing virtual environment.",

@@ -4,11 +4,16 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint, Index, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
+    pass
+
+
+class ControlPlaneRecord:
+    """Ordinary control-plane text must cross persistence and projection safety."""
     pass
 
 
@@ -40,6 +45,7 @@ class ScanJobStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 class QueueTaskStatus(StrEnum):
@@ -86,12 +92,28 @@ class Organization(TimestampMixin, Base):
     accounts: Mapped[list[Account]] = relationship(back_populates="organization")
 
 
+class DomainIdentity(Base):
+    """Global DNS identity only. Never an authorization or observation boundary."""
+    __tablename__ = "domain_identities"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    normalized_name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+
+
 class Domain(TimestampMixin, Base):
+    """Tenant-domain association; historical IDs remain stable for every reference."""
     __tablename__ = "domains"
+    __table_args__ = (
+        UniqueConstraint("tenant_key", "identity_id", name="uq_domain_tenant_identity"),
+        Index("uq_domain_legacy_identity", "identity_id", unique=True,
+              sqlite_where=text("tenant_key IS NULL"), postgresql_where=text("tenant_key IS NULL")),
+    )
+
+    identity_id: Mapped[int] = mapped_column(ForeignKey("domain_identities.id"), nullable=False)
+    tenant_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     organization_id: Mapped[int | None] = mapped_column(ForeignKey("organizations.id"), nullable=True)
-    name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), index=True)
     ownership_confidence: Mapped[str] = mapped_column(String(32), default=ConfidenceLevel.UNVERIFIED.value)
     verification_status: Mapped[str] = mapped_column(String(32), default=VerificationStatus.UNVERIFIED.value)
     discovered_emails: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -177,6 +199,10 @@ class Finding(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(255))
     description: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default=FindingStatus.OPEN.value)
+    lifecycle_state: Mapped[str] = mapped_column(String(32), default="NEW", index=True)
+    remediated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    regressed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    regression_count: Mapped[int] = mapped_column(Integer, default=0)
     triage_state: Mapped[str] = mapped_column(String(32), default="new")
     triage_owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
     triage_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -196,6 +222,20 @@ class Finding(TimestampMixin, Base):
     evidence_items: Mapped[list[Evidence]] = relationship(back_populates="finding")
     risk_scores: Mapped[list[RiskScore]] = relationship(back_populates="finding")
     suppressions: Mapped[list[Suppression]] = relationship(back_populates="finding")
+
+
+class FindingHistory(Base):
+    __tablename__ = "finding_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    finding_id: Mapped[int] = mapped_column(ForeignKey("findings.id"), index=True)
+    from_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    to_state: Mapped[str] = mapped_column(String(32))
+    actor: Mapped[str] = mapped_column(String(255))
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scan_job_id: Mapped[int | None] = mapped_column(ForeignKey("scan_jobs.id"), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class Evidence(TimestampMixin, Base):
@@ -218,6 +258,8 @@ class Evidence(TimestampMixin, Base):
     related_entity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_class: Mapped[str] = mapped_column(String(32), default=SourceClass.INTERNAL.value)
     query_used: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    observation_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     finding: Mapped[Finding] = relationship(back_populates="evidence_items")
 
@@ -285,6 +327,8 @@ class ToolRun(TimestampMixin, Base):
 
 class ScheduledScan(TimestampMixin, Base):
     __tablename__ = "scheduled_scans"
+
+    queue_execution_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     target_type: Mapped[str] = mapped_column(String(64), index=True)
@@ -359,6 +403,8 @@ class UserSession(TimestampMixin, Base):
 
 class QueueTask(TimestampMixin, Base):
     __tablename__ = "queue_tasks"
+
+    execution_key: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     scheduled_scan_id: Mapped[int] = mapped_column(ForeignKey("scheduled_scans.id"), index=True)
@@ -443,3 +489,153 @@ class Suppression(TimestampMixin, Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     finding: Mapped[Finding] = relationship(back_populates="suppressions")
+
+
+from orgscan.storage.safety import install as _install_evidence_safety
+_install_evidence_safety()
+
+
+class SecretEvidence(Base):
+    """Ciphertext only. No property, repr or serializer decrypts this model."""
+    __tablename__ = 'secret_evidence'
+    __table_args__ = (UniqueConstraint('finding_id', 'fingerprint', 'key_id', name='uq_secret_finding_fingerprint_key'),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    finding_id: Mapped[int] = mapped_column(ForeignKey('findings.id'), index=True)
+    evidence_id: Mapped[int | None] = mapped_column(ForeignKey('evidence.id'), nullable=True)
+    tenant_key: Mapped[str] = mapped_column(String(255), index=True)
+    secret_type: Mapped[str] = mapped_column(String(128))
+    redacted_display: Mapped[str] = mapped_column(String(64), default='••••••••••••')
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    key_id: Mapped[str] = mapped_column(String(64))
+    encrypted_value: Mapped[bytes] = mapped_column(LargeBinary)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    source: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
+class SecretRevealAudit(Base):
+    __tablename__ = 'secret_reveal_audit'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey('users.id'), nullable=True)
+    principal: Mapped[str] = mapped_column(String(255))
+    tenant_key: Mapped[str] = mapped_column(String(255), index=True)
+    finding_id: Mapped[int] = mapped_column(ForeignKey('findings.id'))
+    secret_evidence_id: Mapped[int] = mapped_column(ForeignKey('secret_evidence.id'))
+    source: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
+class Assessment(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'assessments'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_key: Mapped[str] = mapped_column(String(255), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str] = mapped_column(Text, default='')
+    status: Mapped[str] = mapped_column(String(32), default='draft')
+    created_by: Mapped[str] = mapped_column(String(255))
+    organization_id: Mapped[int] = mapped_column(ForeignKey('organizations.id'))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    discovery_profile: Mapped[dict] = mapped_column(JSON, default=dict)
+    scan_profile: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class GitHubConnection(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'github_connections'
+    __table_args__ = (UniqueConstraint('tenant_key', 'web_base_url', name='uq_connection_tenant_web'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_key: Mapped[str] = mapped_column(String(255), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    connection_type: Mapped[str] = mapped_column(String(32))
+    web_base_url: Mapped[str] = mapped_column(String(512))
+    api_base_url: Mapped[str] = mapped_column(String(512))
+    credential_env: Mapped[str | None] = mapped_column(String(128))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    allow_private: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_test_status: Mapped[str] = mapped_column(String(32), default='not-tested')
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class AssessmentTarget(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'assessment_targets'
+    __table_args__ = (UniqueConstraint('assessment_id','identity',name='uq_assessment_target_identity'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(ForeignKey('assessments.id'), index=True)
+    connection_id: Mapped[int | None] = mapped_column(ForeignKey('github_connections.id'))
+    identity: Mapped[str] = mapped_column(String(64))
+    raw_input: Mapped[str] = mapped_column(Text)
+    normalized_value: Mapped[str] = mapped_column(String(2048))
+    target_type: Mapped[str] = mapped_column(String(32))
+    validation_status: Mapped[str] = mapped_column(String(32), default='valid')
+    notes: Mapped[str] = mapped_column(Text, default='')
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class AssessmentEntity(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'assessment_entities'
+    __table_args__ = (UniqueConstraint('assessment_id','entity_type','entity_id',name='uq_assessment_entity'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(ForeignKey('assessments.id'), index=True)
+    connection_id: Mapped[int | None] = mapped_column(ForeignKey('github_connections.id'))
+    entity_type: Mapped[str] = mapped_column(String(32))
+    entity_id: Mapped[int] = mapped_column(Integer, index=True)
+    included: Mapped[bool] = mapped_column(Boolean, default=True)
+    confidence: Mapped[str] = mapped_column(String(32), default='unverified')
+    source: Mapped[str] = mapped_column(String(128))
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class AssessmentRun(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'assessment_runs'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(ForeignKey('assessments.id'), index=True)
+    target_id: Mapped[int | None] = mapped_column(ForeignKey('assessment_targets.id'))
+    scheduled_scan_id: Mapped[int] = mapped_column(ForeignKey('scheduled_scans.id'), unique=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ReconProfile(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'recon_profiles'
+    __table_args__ = (UniqueConstraint('tenant_key','name',name='uq_recon_profile_tenant_name'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_key: Mapped[str] = mapped_column(String(255), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    configuration: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class LocalAIConfiguration(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'local_ai_configurations'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_key: Mapped[str] = mapped_column(String(255), unique=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    base_url: Mapped[str] = mapped_column(String(512))
+    model: Mapped[str] = mapped_column(String(255))
+
+
+class AIAdvice(ControlPlaneRecord, TimestampMixin, Base):
+    __tablename__ = 'ai_advice'
+    __table_args__ = (UniqueConstraint('assessment_id','fingerprint',name='uq_ai_advice_input'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    assessment_id: Mapped[int] = mapped_column(ForeignKey('assessments.id'), index=True)
+    purpose: Mapped[str] = mapped_column(String(64))
+    provider: Mapped[str] = mapped_column(String(32), default='ollama')
+    model: Mapped[str] = mapped_column(String(255))
+    policy_version: Mapped[str] = mapped_column(String(32))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    output_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class ReconAsset(ControlPlaneRecord, TimestampMixin, Base):
+    """Tenant-owned canonical IP/service/endpoint/certificate with safe observations."""
+    __tablename__ = 'recon_assets'
+    __table_args__ = (UniqueConstraint('organization_id','kind','identity',name='uq_recon_asset_identity'),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey('organizations.id'),index=True)
+    kind: Mapped[str] = mapped_column(String(32),index=True)
+    identity: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(2048))
+    metadata_json: Mapped[dict] = mapped_column(JSON,default=dict)

@@ -9,7 +9,7 @@ from orgscan.queueing import enqueue_due_scheduled_scans, queue_status, run_work
 from orgscan.repositories import Storage
 
 
-def test_rq_queue_enqueues_and_processes_scheduled_scan(tmp_path: Path) -> None:
+def test_rq_queue_enqueues_and_processes_scheduled_scan(tmp_path: Path, monkeypatch) -> None:
     database_url = f"sqlite:///{tmp_path / 'queue.db'}"
     init_db(database_url)
     session_factory = create_session_factory(database_url)
@@ -27,6 +27,7 @@ def test_rq_queue_enqueues_and_processes_scheduled_scan(tmp_path: Path) -> None:
         )
         session.commit()
 
+    monkeypatch.setattr("orgscan.queueing.SafeWorker._start_scheduler", lambda *a, **k: None)
     connection = fakeredis.FakeRedis()
     settings = Settings(
         database_url=database_url,

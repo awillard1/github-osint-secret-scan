@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-import shutil
+from orgscan.redaction import safe_output, redact
+from orgscan.api.limits import RequestBodyLimit, read_upload
+from orgscan.archive_limits import tar_stream, check_zip_directory
+from hashlib import sha256
+
 import tarfile
 import tempfile
 import zipfile
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -13,11 +17,10 @@ from urllib.parse import parse_qs, urlparse
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel, Field
 
 from orgscan.bootstrap import optional_tool_inventory
 from orgscan.config import Settings, get_settings
-from orgscan.db import create_session_factory, init_db
+from orgscan.db import prepare_database, create_session_factory
 from orgscan.models import ScanJob, ToolRun
 from orgscan.runner import execute_scan
 from orgscan.reporting import (
@@ -31,7 +34,29 @@ from orgscan.reporting import (
     render_scan_job_detail_html,
 )
 from orgscan.repositories import Storage
-from orgscan.scanners import available_scanner_names
+from orgscan.services.finding_service import (
+    FindingDecision,
+    FindingNotFound,
+    FindingQuery,
+    FindingService,
+    TriageUpdate,
+    high_signal_findings,
+)
+from orgscan.api.schemas import (
+    DashboardFindingWorkflowRequest,
+    FindingDecisionRequest,
+    FindingReopenRequest,
+    FindingUpdateRequest,
+)
+from orgscan.api.routes.findings import create_finding_router
+from orgscan.api.routes.dashboard import create_operator_router
+from orgscan.api.routes.reports import create_report_router
+from orgscan.services.dashboard_service import DashboardService
+from orgscan.scanners import get_registry
+from orgscan.services.scanner_service import artifact_scanner_options, scanner_inventory
+from orgscan.services.scan_plan import resolve_scan_plan
+from orgscan.services.target_service import resolve_asset_context
+from orgscan.services.scan_service import execute_plan, result_payload
 from orgscan.scanners.external import ScannerExecutionError
 
 MAX_ARTIFACT_UPLOAD_BYTES = 10_000_000
@@ -39,9 +64,14 @@ MAX_ARTIFACT_EXTRACTED_BYTES = 25_000_000
 MAX_ARTIFACT_EXTRACTED_FILES = 2_000
 
 
+from orgscan.lifecycle import lifecycle_fields, history_row
+
+
+@safe_output
 def _serialize_finding(finding, *, include_detail: bool = False) -> dict[str, Any]:
     payload = {
         "id": finding.id,
+        **lifecycle_fields(finding),
         "title": finding.title,
         "description": finding.description,
         "category": finding.category,
@@ -74,9 +104,11 @@ def _serialize_finding(finding, *, include_detail: bool = False) -> dict[str, An
                 "metadata": finding.metadata_json,
             }
         )
-    return payload
+    from orgscan.presentation import safe_finding_fields
+    return safe_finding_fields(finding, payload)
 
 
+@safe_output
 def _serialize_evidence(evidence) -> dict[str, Any]:
     return {
         "id": evidence.id,
@@ -95,9 +127,12 @@ def _serialize_evidence(evidence) -> dict[str, Any]:
         "related_entity_id": evidence.related_entity_id,
         "source_class": evidence.source_class,
         "query_used": evidence.query_used,
+        "metadata": evidence.metadata_json,
+        "observation_fingerprint": evidence.observation_fingerprint,
     }
 
 
+@safe_output
 def _serialize_relationship(relationship) -> dict[str, Any]:
     return {
         "id": relationship.id,
@@ -109,9 +144,11 @@ def _serialize_relationship(relationship) -> dict[str, Any]:
         "confidence": relationship.confidence,
         "source": relationship.source,
         "evidence_summary": relationship.evidence_summary,
+        "metadata": relationship.metadata_json,
     }
 
 
+@safe_output
 def _serialize_risk_score(risk_score) -> dict[str, Any]:
     return {
         "id": risk_score.id,
@@ -126,6 +163,7 @@ def _serialize_risk_score(risk_score) -> dict[str, Any]:
     }
 
 
+@safe_output
 def _serialize_scan_job(scan_job: ScanJob) -> dict[str, Any]:
     return {
         "id": scan_job.id,
@@ -134,12 +172,14 @@ def _serialize_scan_job(scan_job: ScanJob) -> dict[str, Any]:
         "scanner_name": scan_job.scanner_name,
         "status": scan_job.status,
         "parameters_json": scan_job.parameters_json,
+        "scope_json": scan_job.scope_json,
         "error_message": scan_job.error_message,
         "started_at": scan_job.started_at.isoformat() if scan_job.started_at else None,
         "completed_at": scan_job.completed_at.isoformat() if scan_job.completed_at else None,
     }
 
 
+@safe_output
 def _serialize_tool_run(tool_run: ToolRun) -> dict[str, Any]:
     return {
         "id": tool_run.id,
@@ -155,144 +195,54 @@ def _serialize_tool_run(tool_run: ToolRun) -> dict[str, Any]:
     }
 
 
-class FindingUpdateRequest(BaseModel):
-    status: str | None = None
-    triage_state: str | None = None
-    triage_owner: str | None = None
-    triage_notes: str | None = None
-    remediation_due_date: date | None = None
-
-
-class FindingDecisionRequest(BaseModel):
-    reason: str = Field(min_length=1)
-    owner: str | None = None
-    note: str | None = None
-    due_date: date | None = None
-
-
-class FindingReopenRequest(BaseModel):
-    note: str | None = None
-
-
-class DashboardFindingWorkflowRequest(BaseModel):
-    action: str
-    owner: str | None = None
-    note: str | None = None
-    triage_state: str | None = None
-
-
-def _safe_artifact_name(filename: str | None) -> str:
-    return (Path(filename or "artifact.txt").name or "artifact.txt").replace("\x00", "")
-
-
-def _archive_type(path: Path) -> str | None:
-    name = path.name.lower()
-    if name.endswith(".zip"):
-        return "zip"
-    if name.endswith(".tar") or name.endswith(".tar.gz") or name.endswith(".tgz"):
-        return "tar"
-    return None
-
-
-def _safe_extract_destination(root: Path, member_name: str) -> Path:
-    normalized = Path(member_name.lstrip("/"))
-    destination = (root / normalized).resolve()
-    if destination != root and root not in destination.parents:
-        raise ValueError(f"Unsafe archive entry: {member_name}")
-    return destination
+from orgscan.services.artifact_service import _safe_artifact_name, _archive_type, _safe_extract_destination
 
 
 def _extract_zip_artifact(artifact_path: Path, destination_root: Path) -> int:
-    file_count = 0
-    total_bytes = 0
-    with zipfile.ZipFile(artifact_path) as archive:
-        for member in archive.infolist():
-            if member.is_dir():
-                continue
-            file_count += 1
-            if file_count > MAX_ARTIFACT_EXTRACTED_FILES:
-                raise ValueError("Uploaded archive contains too many files.")
-            total_bytes += member.file_size
-            if total_bytes > MAX_ARTIFACT_EXTRACTED_BYTES:
-                raise ValueError("Uploaded archive expands beyond the allowed size limit.")
-            destination = _safe_extract_destination(destination_root, member.filename)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(archive.read(member))
-    return file_count
+    from orgscan.services.artifact_service import _extract_zip_artifact as extract
+    return extract(artifact_path,destination_root,max_files=MAX_ARTIFACT_EXTRACTED_FILES,max_bytes=MAX_ARTIFACT_EXTRACTED_BYTES)
 
 
 def _extract_tar_artifact(artifact_path: Path, destination_root: Path) -> int:
-    file_count = 0
-    total_bytes = 0
-    with tarfile.open(artifact_path) as archive:
-        for member in archive.getmembers():
-            if member.isdir():
-                continue
-            if not member.isfile():
-                raise ValueError("Uploaded archive contains unsupported special entries.")
-            file_count += 1
-            if file_count > MAX_ARTIFACT_EXTRACTED_FILES:
-                raise ValueError("Uploaded archive contains too many files.")
-            total_bytes += member.size
-            if total_bytes > MAX_ARTIFACT_EXTRACTED_BYTES:
-                raise ValueError("Uploaded archive expands beyond the allowed size limit.")
-            extracted = archive.extractfile(member)
-            if extracted is None:
-                continue
-            destination = _safe_extract_destination(destination_root, member.name)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(extracted.read())
-    return file_count
+    from orgscan.services.artifact_service import _extract_tar_artifact as extract
+    return extract(artifact_path,destination_root,max_files=MAX_ARTIFACT_EXTRACTED_FILES,max_bytes=MAX_ARTIFACT_EXTRACTED_BYTES)
 
 
 class OrgscanApiService:
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, settings: Settings | None = None) -> None:
         self.database_url = database_url
-        init_db(self.database_url)
-        self.session_factory = create_session_factory(self.database_url)
-        self.settings = get_settings()
+        self.settings = (settings or get_settings()).model_copy(update={"database_url": database_url})
+        prepare_database(self.settings)
+        from orgscan.storage.authorization import authorized_session_factory
+        self.session_factory = authorized_session_factory(create_session_factory(self.database_url))
+        self.finding_service = FindingService(self.session_factory)
 
     def _access_context_note(self) -> str:
-        return (
-            "The HTML dashboard is currently local-first and does not yet enforce tenant-scoped authentication. "
-            "Use API token controls separately until a dedicated tenant-aware dashboard session flow is added."
-        )
+        from orgscan.security_context import current_auth
+        auth = current_auth.get()
+        if auth is not None and auth.authenticated:
+            return f"Signed in as {auth.name} ({auth.role}); tenant scope: {', '.join(auth.tenants)}."
+        return "Local development mode: authentication is not configured."
 
-    def _artifact_scanner_options(self, *, selected: str = "custom-patterns") -> list[dict[str, Any]]:
-        supported = {"custom-patterns", "gitleaks", "detect-secrets", "semgrep", "trufflehog"}
-        external_binaries = {
-            "gitleaks": self.settings.gitleaks_binary,
-            "detect-secrets": self.settings.detect_secrets_binary,
-            "semgrep": self.settings.semgrep_binary,
-            "trufflehog": self.settings.trufflehog_binary,
-        }
-        options: list[dict[str, Any]] = []
-        for scanner_name in available_scanner_names():
-            if scanner_name not in supported:
-                continue
-            available = scanner_name == "custom-patterns" or bool(shutil.which(external_binaries[scanner_name]))
-            options.append(
-                {
-                    "name": scanner_name,
-                    "available": available,
-                    "selected": scanner_name == selected,
-                }
-            )
-        return options
-
+    @safe_output
     def _tooling_payload(self) -> dict[str, object]:
-        tools = optional_tool_inventory(self.settings)
+        inventory = scanner_inventory(self.settings)
+        tools = optional_tool_inventory(self.settings, inventory=inventory)
         return {
-            "scanners": self._artifact_scanner_options(),
+            "scanners": artifact_scanner_options(self.settings, inventory=inventory),
+            "scanner_readiness": inventory,
+            "scanner_registry_warnings": list(get_registry().warnings),
             "optional_tools": tools,
             "installed_optional_tools": [item["name"] for item in tools if item["installed"]],
             "missing_optional_tools": [item["name"] for item in tools if not item["installed"]],
         }
 
+    @safe_output
     def _summary_payload(self) -> dict[str, object]:
         with self.session_factory() as session:
             return build_summary(Storage(session))
 
+    @safe_output
     def _findings_payload(
         self,
         *,
@@ -302,6 +252,7 @@ class OrgscanApiService:
         category: str | None = None,
         confidence: str | None = None,
         source_tool: str | None = None,
+        lifecycle_state: str | None = None,
         triage_state: str | None = None,
         organization_id: int | None = None,
         domain_id: int | None = None,
@@ -315,31 +266,15 @@ class OrgscanApiService:
         high_signal_only: bool = False,
         min_confidence: str = "likely",
     ) -> dict[str, object]:
-        with self.session_factory() as session:
-            storage = Storage(session)
-            findings = storage.list_findings(
-                limit=max(limit * 4, limit) if high_signal_only else limit,
-                status=status,
-                severity=severity,
-                category=category,
-                confidence=confidence,
-                source_tool=source_tool,
-                triage_state=triage_state,
-                organization_id=organization_id,
-                domain_id=domain_id,
-                repository_id=repository_id,
-                account_id=account_id,
-                scan_job_id=scan_job_id,
-                risk_score_min=risk_score_min,
-                risk_score_max=risk_score_max,
-                detected_after=detected_after,
-                detected_before=detected_before,
-            )
-            if high_signal_only:
-                findings = self._high_signal_findings(findings, min_confidence=min_confidence, limit=limit)
-            return {
-                "findings": [_serialize_finding(finding) for finding in findings]
-            }
+        findings = self.finding_service.list_findings(FindingQuery(
+            limit=limit, status=status, severity=severity, category=category,
+            confidence=confidence, source_tool=source_tool, triage_state=triage_state, lifecycle_state=lifecycle_state,
+            organization_id=organization_id, domain_id=domain_id, repository_id=repository_id,
+            account_id=account_id, scan_job_id=scan_job_id, risk_score_min=risk_score_min,
+            risk_score_max=risk_score_max, detected_after=detected_after, detected_before=detected_before,
+            high_signal_only=high_signal_only, min_confidence=min_confidence,
+        ))
+        return {"findings": [_serialize_finding(finding) for finding in findings]}
 
     @staticmethod
     def _parse_datetime_param(value: str | None) -> datetime | None:
@@ -354,33 +289,20 @@ class OrgscanApiService:
         min_confidence: str = "likely",
         limit: int = 10,
     ) -> list[Any]:
-        allowed = set(Storage._allowed_confidences(min_confidence))
-        return [
-            finding
-            for finding in findings
-            if finding.confidence in allowed and finding.status not in {"suppressed"}
-        ][:limit]
+        return high_signal_findings(findings, min_confidence=min_confidence, limit=limit)
 
     def _update_finding_triage(
         self,
         finding_id: int,
         payload: FindingUpdateRequest,
     ) -> dict[str, object] | None:
-        with self.session_factory() as session:
-            storage = Storage(session)
-            finding = storage.get_finding(finding_id)
-            if finding is None:
-                return None
-            updated = storage.update_finding_triage(
-                finding_id,
-                status=payload.status,
-                triage_state=payload.triage_state,
-                triage_owner=payload.triage_owner,
-                triage_notes=payload.triage_notes,
-                remediation_due_date=payload.remediation_due_date,
-            )
-            session.commit()
-            return {"finding": _serialize_finding(updated, include_detail=True)}
+        try:
+            updated = self.finding_service.update_triage(finding_id, TriageUpdate(**payload.model_dump()))
+        except FindingNotFound:
+            return None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"finding": _serialize_finding(updated, include_detail=True)}
 
     def _apply_finding_decision(
         self,
@@ -389,69 +311,34 @@ class OrgscanApiService:
         *,
         status: str,
     ) -> dict[str, object] | None:
-        with self.session_factory() as session:
-            storage = Storage(session)
-            finding = storage.get_finding(finding_id)
-            if finding is None:
-                return None
-            updated = storage.suppress_finding(
-                finding_id,
-                reason=payload.reason,
-                owner=payload.owner,
-                deadline=payload.due_date,
-                notes=payload.note,
-                status=status,
-            )
-            session.commit()
-            return {"finding": _serialize_finding(updated, include_detail=True)}
+        try:
+            updated = self.finding_service.apply_decision(finding_id, FindingDecision(**payload.model_dump()), status=status)
+        except FindingNotFound:
+            return None
+        return {"finding": _serialize_finding(updated, include_detail=True)}
 
     def _reopen_finding(
         self,
         finding_id: int,
         payload: FindingReopenRequest,
     ) -> dict[str, object] | None:
-        with self.session_factory() as session:
-            storage = Storage(session)
-            finding = storage.get_finding(finding_id)
-            if finding is None:
-                return None
-            updated = storage.update_finding_triage(
-                finding_id,
-                status="open",
-                triage_state="reopened",
-                triage_notes=payload.note,
-            )
-            session.commit()
-            return {"finding": _serialize_finding(updated, include_detail=True)}
+        try:
+            updated = self.finding_service.reopen(finding_id, note=payload.note)
+        except FindingNotFound:
+            return None
+        return {"finding": _serialize_finding(updated, include_detail=True)}
 
-    def _resolve_asset_context(
-        self,
-        storage: Storage,
-        *,
-        organization: str | None,
-        repository: str | None,
-        provider: str,
-    ) -> tuple[int | None, int | None]:
-        organization_id = None
-        repository_id = None
-        if organization:
-            organization_record, _ = storage.get_or_create_organization(organization)
-            organization_id = organization_record.id
-        if repository:
-            repository_record, _ = storage.get_or_create_repository(
-                repository,
-                organization_id=organization_id,
-                provider=provider,
-            )
-            repository_id = repository_record.id
-        return organization_id, repository_id
+    def _resolve_asset_context(self, storage, *, organization, repository, provider):
+        return resolve_asset_context(storage, organization=organization, repository=repository, provider=provider)
 
+    @safe_output
     def _scan_uploaded_artifact(
         self,
         *,
         filename: str | None,
         content: bytes,
-        scanner_name: str = "custom-patterns",
+        scanner_name: str | None = None,
+        profile: str | None = None,
         organization: str | None,
         repository: str | None,
         provider: str,
@@ -495,21 +382,19 @@ class OrgscanApiService:
                         repository=repository,
                         provider=provider,
                     )
-                    result = execute_scan(
-                        storage,
-                        target_path=scan_target,
-                        scanner_name=scanner_name,
-                        settings=self.settings,
-                        organization_id=organization_id,
-                        repository_id=repository_id,
-                        target_type="artifact",
+                    plan = resolve_scan_plan(target=str(scan_target), target_type="artifact", profile=profile,
+                                             scanners=[scanner_name] if scanner_name else None, settings=self.settings,
+                                             organization_id=organization_id, repository_id=repository_id)
+                    results = execute_plan(
+                        storage, plan, settings=self.settings,
                         target_label=artifact_name,
-                        command_line=f"api artifact scan {artifact_name} --scanner {scanner_name}",
+                        canonical_root=Path("/orgscan-artifacts") / sha256(artifact_name.encode()).hexdigest(),
+                        command_line=f"api artifact scan {artifact_name} --scanners {','.join(plan.scanners)}",
                         parameters_json={
                             "artifact_name": artifact_name,
                             "artifact_kind": archive_type or "file",
                             "extracted": extracted,
-                            "scanner": scanner_name,
+                            "scanner": plan.scanners[0],
                         },
                     )
         except ScannerExecutionError as exc:
@@ -517,31 +402,25 @@ class OrgscanApiService:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        return {
-            "artifact_name": artifact_name,
-            "scanner": result.scanner,
-            "scan_job_id": result.scan_job_id,
-            "tool_run_id": result.tool_run_id,
-            "findings": result.findings,
-            "finding_ids": result.finding_ids,
-            "target": result.target,
-            "extracted": extracted,
-        }
+        return {**result_payload(results), "artifact_name": artifact_name, "extracted": extracted}
 
+    @safe_output
     def _finding_html_payload(self, finding_id: int) -> dict[str, object] | None:
         return self._finding_payload(finding_id)
 
+    @safe_output
     def _scan_job_payload(self, scan_job_id: int) -> dict[str, object] | None:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='jobs')
             scan_job = storage.get_scan_job(scan_job_id)
             if scan_job is None:
                 return None
-            return {
+            return storage.safe_projection({
                 "scan_job": _serialize_scan_job(scan_job),
                 "tool_runs": [_serialize_tool_run(run) for run in storage.list_tool_runs(limit=25, scan_job_id=scan_job_id)],
                 "findings": [_serialize_finding(finding) for finding in storage.list_findings(limit=100, scan_job_id=scan_job_id)],
-            }
+            }, family='jobs', source_context=context)
 
     def _entity_risk_profile(
         self,
@@ -573,9 +452,11 @@ class OrgscanApiService:
             "average_risk_score": 0.0,
         }
 
+    @safe_output
     def _organizations_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             organizations = list(storage.list_organizations())[:limit]
             profiles = {
                 item["entity_id"]: item
@@ -585,7 +466,7 @@ class OrgscanApiService:
                     limit=max(limit, 1),
                 )
             }
-            return {
+            return storage.safe_projection({
                 "organizations": [
                     {
                         "id": organization.id,
@@ -597,8 +478,9 @@ class OrgscanApiService:
                     }
                     for organization in organizations
                 ]
-            }
+            }, family='assets', source_context=context)
 
+    @safe_output
     def _organization_payload(
         self,
         organization_id: int,
@@ -609,6 +491,7 @@ class OrgscanApiService:
     ) -> dict[str, object] | None:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             organization = storage.get_organization(organization_id)
             if organization is None:
                 return None
@@ -617,7 +500,7 @@ class OrgscanApiService:
                 min_confidence=min_confidence,
                 limit=finding_limit,
             )
-            return {
+            return storage.safe_projection({
                 "organization": {
                     "id": organization.id,
                     "name": organization.name,
@@ -637,11 +520,13 @@ class OrgscanApiService:
                     for relationship in storage.list_relationships_for_entity("organization", str(organization_id), limit=relationship_limit)
                 ],
                 "top_findings": [_serialize_finding(finding) for finding in findings],
-            }
+            }, family='assets', source_context=context)
 
+    @safe_output
     def _repositories_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             repositories = list(storage.list_repositories())[:limit]
             profiles = {
                 item["entity_id"]: item
@@ -651,7 +536,7 @@ class OrgscanApiService:
                     limit=max(limit, 1),
                 )
             }
-            return {
+            return storage.safe_projection({
                 "repositories": [
                     {
                         "id": repository.id,
@@ -665,8 +550,9 @@ class OrgscanApiService:
                     }
                     for repository in repositories
                 ]
-            }
+            }, family='assets', source_context=context)
 
+    @safe_output
     def _repository_payload(
         self,
         repository_id: int,
@@ -677,6 +563,7 @@ class OrgscanApiService:
     ) -> dict[str, object] | None:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             repository = storage.get_repository(repository_id)
             if repository is None:
                 return None
@@ -685,7 +572,7 @@ class OrgscanApiService:
                 min_confidence=min_confidence,
                 limit=finding_limit,
             )
-            return {
+            return storage.safe_projection({
                 "repository": {
                     "id": repository.id,
                     "full_name": repository.full_name,
@@ -704,11 +591,13 @@ class OrgscanApiService:
                     for relationship in storage.list_relationships_for_entity("repository", str(repository_id), limit=relationship_limit)
                 ],
                 "top_findings": [_serialize_finding(finding) for finding in findings],
-            }
+            }, family='assets', source_context=context)
 
+    @safe_output
     def _domains_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             domains = list(storage.list_domains())[:limit]
             profiles = {
                 item["entity_id"]: item
@@ -718,7 +607,7 @@ class OrgscanApiService:
                     limit=max(limit, 1),
                 )
             }
-            return {
+            return storage.safe_projection({
                 "domains": [
                     {
                         "id": domain.id,
@@ -730,8 +619,9 @@ class OrgscanApiService:
                     }
                     for domain in domains
                 ]
-            }
+            }, family='assets', source_context=context)
 
+    @safe_output
     def _domain_payload(
         self,
         domain_id: int,
@@ -742,6 +632,7 @@ class OrgscanApiService:
     ) -> dict[str, object] | None:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             domain = storage.get_domain(domain_id)
             if domain is None:
                 return None
@@ -750,7 +641,7 @@ class OrgscanApiService:
                 min_confidence=min_confidence,
                 limit=finding_limit,
             )
-            return {
+            return storage.safe_projection({
                 "domain": {
                     "id": domain.id,
                     "name": domain.name,
@@ -790,11 +681,13 @@ class OrgscanApiService:
                     for relationship in storage.list_relationships_for_entity("domain", str(domain_id), limit=relationship_limit)
                 ],
                 "top_findings": [_serialize_finding(finding) for finding in findings],
-            }
+            }, family='assets', source_context=context)
 
+    @safe_output
     def _accounts_payload(self, *, limit: int = 100, min_confidence: str = "likely") -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             accounts = list(storage.list_accounts())[:limit]
             profiles = {
                 item["entity_id"]: item
@@ -804,7 +697,7 @@ class OrgscanApiService:
                     limit=max(limit, 1),
                 )
             }
-            return {
+            return storage.safe_projection({
                 "accounts": [
                     {
                         "id": account.id,
@@ -818,8 +711,9 @@ class OrgscanApiService:
                     }
                     for account in accounts
                 ]
-            }
+            }, family='assets', source_context=context)
 
+    @safe_output
     def _account_payload(
         self,
         account_id: int,
@@ -830,6 +724,7 @@ class OrgscanApiService:
     ) -> dict[str, object] | None:
         with self.session_factory() as session:
             storage = Storage(session)
+            context = storage.projection_context(family='assets')
             account = storage.get_account(account_id)
             if account is None:
                 return None
@@ -838,7 +733,7 @@ class OrgscanApiService:
                 min_confidence=min_confidence,
                 limit=finding_limit,
             )
-            return {
+            return storage.safe_projection({
                 "account": {
                     "id": account.id,
                     "username": account.username,
@@ -858,20 +753,22 @@ class OrgscanApiService:
                     for relationship in storage.list_relationships_for_entity("account", str(account_id), limit=relationship_limit)
                 ],
                 "top_findings": [_serialize_finding(finding) for finding in findings],
-            }
+            }, family='assets', source_context=context)
 
+    @safe_output
     def _finding_payload(self, finding_id: int) -> dict[str, object] | None:
-        with self.session_factory() as session:
-            storage = Storage(session)
-            finding = storage.get_finding(finding_id)
-            if finding is None:
-                return None
-            return {
-                "finding": _serialize_finding(finding, include_detail=True),
-                "evidence": [_serialize_evidence(evidence) for evidence in storage.list_finding_evidence(finding_id)],
-                "risk_scores": [_serialize_risk_score(score) for score in storage.list_risk_scores(finding_id=finding_id)],
-            }
+        detail = self.finding_service.get_detail(finding_id)
+        if detail is None:
+            return None
+        from orgscan.presentation import safe_finding_fields
+        return safe_finding_fields(detail.finding, {
+            "finding": _serialize_finding(detail.finding, include_detail=True),
+            "evidence": [_serialize_evidence(evidence) for evidence in detail.evidence],
+            "history": [history_row(event) for event in detail.history],
+            "risk_scores": [_serialize_risk_score(score) for score in detail.risk_scores],
+        })
 
+    @safe_output
     def _risk_summary_payload(
         self,
         *,
@@ -881,19 +778,22 @@ class OrgscanApiService:
     ) -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
-            return {
+            context = storage.projection_context(family='assets')
+            return storage.safe_projection({
                 "min_confidence": min_confidence,
                 "risk_profiles": storage.list_entity_risk_profiles(
                     entity_type=entity_type,
                     min_confidence=min_confidence,
                     limit=limit,
                 ),
-            }
+            }, family='assets', source_context=context)
 
+    @safe_output
     def _scheduled_scans_payload(self) -> dict[str, object]:
         with self.session_factory() as session:
             storage = Storage(session)
-            return {
+            context = storage.projection_context(family='schedules')
+            return storage.safe_projection({
                 "scheduled_scans": [
                     {
                         "id": scan.id,
@@ -906,12 +806,14 @@ class OrgscanApiService:
                     }
                     for scan in storage.list_scheduled_scans()
                 ]
-            }
+            }, family='schedules', source_context=context)
 
+    @safe_output
     def _relationship_graph_payload(self, *, limit: int = 200) -> dict[str, object]:
         with self.session_factory() as session:
             return relationship_graph(Storage(session), limit=limit)
 
+    @safe_output
     def _finding_trends_payload(self, *, days: int = 30) -> dict[str, object]:
         with self.session_factory() as session:
             return {"days": days, "trends": finding_trends(Storage(session), days=days)}
@@ -934,44 +836,27 @@ class OrgscanApiService:
     ) -> str:
         with self.session_factory() as session:
             storage = Storage(session)
-            summary = build_summary(storage)
+            from orgscan.storage.credential_context import build_report_context
+            from orgscan.reports.projection import MAX_CONTEXT_ROWS
+            context = build_report_context(storage, max_rows=MAX_CONTEXT_ROWS)
+            summary = build_summary(storage, source_context=context)
             findings = storage.list_findings(
-                limit=max(limit * 4, limit) if high_signal_only else limit,
+                limit=limit,
+                high_signal_only=high_signal_only,
+                min_confidence=min_confidence,
                 status=status,
                 severity=severity,
                 category=category,
                 confidence=confidence,
             )
-            if high_signal_only:
-                findings = self._high_signal_findings(findings, min_confidence=min_confidence, limit=limit)
-            filtered_rows = [
-                {
-                    "id": finding.id,
-                    "title": finding.title,
-                    "description": finding.description,
-                    "category": finding.category,
-                    "severity": finding.severity,
-                    "confidence": finding.confidence,
-                    "status": finding.status,
-                    "triage_state": finding.triage_state,
-                    "triage_owner": finding.triage_owner,
-                    "triage_notes": finding.triage_notes,
-                    "remediation_due_date": finding.remediation_due_date.isoformat() if finding.remediation_due_date else None,
-                    "source_tool": finding.source_tool,
-                    "source_name": finding.source_name,
-                    "repository_id": finding.repository_id,
-                    "scan_job_id": finding.scan_job_id,
-                    "risk_score": finding.risk_score or 0,
-                    "detected_at": finding.detected_at.isoformat(),
-                    "fingerprint": finding.fingerprint,
-                }
-                for finding in findings
-            ]
+            filtered_rows = [_serialize_finding(finding) for finding in findings]
+            tooling = self._tooling_payload()
             return render_dashboard_html(
                 summary,
                 filtered_rows,
-                trends=finding_trends(storage, days=days),
-                graph=relationship_graph(storage, limit=200),
+                operations=DashboardService(self.session_factory).overview(days=days),
+                trends=finding_trends(storage, days=days, source_context=context),
+                graph=summary['relationship_graph'],
                 filters={
                     "limit": limit,
                     "days": days,
@@ -987,11 +872,11 @@ class OrgscanApiService:
                 artifact_scan_error=artifact_scan_error,
                 finding_action_result=finding_action_result,
                 finding_action_error=finding_action_error,
-                scanner_options=self._artifact_scanner_options(
-                    selected=str((artifact_scan_result or {}).get("scanner") or "custom-patterns")
+                scanner_options=artifact_scanner_options(
+                    self.settings, inventory=tooling["scanner_readiness"], selected=str((artifact_scan_result or {}).get("scanner") or "custom-patterns")
                 ),
                 access_context_note=self._access_context_note(),
-                tooling=self._tooling_payload(),
+                tooling=tooling,
             )
 
     def _dashboard_finding_workflow(
@@ -1139,13 +1024,21 @@ class OrgscanApiService:
         return 404, {"error": f"Unknown route: {route}"}
 
 
-def create_app(database_url: str) -> FastAPI:
-    service = OrgscanApiService(database_url)
+def create_app(database_url: str, settings: Settings | None = None) -> FastAPI:
+    from orgscan.api.authentication import AuthenticationMiddleware
+    from orgscan.api.routes.auth import create_auth_router
+    from orgscan.services.auth_service import AuthService
+    service = OrgscanApiService(database_url, settings=settings)
     app = FastAPI(title="orgscan", version="0.1.0")
+    auth_service = AuthService(service.settings)
+    app.state.auth_service = auth_service
+    app.add_middleware(AuthenticationMiddleware, auth_service=auth_service)
+    app.add_middleware(RequestBodyLimit)
+    app.include_router(create_auth_router(auth_service))
 
     @app.get("/", include_in_schema=False)
     def root() -> RedirectResponse:
-        return RedirectResponse(url="/dashboard")
+        return RedirectResponse(url="/dashboard/assessments")
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -1159,89 +1052,13 @@ def create_app(database_url: str) -> FastAPI:
     def scanners() -> dict[str, object]:
         return service._tooling_payload()
 
-    @app.get("/findings")
-    def findings(
-        limit: int = Query(50, ge=1, le=500),
-        status: str | None = None,
-        severity: str | None = None,
-        category: str | None = None,
-        confidence: str | None = None,
-        source_tool: str | None = None,
-        triage_state: str | None = None,
-        organization_id: int | None = None,
-        domain_id: int | None = None,
-        repository_id: int | None = None,
-        account_id: int | None = None,
-        scan_job_id: int | None = None,
-        risk_score_min: float | None = None,
-        risk_score_max: float | None = None,
-        detected_after: datetime | None = None,
-        detected_before: datetime | None = None,
-        high_signal_only: bool = False,
-        min_confidence: str = Query("likely", pattern="^(verified|likely|heuristic|unverified)$"),
-    ) -> dict[str, object]:
-        return service._findings_payload(
-            limit=limit,
-            status=status,
-            severity=severity,
-            category=category,
-            confidence=confidence,
-            source_tool=source_tool,
-            triage_state=triage_state,
-            organization_id=organization_id,
-            domain_id=domain_id,
-            repository_id=repository_id,
-            account_id=account_id,
-            scan_job_id=scan_job_id,
-            risk_score_min=risk_score_min,
-            risk_score_max=risk_score_max,
-            detected_after=detected_after,
-            detected_before=detected_before,
-            high_signal_only=high_signal_only,
-            min_confidence=min_confidence,
-        )
-
-    @app.get("/findings/{finding_id}")
-    def finding_detail(finding_id: int) -> dict[str, object]:
-        payload = service._finding_payload(finding_id)
-        if payload is None:
-            raise HTTPException(status_code=404, detail="Finding not found")
-        return payload
-
-    @app.patch("/findings/{finding_id}")
-    def update_finding(finding_id: int, payload: FindingUpdateRequest) -> dict[str, object]:
-        result = service._update_finding_triage(finding_id, payload)
-        if result is None:
-            raise HTTPException(status_code=404, detail="Finding not found")
-        return result
-
-    @app.post("/findings/{finding_id}/suppress")
-    def suppress_finding(finding_id: int, payload: FindingDecisionRequest) -> dict[str, object]:
-        result = service._apply_finding_decision(finding_id, payload, status="suppressed")
-        if result is None:
-            raise HTTPException(status_code=404, detail="Finding not found")
-        return result
-
-    @app.post("/findings/{finding_id}/accept-risk")
-    def accept_risk_finding(finding_id: int, payload: FindingDecisionRequest) -> dict[str, object]:
-        result = service._apply_finding_decision(finding_id, payload, status="accepted_risk")
-        if result is None:
-            raise HTTPException(status_code=404, detail="Finding not found")
-        return result
-
-    @app.post("/findings/{finding_id}/reopen")
-    def reopen_finding(finding_id: int, payload: FindingReopenRequest) -> dict[str, object]:
-        result = service._reopen_finding(finding_id, payload)
-        if result is None:
-            raise HTTPException(status_code=404, detail="Finding not found")
-        return result
-
-    @app.get("/findings/{finding_id}/evidence")
-    def finding_evidence(finding_id: int) -> dict[str, object]:
-        payload = service._finding_payload(finding_id)
-        if payload is None:
-            raise HTTPException(status_code=404, detail="Finding not found")
-        return {"finding_id": finding_id, "evidence": payload["evidence"]}
+    from orgscan.api.routes.secrets import create_secret_router
+    app.include_router(create_secret_router(service.settings))
+    app.include_router(create_finding_router(service))
+    app.include_router(create_operator_router(service.session_factory))
+    app.include_router(create_report_router(service.session_factory))
+    from orgscan.api.routes.assessments import create_assessment_router
+    app.include_router(create_assessment_router(service.settings))
 
     @app.get("/organizations")
     def organizations(
@@ -1350,15 +1167,17 @@ def create_app(database_url: str) -> FastAPI:
     @app.post("/artifact-scans")
     async def artifact_scans(
         artifact: UploadFile = File(...),
-        scanner: str = Form("custom-patterns"),
+        scanner: str | None = Form(None),
+        profile: str | None = Form(None),
         organization: str | None = Form(None),
         repository: str | None = Form(None),
         provider: str = Form("github"),
     ) -> dict[str, object]:
         return service._scan_uploaded_artifact(
             filename=artifact.filename,
-            content=await artifact.read(),
+            content=await read_upload(artifact),
             scanner_name=scanner,
+            profile=profile,
             organization=organization,
             repository=repository,
             provider=provider,
@@ -1405,7 +1224,17 @@ def create_app(database_url: str) -> FastAPI:
         payload = service._finding_html_payload(finding_id)
         if payload is None:
             raise HTTPException(status_code=404, detail="Finding not found")
-        return HTMLResponse(render_finding_detail_html(payload))
+        from orgscan.web.secret_reveal import render_secret_controls
+        page = render_finding_detail_html(payload)
+        controls = render_secret_controls(service.settings, finding_id)
+        return HTMLResponse(page.replace('</body>', controls + '</body>'))
+
+    @app.get("/scan-jobs/{scan_job_id}")
+    def scan_job_detail(scan_job_id: int) -> dict[str, object]:
+        payload = service._scan_job_payload(scan_job_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Scan job not found")
+        return payload
 
     @app.get("/dashboard/scan-jobs/{scan_job_id}", response_class=HTMLResponse)
     def dashboard_scan_job_detail(scan_job_id: int) -> HTMLResponse:
@@ -1421,7 +1250,8 @@ def create_app(database_url: str) -> FastAPI:
     @app.post("/dashboard/artifact-scans", response_class=HTMLResponse)
     async def dashboard_artifact_scans(
         artifact: UploadFile = File(...),
-        scanner: str = Form("custom-patterns"),
+        scanner: str | None = Form(None),
+        profile: str | None = Form(None),
         organization: str | None = Form(None),
         repository: str | None = Form(None),
         provider: str = Form("github"),
@@ -1429,8 +1259,9 @@ def create_app(database_url: str) -> FastAPI:
         try:
             result = service._scan_uploaded_artifact(
                 filename=artifact.filename,
-                content=await artifact.read(),
+                content=await read_upload(artifact),
                 scanner_name=scanner,
+                profile=profile,
                 organization=organization,
                 repository=repository,
                 provider=provider,
@@ -1448,65 +1279,12 @@ def create_app(database_url: str) -> FastAPI:
                 status_code=exc.status_code,
             )
 
-    @app.post("/dashboard/findings/{finding_id}/workflow", response_class=HTMLResponse)
-    async def dashboard_finding_workflow(
-        finding_id: int,
-        action: str = Form(...),
-        owner: str | None = Form(None),
-        note: str | None = Form(None),
-        triage_state: str | None = Form(None),
-        limit: int = Form(100),
-        days: int = Form(30),
-        status: str | None = Form(None),
-        severity: str | None = Form(None),
-        category: str | None = Form(None),
-        confidence: str | None = Form(None),
-        high_signal_only: bool = Form(False),
-        min_confidence: str = Form("likely"),
-    ) -> HTMLResponse:
-        try:
-            result = service._dashboard_finding_workflow(
-                finding_id,
-                DashboardFindingWorkflowRequest(
-                    action=action,
-                    owner=owner,
-                    note=note,
-                    triage_state=triage_state,
-                ),
-            )
-            if result is None:
-                raise HTTPException(status_code=404, detail="Finding not found")
-            return HTMLResponse(
-                service._dashboard_html(
-                    limit=limit,
-                    days=days,
-                    status=status,
-                    severity=severity,
-                    category=category,
-                    confidence=confidence,
-                    high_signal_only=high_signal_only,
-                    min_confidence=min_confidence,
-                    finding_action_result=result["finding"],
-                )
-            )
-        except HTTPException as exc:
-            return HTMLResponse(
-                service._dashboard_html(
-                    limit=limit,
-                    days=days,
-                    status=status,
-                    severity=severity,
-                    category=category,
-                    confidence=confidence,
-                    high_signal_only=high_signal_only,
-                    min_confidence=min_confidence,
-                    finding_action_error=str(exc.detail),
-                ),
-                status_code=exc.status_code,
-            )
-
     return app
 
 
-def serve_api(database_url: str, host: str = "127.0.0.1", port: int = 8000) -> None:
-    uvicorn.run(create_app(database_url), host=host, port=port, log_level="info")
+def serve_api(database_url: str, host: str = "127.0.0.1", port: int = 8000, *, unsafe_allow_unauthenticated_network: bool = False) -> None:
+    from orgscan.services.server_safety import validate_bind
+    app = create_app(database_url)
+    validate_bind(host, authenticated=app.state.auth_service.enabled(),
+                  unsafe_override=unsafe_allow_unauthenticated_network)
+    uvicorn.run(app, host=host, port=port, log_level="info")

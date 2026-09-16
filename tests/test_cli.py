@@ -30,12 +30,12 @@ def test_cli_init_db_and_status(monkeypatch, tmp_path: Path) -> None:
     init_result = runner.invoke(app, ["init-db"])
     assert init_result.exit_code == 0
     assert "Initialized database" in init_result.stdout
-    assert "schema_revision: 20260909_0005" in init_result.stdout
+    assert "schema_revision: 20260916_0016" in init_result.stdout
 
     status_result = runner.invoke(app, ["status"])
     assert status_result.exit_code == 0
     assert f"database_url: {database_url}" in status_result.stdout
-    assert "schema_revision: 20260909_0005" in status_result.stdout
+    assert "schema_revision: 20260916_0016" in status_result.stdout
     assert "organizations: 0" in status_result.stdout
 
     setup_result = runner.invoke(app, ["setup", "--verify-only"])
@@ -647,38 +647,17 @@ def test_cli_paid_domain_discovery_and_enriched_aggregate(monkeypatch, tmp_path:
             f"https://{domain_name}/.well-known/security.txt",
         ),
     )
-    monkeypatch.setattr(
-        "orgscan.providers.GitHubSearchDomainProvider._search_repositories",
-        lambda self, domain_name: [
-            {
-                "full_name": "example/repo",
-                "description": f"tracking {domain_name}",
-                "html_url": "https://github.com/example/repo",
-                "owner": {"login": "example"},
-            }
-        ],
-    )
-    monkeypatch.setattr(
-        "orgscan.providers.GitHubSearchDomainProvider._search_code",
-        lambda self, domain_name: [
-            {
-                "path": "docs/ops.md",
-                "html_url": "https://github.com/example/repo/blob/main/docs/ops.md",
-                "repository": {"full_name": "example/repo", "owner": {"login": "example"}},
-            }
-        ],
-    )
-    monkeypatch.setattr(
-        "orgscan.providers.GitHubSearchDomainProvider._search_issues",
-        lambda self, domain_name: [
-            {
-                "title": f"Rotate secrets for {domain_name}",
-                "state": "open",
-                "html_url": "https://github.com/example/repo/issues/1",
-                "user": {"login": "analyst"},
-            }
-        ],
-    )
+    def github_search_page(self, path, **kwargs):
+        if path.startswith("/search/repositories?"):
+            items = [{"full_name": "example/repo", "private": False, "html_url": "https://github.com/example/repo", "owner": {"login": "example"}}]
+        elif path.startswith("/search/code?"):
+            items = [{"path": "docs/ops.md", "html_url": "https://github.com/example/repo/blob/main/docs/ops.md",
+                      "repository": {"full_name": "example/repo", "private": False, "owner": {"login": "example"}}}]
+        else:
+            items = [{"number": 1, "html_url": "https://github.com/example/repo/issues/1", "user": {"login": "analyst"},
+                      "repository": {"full_name": "example/repo", "private": False}}]
+        return {"items": items}
+    monkeypatch.setattr("orgscan.providers.GitHubSearchDomainProvider._github_request_json", github_search_page)
     monkeypatch.setattr(
         "orgscan.providers.HaveIBeenPwnedDomainProvider._fetch_breaches",
         lambda self: [{"Name": "ExampleBreach", "Title": "Example Breach", "Domain": "example.org", "BreachDate": "2024-01-01"}],
@@ -696,11 +675,13 @@ def test_cli_paid_domain_discovery_and_enriched_aggregate(monkeypatch, tmp_path:
     assert securitytxt_result.exit_code == 0
     assert "security.txt contact for example.org: mailto:security@example.org" in securitytxt_result.stdout
 
+    monkeypatch.setenv("ORGSCAN_GITHUB_TOKEN", "fake-test-token")
+    get_settings.cache_clear()
     github_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "github-search", "--json"])
     assert github_result.exit_code == 0
     assert "GitHub repository mentions example.org: example/repo" in github_result.stdout
     assert "GitHub code search match for example.org: example/repo:docs/ops.md" in github_result.stdout
-    assert "GitHub issue mentions example.org: Rotate secrets for example.org state=open" in github_result.stdout
+    assert "GitHub issue mentions example.org: example/repo#1" in github_result.stdout
 
     hibp_result = runner.invoke(app, ["discover", "domain", "example.org", "--provider", "hibp", "--json"])
     assert hibp_result.exit_code == 0
@@ -782,6 +763,11 @@ def test_cli_expand_schedule_and_jobs(monkeypatch, tmp_path: Path) -> None:
             )
         ],
     )
+    monkeypatch.setattr(
+        "orgscan.cli.GitHubDiscoveryClient.fetch_repository",
+        lambda self, full_name: GitHubRepositoryRecord(full_name, f"https://github.com/{full_name}", "main", False, "example", "Organization"),
+    )
+    monkeypatch.setattr("orgscan.cli.GitHubDiscoveryClient.fetch_repository_commits", lambda *a, **k: [])
     get_settings.cache_clear()
 
     expand_result = runner.invoke(app, ["expand", "repository", "example/example-repo", "--json"])
@@ -876,6 +862,7 @@ def test_cli_mirror_scan_and_schedule_with_refs(monkeypatch, tmp_path: Path) -> 
 
 
 def test_cli_scan_reports_missing_external_scanner(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("orgscan.scanners.external.shutil.which", lambda command: None)
     database_url = f"sqlite:///{tmp_path / 'missing-scanner.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
     monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
@@ -897,6 +884,7 @@ def test_cli_scan_reports_missing_external_scanner(monkeypatch, tmp_path: Path) 
 
 
 def test_cli_scan_reports_missing_semgrep(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("orgscan.scanners.external.shutil.which", lambda command: None)
     database_url = f"sqlite:///{tmp_path / 'missing-semgrep.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
     monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))
@@ -913,6 +901,7 @@ def test_cli_scan_reports_missing_semgrep(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_cli_scan_reports_missing_detect_secrets(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("orgscan.scanners.external.shutil.which", lambda command: None)
     database_url = f"sqlite:///{tmp_path / 'missing-detect-secrets.db'}"
     monkeypatch.setenv("ORGSCAN_DATABASE_URL", database_url)
     monkeypatch.setenv("ORGSCAN_DATA_DIR", str(tmp_path / "data"))

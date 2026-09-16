@@ -21,7 +21,7 @@ def test_gitleaks_parser_redacts_match_values() -> None:
     )
 
     assert len(matches) == 1
-    assert matches[0].indicator.startswith("exam...")
+    assert matches[0].indicator == "<redacted>"
     assert "example-not-real-secret-value" not in matches[0].snippet
 
 

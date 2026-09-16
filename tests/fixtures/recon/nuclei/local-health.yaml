@@ -1,0 +1,15 @@
+id: orgscan-local-health
+info:
+  name: ORGSCAN local certification marker
+  author: orgscan
+  severity: info
+  description: Harmless match against the disposable ORGSCAN HTTP lab.
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/health"
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "ORGSCAN_LOCAL_CERTIFICATION"

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import re
+from fnmatch import fnmatchcase
+from orgscan.scanners.files import iter_files, read_text
+from dataclasses import replace
 from pathlib import Path
 
+from orgscan import __version__
 from orgscan.models import ConfidenceLevel, SeverityLevel
-from orgscan.scanners.base import ScanMatch
+from orgscan.scanners.base import ScanMatch, ScannerMetadata
 
 CODEOWNERS_LOCATIONS = (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")
 SECURITY_POLICY_LOCATIONS = (".github/SECURITY.md", "SECURITY.md", "docs/SECURITY.md")
@@ -29,6 +33,12 @@ RUNS_ON_LINE = re.compile(r"^\s*runs-on\s*:\s*(.+?)\s*$")
 class RepositoryGovernanceScanner:
     name = "repo-governance"
     source_class = "internal"
+    metadata = ScannerMetadata(
+        scanner_id=name,
+        display_name="Repository governance",
+        kind="builtin",
+        version=__version__,
+    )
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
         root = target if target.is_dir() else target.parent
@@ -44,7 +54,8 @@ class RepositoryGovernanceScanner:
         matches.extend(self._check_broad_write_permissions(root))
         matches.extend(self._check_missing_workflow_permissions(root))
         matches.extend(self._check_self_hosted_runners(root))
-        return matches
+        # These observations need rule/location metadata, not workflow source lines.
+        return [replace(match, snippet="<redacted:governance>") for match in matches]
 
     def _check_codeowners(self, root: Path) -> list[ScanMatch]:
         if any((root / location).exists() for location in CODEOWNERS_LOCATIONS):
@@ -180,11 +191,11 @@ class RepositoryGovernanceScanner:
 
     def _check_unpinned_actions(self, root: Path) -> list[ScanMatch]:
         matches: list[ScanMatch] = []
-        workflow_files = sorted({path for glob in WORKFLOW_GLOBS for path in root.glob(glob)})
+        workflow_files = [path for path in iter_files(root) if any(fnmatchcase(path.relative_to(root).as_posix(), pattern) for pattern in WORKFLOW_GLOBS)]
         for workflow_file in workflow_files:
             try:
-                lines = workflow_file.read_text(encoding="utf-8").splitlines()
-            except UnicodeDecodeError:
+                lines = read_text(workflow_file, root).splitlines()
+            except (OSError, UnicodeError):
                 continue
             for index, line in enumerate(lines, start=1):
                 matched = USES_LINE.match(line)
@@ -216,11 +227,11 @@ class RepositoryGovernanceScanner:
 
     def _check_pull_request_target(self, root: Path) -> list[ScanMatch]:
         matches: list[ScanMatch] = []
-        workflow_files = sorted({path for glob in WORKFLOW_GLOBS for path in root.glob(glob)})
+        workflow_files = [path for path in iter_files(root) if any(fnmatchcase(path.relative_to(root).as_posix(), pattern) for pattern in WORKFLOW_GLOBS)]
         for workflow_file in workflow_files:
             try:
-                lines = workflow_file.read_text(encoding="utf-8").splitlines()
-            except UnicodeDecodeError:
+                lines = read_text(workflow_file, root).splitlines()
+            except (OSError, UnicodeError):
                 continue
             for index, line in enumerate(lines, start=1):
                 if not PULL_REQUEST_TARGET_LINE.match(line):
@@ -246,11 +257,11 @@ class RepositoryGovernanceScanner:
 
     def _check_broad_write_permissions(self, root: Path) -> list[ScanMatch]:
         matches: list[ScanMatch] = []
-        workflow_files = sorted({path for glob in WORKFLOW_GLOBS for path in root.glob(glob)})
+        workflow_files = [path for path in iter_files(root) if any(fnmatchcase(path.relative_to(root).as_posix(), pattern) for pattern in WORKFLOW_GLOBS)]
         for workflow_file in workflow_files:
             try:
-                lines = workflow_file.read_text(encoding="utf-8").splitlines()
-            except UnicodeDecodeError:
+                lines = read_text(workflow_file, root).splitlines()
+            except (OSError, UnicodeError):
                 continue
             in_permissions_block = False
             for index, line in enumerate(lines, start=1):
@@ -305,11 +316,11 @@ class RepositoryGovernanceScanner:
 
     def _check_missing_workflow_permissions(self, root: Path) -> list[ScanMatch]:
         matches: list[ScanMatch] = []
-        workflow_files = sorted({path for glob in WORKFLOW_GLOBS for path in root.glob(glob)})
+        workflow_files = [path for path in iter_files(root) if any(fnmatchcase(path.relative_to(root).as_posix(), pattern) for pattern in WORKFLOW_GLOBS)]
         for workflow_file in workflow_files:
             try:
-                lines = workflow_file.read_text(encoding="utf-8").splitlines()
-            except UnicodeDecodeError:
+                lines = read_text(workflow_file, root).splitlines()
+            except (OSError, UnicodeError):
                 continue
             if any(PERMISSIONS_BLOCK_LINE.match(line) for line in lines):
                 continue
@@ -334,11 +345,11 @@ class RepositoryGovernanceScanner:
 
     def _check_self_hosted_runners(self, root: Path) -> list[ScanMatch]:
         matches: list[ScanMatch] = []
-        workflow_files = sorted({path for glob in WORKFLOW_GLOBS for path in root.glob(glob)})
+        workflow_files = [path for path in iter_files(root) if any(fnmatchcase(path.relative_to(root).as_posix(), pattern) for pattern in WORKFLOW_GLOBS)]
         for workflow_file in workflow_files:
             try:
-                lines = workflow_file.read_text(encoding="utf-8").splitlines()
-            except UnicodeDecodeError:
+                lines = read_text(workflow_file, root).splitlines()
+            except (OSError, UnicodeError):
                 continue
             for index, line in enumerate(lines, start=1):
                 matched = RUNS_ON_LINE.match(line)

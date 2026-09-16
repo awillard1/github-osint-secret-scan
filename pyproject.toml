@@ -11,14 +11,16 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "awillard1" }]
 dependencies = [
+  "cryptography>=46,<47",
   "alembic>=1.19.2,<2",
   "dnspython>=2.7,<3",
   "fastapi>=0.116,<1",
   "pydantic>=2.8,<3",
   "pydantic-settings>=2.4,<3",
+  "PyYAML>=6,<7",
   "python-multipart>=0.0.32,<1",
   "reportlab>=5.0.1,<6",
-  "python-multipart>=0.0.32,<1",
+  "regex>=2024.7.24,<2027",
   "redis>=6.4,<7",
   "rq>=2.6,<3",
   "SQLAlchemy>=2.0.34,<3",
@@ -31,6 +33,10 @@ dev = [
   "fakeredis>=2.31,<3",
   "httpx>=0.28,<1",
   "pytest>=8.3,<9",
+  "jsonschema>=4.23,<5",
+  "pypdf>=6,<7",
+  "build>=1.2,<2",
+  "hatchling>=1.25",
 ]
 
 [project.scripts]
@@ -43,3 +49,7 @@ pythonpath = ["src"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/orgscan"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"migrations" = "orgscan/_migrations"
+"alembic.ini" = "orgscan/alembic.ini"

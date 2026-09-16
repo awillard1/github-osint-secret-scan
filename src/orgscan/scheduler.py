@@ -5,10 +5,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from orgscan.config import Settings
-from orgscan.mirroring import scan_repository_mirror_refs
 from orgscan.repositories import Storage
-from orgscan.reporting import build_summary, deliver_report_webhook, finding_rows, scheduled_report_output_path, write_export
-from orgscan.runner import ScanExecutionResult, execute_scan
+from orgscan.reporting import deliver_report_webhook, scheduled_report_output_path, write_export
+from orgscan.runner import ScanExecutionResult
 
 
 def next_run_from_cadence(cadence: str, reference: datetime | None = None) -> datetime:
@@ -32,34 +31,28 @@ class ScheduledReportExecutionResult:
 
 
 def execute_scheduled_scan(storage: Storage, scheduled, *, settings: Settings | None = None) -> list[ScanExecutionResult]:
+    from orgscan.services.scan_plan import ScanPlan, resolve_scan_plan
+    from orgscan.services.scan_service import execute_plan
     metadata = scheduled.metadata_json or {}
-    organization_id = metadata.get("organization_id")
-    repository_id = metadata.get("repository_id")
-    if scheduled.target_type == "mirror":
-        return scan_repository_mirror_refs(
-            storage,
-            settings=settings or Settings(),
-            repository_full_name=scheduled.target_value,
-            scanner_name=scheduled.scanner_name,
-            refs=[str(value) for value in metadata.get("refs", [])] if isinstance(metadata.get("refs"), list) else None,
-            provider=str(metadata.get("provider") or "github"),
-            clone_url=metadata.get("clone_url"),
-            resync=bool(metadata.get("resync_before_run", True)),
-        )
-    return [
-        execute_scan(
-            storage,
-            target_path=Path(scheduled.target_value),
-            scanner_name=scheduled.scanner_name,
-            settings=settings,
-            organization_id=int(organization_id) if organization_id is not None else None,
-            repository_id=int(repository_id) if repository_id is not None else None,
-            target_type=scheduled.target_type,
-            target_id=scheduled.target_value,
-            target_ref=str(metadata.get("target_ref") or "workspace"),
-            scope_json={"mode": scheduled.target_type, **(metadata.get("scope_json") or {})},
-        )
-    ]
+    if metadata.get('assessment_action'):
+        from orgscan.services.assessments.jobs import execute_assessment_task
+        return execute_assessment_task(storage, scheduled, settings or Settings())
+    if metadata.get("scan_plan"):
+        plan = ScanPlan.model_validate(metadata["scan_plan"])
+    else:
+        plan = resolve_scan_plan(target=scheduled.target_value, target_type=scheduled.target_type,
+                                 scanners=None if scheduled.target_type == "domain" else [scheduled.scanner_name],
+                                 discovery_provider=scheduled.scanner_name if scheduled.target_type == "domain" else None,
+                                 tenant_key=metadata.get("tenant_key"), domain_id=metadata.get("domain_id"), settings=settings,
+                                 refs=metadata.get("refs"), organization_id=metadata.get("organization_id"),
+                                 repository_id=metadata.get("repository_id"), scope=metadata.get("scope_json") or {})
+    execution = {}
+    if plan.target_type == "mirror":
+        execution = dict(provider=str(metadata.get("provider") or "github"), clone_url=metadata.get("clone_url"),
+                         resync=bool(metadata.get("resync_before_run", True)))
+    else:
+        execution = dict(target_ref=str(metadata.get("target_ref") or "workspace")) if plan.target_type != "domain" else {}
+    return execute_plan(storage, plan, settings=settings, **execution)
 
 
 def run_due_scans(storage: Storage, limit: int = 10, *, settings: Settings | None = None) -> list[ScanExecutionResult]:
@@ -81,8 +74,9 @@ def run_due_reports(storage: Storage, limit: int = 10, *, settings: Settings) ->
     due_reports = storage.list_due_scheduled_reports()[:limit]
     for scheduled in due_reports:
         tenant_keys = [scheduled.target_value] if scheduled.target_type == "tenant" and scheduled.target_value else None
-        summary = build_summary(storage, tenant_keys=tenant_keys)
-        rows = finding_rows(storage, limit=500, tenant_keys=tenant_keys)
+        from orgscan.services.report_service import query_report
+        payload = query_report(storage, limit=500, tenant_keys=tenant_keys)
+        summary, rows = payload["summary"], payload["findings"]
         output_path = scheduled_report_output_path(
             settings,
             schedule_id=scheduled.id,
@@ -101,6 +95,7 @@ def run_due_reports(storage: Storage, limit: int = 10, *, settings: Settings) ->
         storage.session.commit()
         delivered = False
         metadata = dict(scheduled.metadata_json or {})
+        metadata["job_type"] = "REPORT"
         try:
             write_export(output_path, scheduled.output_format, summary, rows)
             if scheduled.webhook_url:
@@ -146,16 +141,19 @@ def run_due_reports(storage: Storage, limit: int = 10, *, settings: Settings) ->
                 )
             )
         except Exception as exc:
+            from orgscan.redaction import safe_error
+            message = safe_error(exc)
+            storage.session.rollback()
             metadata.update(
                 {
                     "last_output_path": str(output_path),
                     "last_delivery_status": "failed",
-                    "last_error": str(exc),
+                    "last_error": message,
                     "last_run_at": datetime.now(UTC).isoformat(),
                 }
             )
             scheduled.metadata_json = metadata
-            storage.mark_tool_run_failed(tool_run, stderr_log=str(exc))
+            storage.mark_tool_run_failed(tool_run, stderr_log=message)
             storage.session.commit()
-            raise
+            raise RuntimeError(message) from None
     return results

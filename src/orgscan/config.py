@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,17 +14,48 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     app_name: str = "orgscan"
     app_env: str = "development"
+    auto_migrate: bool = True  # Development bootstrap only; never honored in production.
+    preserve_secrets: bool = False
+    report_context_max_rows: int = Field(default=1000, ge=1, le=100000)
+    finding_context_max_rows: int = Field(default=2000, ge=1, le=100000)
+    projection_context_max_rows: int = Field(default=2000, ge=1, le=100000)
+    github_connection_credentials_json: str = '{}'
+    assessment_import_max_bytes: int = Field(default=1_000_000, ge=1024, le=10_000_000)
+    assessment_import_max_rows: int = Field(default=5000, ge=1, le=100000)
+    assessment_allow_local_paths: bool = False
+    assessment_discovery_max_pages: int = Field(default=20, ge=1, le=1000)
+    ai_enabled: bool = False
+    ai_provider: str = 'ollama'
+    ollama_base_url: str = 'http://127.0.0.1:11434'
+    ollama_model: str = ''
+    ai_timeout_seconds: int = Field(default=30, ge=1, le=300)
+    ai_max_input_chars: int = Field(default=24000, ge=1000, le=100000)
+    ai_max_output_tokens: int = Field(default=1000, ge=1, le=8192)
+    ai_max_output_chars: int = Field(default=16000, ge=100, le=100000)
+    ai_max_entities: int = Field(default=50, ge=1, le=100)
+    ai_allow_source_code: bool = False
+    ai_allow_finding_context: bool = True
+    ai_allow_protected_secrets: bool = False
+    secret_encryption_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
+    secret_encryption_key_id: str = Field(default='v1', pattern=r'^[A-Za-z0-9_.-]{1,64}$')
     log_level: str = "INFO"
     data_dir: Path = Field(default_factory=lambda: Path("./data"))
     database_url: str = "sqlite:///./data/orgscan.db"
+    api_auth_required: bool = False
+    browser_cookie_secure: bool = False
+    browser_session_seconds: int = Field(default=28800, ge=60, le=86400)
     github_api_base_url: str = "https://api.github.com"
     crtsh_base_url: str = "https://crt.sh"
     github_token: str | None = None
-    http_timeout_seconds: int = 15
+    http_timeout_seconds: int = Field(default=15, gt=0)
+    http_response_max_bytes: int = Field(default=2_000_000, gt=0, le=100_000_000)
+    git_output_max_bytes: int = Field(default=8_000_000, gt=0, le=100_000_000)
+    repository_max_bytes: int = Field(default=1_000_000_000, gt=0)
     outbound_requests_per_minute: int = 0
     outbound_min_interval_seconds: float = 0.0
     rate_limit_backend: str = "db"
@@ -47,18 +78,72 @@ class Settings(BaseSettings):
     intelligencex_base_url: str = "https://2.intelx.io"
     intelligencex_api_key: str | None = None
     gitleaks_binary: str = "gitleaks"
+    git_timeout_seconds: float = Field(default=300, gt=0, allow_inf_nan=False)
+    scanner_timeout_seconds: float = Field(default=300, gt=0, allow_inf_nan=False)
     detect_secrets_binary: str = "detect-secrets"
     semgrep_binary: str = "semgrep"
+    semgrep_rules_path: str | None = None
+    semgrep_metrics: bool = False
     trufflehog_binary: str = "trufflehog"
     yara_binary: str = "yara"
     yara_rules_path: str | None = None
     rg_binary: str = "rg"
+    heuristic_rules_path: str | None = None
+    heuristic_match_timeout_seconds: float = Field(default=0.05, gt=0, le=5, allow_inf_nan=False)
     heuristic_terms: str = ""
     internal_hostname_suffixes: str = "corp,internal,local,lan"
     git_history_max_commits: int = 250
     subfinder_binary: str = "subfinder"
     httpx_binary: str = "httpx"
     whois_binary: str = "whois"
+    dnsx_binary: str = "dnsx"
+    naabu_binary: str = "naabu"
+    katana_binary: str = "katana"
+    nuclei_binary: str = "nuclei"
+    amass_binary: str = "amass"
+    gau_binary: str = "gau"
+    recon_tools_dir: Path | None = None
+    recon_go_binary: str = "go"
+    recon_install_timeout_seconds: int = Field(default=900, ge=1, le=3600)
+    recon_tool_timeout_seconds: int = Field(default=180, ge=1, le=3600)
+    recon_pipeline_timeout_seconds: int = Field(default=900, ge=1, le=86400)
+    recon_max_output_bytes: int = Field(default=2_000_000, ge=1024, le=16_000_000)
+    recon_max_domains: int = Field(default=1000, ge=1, le=100000)
+    recon_max_hosts: int = Field(default=1000, ge=1, le=100000)
+    recon_max_urls: int = Field(default=2000, ge=1, le=100000)
+    recon_max_endpoints: int = Field(default=2000, ge=1, le=100000)
+    recon_max_concurrent_jobs: int = Field(default=2, ge=1, le=32)
+    nuclei_templates_path: str | None = None
+    subfinder_provider_config: str | None = None
+    subfinder_sources: list[str] = Field(default_factory=list, max_length=20)
+    recon_resolvers: list[str] = Field(default_factory=list, max_length=10)
+    recon_http_ports: list[int] = Field(default_factory=list, max_length=20)
+
+    @field_validator('recon_http_ports')
+    @classmethod
+    def valid_recon_ports(cls, values):
+        if any(port < 1 or port > 65535 for port in values):
+            raise ValueError('Recon HTTP ports must be between 1 and 65535')
+        return list(dict.fromkeys(values))
+
+    @field_validator('recon_resolvers')
+    @classmethod
+    def valid_recon_resolvers(cls, values):
+        import ipaddress
+        for value in values:
+            host, separator, port = value.partition(':')
+            ipaddress.IPv4Address(host)
+            if separator and (not port.isdecimal() or not 1 <= int(port) <= 65535):
+                raise ValueError('Resolver must be an IPv4 address with an optional port')
+        return list(dict.fromkeys(values))
+
+    @field_validator('subfinder_sources')
+    @classmethod
+    def valid_subfinder_sources(cls, values):
+        import re
+        if any(not re.fullmatch(r'[a-z][a-z0-9]{0,39}', value) for value in values):
+            raise ValueError('Subfinder sources must be individual source identifiers')
+        return list(dict.fromkeys(values))
 
     def ensure_data_dir(self) -> Path:
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -81,6 +166,9 @@ class Settings(BaseSettings):
             ):
                 if payload.get(secret_field):
                     payload[secret_field] = "<redacted>"
+        if not include_secrets:
+            from orgscan.redaction import redact
+            payload = redact(payload, secrets_from={**self.model_dump(), 'secret': self.secret_encryption_key.get_secret_value() if self.secret_encryption_key else None})
         return payload
 
     def heuristic_term_list(self) -> list[str]:
@@ -103,6 +191,9 @@ def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
         "ORGSCAN_CRTSH_BASE_URL": "https://crt.sh",
         "ORGSCAN_GITHUB_TOKEN": "",
         "ORGSCAN_HTTP_TIMEOUT_SECONDS": 15,
+        "ORGSCAN_HTTP_RESPONSE_MAX_BYTES": 2_000_000,
+        "ORGSCAN_GIT_OUTPUT_MAX_BYTES": 8_000_000,
+        "ORGSCAN_REPOSITORY_MAX_BYTES": 1_000_000_000,
         "ORGSCAN_OUTBOUND_REQUESTS_PER_MINUTE": 0,
         "ORGSCAN_OUTBOUND_MIN_INTERVAL_SECONDS": 0,
         "ORGSCAN_RATE_LIMIT_BACKEND": "db",
@@ -116,7 +207,10 @@ def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
         "ORGSCAN_SCAN_QUEUE_LEASE_SECONDS": 300,
         "ORGSCAN_SCAN_QUEUE_POLL_INTERVAL_SECONDS": 5,
         "ORGSCAN_SCAN_QUEUE_WORKER_ID": "",
-        'ORGSCAN_API_TOKENS_JSON': '[{"name":"viewer","token":"change-me","role":"reader","tenants":["*"]}]',
+        "ORGSCAN_API_AUTH_REQUIRED": False,
+        "ORGSCAN_BROWSER_COOKIE_SECURE": False,
+        "ORGSCAN_BROWSER_SESSION_SECONDS": 28800,
+        "ORGSCAN_API_TOKENS_JSON": "",
         "ORGSCAN_HIBP_BASE_URL": "https://haveibeenpwned.com/api/v3",
         "ORGSCAN_HIBP_API_KEY": "",
         "ORGSCAN_DEHASHED_BASE_URL": "https://api.dehashed.com/search",
@@ -125,8 +219,14 @@ def render_env_template(overrides: Mapping[str, object] | None = None) -> str:
         "ORGSCAN_INTELLIGENCEX_BASE_URL": "https://2.intelx.io",
         "ORGSCAN_INTELLIGENCEX_API_KEY": "",
         "ORGSCAN_GITLEAKS_BINARY": "gitleaks",
+        "ORGSCAN_SCANNER_TIMEOUT_SECONDS": 300,
+        "ORGSCAN_GIT_TIMEOUT_SECONDS": 300,
+        "ORGSCAN_HEURISTIC_RULES_PATH": "",
+        "ORGSCAN_HEURISTIC_MATCH_TIMEOUT_SECONDS": 0.05,
         "ORGSCAN_DETECT_SECRETS_BINARY": "detect-secrets",
         "ORGSCAN_SEMGREP_BINARY": "semgrep",
+        "ORGSCAN_SEMGREP_RULES_PATH": "",
+        "ORGSCAN_SEMGREP_METRICS": False,
         "ORGSCAN_TRUFFLEHOG_BINARY": "trufflehog",
         "ORGSCAN_YARA_BINARY": "yara",
         "ORGSCAN_YARA_RULES_PATH": "",

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 from importlib.metadata import entry_points
-from inspect import Parameter, signature
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,6 +14,8 @@ from orgscan.scanners.git_history import GitHistoryPatternScanner
 from orgscan.scanners.ripgrep_heuristics import RipgrepHeuristicScanner
 from orgscan.scanners.repo_governance import RepositoryGovernanceScanner
 from orgscan.scanners.yara_scanner import YaraScanner
+from orgscan.scanners.heuristic_rules import HeuristicRuleScanner
+from orgscan.scanners.registry import DuplicateScannerError, ScannerRegistry, scanner_id_for, supports_settings
 
 if TYPE_CHECKING:
     from orgscan.config import Settings
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 SCANNER_ENTRY_POINT_GROUP = "orgscan.scanners"
 
 ScannerClass = type[Any]
+_plugin_load_warnings: list[str] = []
 
 BUILTIN_SCANNERS: dict[str, ScannerClass] = {
     CustomPatternScanner.name: CustomPatternScanner,
@@ -33,62 +35,61 @@ BUILTIN_SCANNERS: dict[str, ScannerClass] = {
     SemgrepScanner.name: SemgrepScanner,
     TruffleHogScanner.name: TruffleHogScanner,
     YaraScanner.name: YaraScanner,
+    HeuristicRuleScanner.name: HeuristicRuleScanner,
 }
 
 
 @lru_cache(maxsize=1)
 def _plugin_scanner_classes() -> dict[str, ScannerClass]:
     discovered: dict[str, ScannerClass] = {}
-    for candidate in entry_points(group=SCANNER_ENTRY_POINT_GROUP):
+    _plugin_load_warnings.clear()
+    for candidate in sorted(entry_points(group=SCANNER_ENTRY_POINT_GROUP), key=lambda item: (item.name, item.value)):
         try:
             scanner_class = candidate.load()
         except Exception:
+            _plugin_load_warnings.append(f"Could not load scanner entry point: {candidate.name}")
             continue
-        name = getattr(scanner_class, "name", candidate.name)
-        if isinstance(name, str) and name:
-            discovered[name] = scanner_class
+        name = scanner_id_for(scanner_class, candidate.name)
+        if name in discovered:
+            raise DuplicateScannerError(f"Duplicate scanner ID: {name}")
+        discovered[name] = scanner_class
     return discovered
 
 
 def _scanner_registry() -> dict[str, ScannerClass]:
-    registry = dict(_plugin_scanner_classes())
-    registry.update(BUILTIN_SCANNERS)
+    registry = get_registry()
+    return {name: registry.get_class(name) for name in registry.names()}
+
+
+def get_registry() -> ScannerRegistry:
+    registry = ScannerRegistry()
+    for name, scanner_class in BUILTIN_SCANNERS.items():
+        registry.register(scanner_class, scanner_id=name)
+    for name, scanner_class in _plugin_scanner_classes().items():
+        registry.register(scanner_class, scanner_id=name)
+    registry.warnings = tuple(_plugin_load_warnings)
     return registry
 
 
 def available_scanner_names() -> list[str]:
-    return sorted(_scanner_registry())
+    return get_registry().names()
 
 
 def get_scanner_class(name: str) -> ScannerClass:
-    try:
-        return _scanner_registry()[name]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported scanner: {name}") from exc
+    return get_registry().get_class(name)
 
 
 def _scanner_supports_settings(scanner_class: ScannerClass) -> bool:
-    try:
-        params = signature(scanner_class).parameters.values()
-    except (TypeError, ValueError):
-        return False
-    return any(parameter.name == "settings" or parameter.kind == Parameter.VAR_KEYWORD for parameter in params)
+    return supports_settings(scanner_class)
 
 
 def get_scanner(name: str, *, settings: Settings | None = None) -> Any:
-    scanner_class = get_scanner_class(name)
-    if settings is not None and _scanner_supports_settings(scanner_class):
-        return scanner_class(settings=settings)
-    return scanner_class()
+    """Compatibility factory; new callers use get_registry().get()."""
+    return get_registry().create_legacy(name, settings=settings)
 
 
 def load_report(scanner_name: str, report_path: Path) -> tuple[str, list[ScanMatch]]:
-    scanner_class = get_scanner_class(scanner_name)
-    report_loader = getattr(scanner_class, "load_report", None)
-    if not callable(report_loader):
-        raise ValueError(f"Scanner does not support report ingestion: {scanner_name}")
-    source_class = str(getattr(scanner_class, "source_class", "internal"))
-    return source_class, report_loader(report_path)
+    return get_registry().load_report(scanner_name, report_path)
 
 
 __all__ = [
@@ -106,4 +107,7 @@ __all__ = [
     "get_scanner",
     "get_scanner_class",
     "load_report",
+    "get_registry",
+    "ScannerRegistry",
+    "DuplicateScannerError",
 ]

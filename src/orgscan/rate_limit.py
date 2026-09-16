@@ -10,7 +10,7 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 
 from orgscan.config import Settings
-from orgscan.db import create_session_factory, init_db
+from orgscan.db import prepare_database, create_session_factory
 from orgscan.repositories import Storage
 
 _LOCK = threading.Lock()
@@ -70,7 +70,7 @@ def resolve_rate_limit_policy(settings: Settings | None, scope: str) -> RateLimi
 
 
 def list_rate_limit_states(settings: Settings) -> list[dict[str, object]]:
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         rows = Storage(session).list_rate_limit_states(limit=None)
@@ -105,7 +105,7 @@ def _wait_for_rate_limit_db(settings: Settings | None, policy: RateLimitPolicy) 
     if settings is None:
         _wait_for_rate_limit_memory(policy.scope, policy.window_seconds)
         return
-    init_db(settings.database_url)
+    prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     sleep_cap = max(float(settings.rate_limit_poll_interval_seconds), 0.01)
 

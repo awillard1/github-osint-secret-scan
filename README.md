@@ -1,6 +1,6 @@
 # orgscan
 
-`orgscan` is the Phase 0/1 foundation plus practical slices through later phases of the OSINT Security Platform described in [`projectspec.md`](./projectspec.md). The repository roadmap is tracked in [`docs/roadmap.md`](./docs/roadmap.md), and OSS/tooling gaps are documented in [`docs/open-source-tooling-gaps.md`](./docs/open-source-tooling-gaps.md). It currently provides:
+`orgscan` implements repository scanning, public-asset intelligence, finding correlation/lifecycle, authenticated operator workflows and reporting from the OSINT Security Platform vision in [`projectspec.md`](./projectspec.md). The repository roadmap is tracked in [`docs/roadmap.md`](./docs/roadmap.md), and OSS/tooling gaps are documented in [`docs/open-source-tooling-gaps.md`](./docs/open-source-tooling-gaps.md). It currently provides:
 
 - a Python package and CLI
 - environment-based configuration loading with `.env` support
@@ -11,6 +11,14 @@
 - finding inspection, GitHub metadata discovery, local scanning, git-history scanning, governance scanning, reporting, export, dashboard generation, and dependency verification commands
 - repository expansion, scheduled scanning, execution telemetry, intuitive configuration helpers, and a live FastAPI dashboard/API
 - tests for config, validation, storage, and CLI flows
+
+## Assessment workspace
+
+Open `/dashboard/assessments` for multi-target investigations, GitHub/GHES
+connections, discovery, scope review, scan launch, findings and reports. See the
+[operator guide](docs/assessment-control-plane.md) for setup, migration 0014 and
+current limitations. [Optional local Ollama advice](docs/local-ai.md) is disabled
+by default and uses sanitized metadata only.
 
 ## Requirements
 
@@ -32,7 +40,19 @@ python scripts/bootstrap.py --verify-only
 python scripts/bootstrap.py --install-only
 ```
 
-The bootstrap helper creates `.venv`, installs the editable package with development dependencies, initializes the default SQLite database, and reports dependency status. Use `--verify-only` to print dependency status and next steps without modifying the environment, or `--install-only` to prepare the Python environment without initializing the database.
+The bootstrap helper creates `.venv`, installs the editable package with development dependencies, initializes the default SQLite database, and reports dependency status. Use `--verify-only` to print dependency status and next steps without installing packages (it still creates the configured data directory), or `--install-only` to prepare the Python environment without initializing the database.
+
+For non-creating diagnostics and release/upgrade instructions, see
+[doctor and release readiness](docs/release-readiness.md):
+
+```bash
+orgscan doctor
+orgscan doctor --json
+orgscan doctor --require-queue  # require Redis connectivity for an RQ deployment
+```
+
+Wheels include migrations and bundled rules. The installed-package smoke test is
+`pytest tests/packaging/test_installed_wheel.py` after installing development dependencies.
 
 ## Configuration
 
@@ -122,7 +142,9 @@ orgscan scan path ./path/to/scan --scanner trufflehog
 
 The built-in `git-history-patterns` scanner uses `git log --patch` to look for secrets in added and removed historical diffs, and the built-in `repo-governance` scanner checks for missing `CODEOWNERS`, missing `SECURITY.md`, and unpinned GitHub Actions references in workflow files.
 
-External scanner wrappers honor the configured `ORGSCAN_*_BINARY` settings, and additional scanners can be registered through Python entry points in the `orgscan.scanners` group.
+External scanner wrappers honor the configured `ORGSCAN_*_BINARY` settings and `ORGSCAN_SCANNER_TIMEOUT_SECONDS` (300 seconds per subprocess by default). Additional scanners register through Python entry points in the `orgscan.scanners` group; native and legacy plugins share registry-driven CLI/API readiness and artifact choices. See the [scanner contract](docs/scanner-contract.md) for integration and readiness limits.
+
+Scan commands accept `--profile` (for example `standard` or `history`); explicit `--scanner` overrides profile selection. See [scan plans](docs/scan-plans.md) for defaults, scheduled execution and JSON plans. Mirror scans additionally support opt-in `--mode incremental` and `--branch-policy`; see [incremental scans](docs/incremental-scans.md) for checkpoint and coverage semantics.
 
 You can also ingest previously saved scanner output and normalize it into the same canonical data model:
 
@@ -205,10 +227,12 @@ Key routes:
 - `/relationships/graph` relationship graph JSON
 - `/trends/findings` findings trend JSON
 
-The live `/dashboard` view now also includes an artifact upload form so analysts can submit files and archives from the browser, choose an available scanner, and immediately review the resulting scan activity.
+The live `/dashboard` starts with [operator queues](docs/operator-dashboard.md) for new/high-risk/regressed findings, active/failed scans, new assets and triage. [Reports](docs/reporting.md) include SARIF and executive/technical PDFs through CLI, authenticated downloads and scheduled exports. [Lifecycle decisions](docs/finding-lifecycle.md) retain history and recognize later-scan regressions.
+
+The live `/dashboard` view also includes an artifact upload form so analysts can submit files and archives from the browser, choose an available scanner, and immediately review the resulting scan activity.
 The dashboard also supports inline finding workflow actions for triage, suppress, accept-risk, and reopen operations without leaving the web UI, plus drill-down links for findings, scan jobs, and relationships.
 The dashboard and CLI now surface open-source tool readiness, including configured binary paths, install status, and configuration environment variables, to make external integrations easier to enable.
-The current dashboard remains local-first and does not yet enforce tenant-aware authentication on the HTML routes; use the JSON API behind your own access controls until a dedicated authenticated dashboard session flow is added.
+JSON and browser routes now enforce configured token/session authentication, roles and tenant scope. See [browser authentication](docs/browser-auth.md) for bootstrap, token login, CSRF, HTTPS cookie configuration and local development mode.
 
 Artifact upload example:
 

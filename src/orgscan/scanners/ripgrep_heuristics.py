@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from orgscan.config import Settings
+from orgscan.redaction import redact
+from orgscan.scanners.files import validate_scan_target
+from orgscan.scanners.execution import run_scanner_process
 from orgscan.models import ConfidenceLevel, SeverityLevel
-from orgscan.scanners.base import ScanMatch
+from orgscan.scanners.base import ScanMatch, ScannerMetadata
 from orgscan.scanners.external import ScannerExecutionError, _not_installed_error
 
 
@@ -29,12 +31,21 @@ class HeuristicDefinition:
 class RipgrepHeuristicScanner:
     name = "ripgrep-heuristics"
     source_class = "internal"
+    metadata = ScannerMetadata(
+        scanner_id=name,
+        display_name="ripgrep heuristics",
+        kind="external",
+        binary="rg",
+        binary_setting="rg_binary",
+        binary_env_var="ORGSCAN_RG_BINARY",
+    )
 
     def __init__(self, *, settings: Settings | None = None) -> None:
         self.settings = settings
         self.binary = settings.rg_binary if settings is not None else "rg"
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
+        target = validate_scan_target(target, external=True)
         if not shutil.which(self.binary):
             raise _not_installed_error(self.binary)
 
@@ -52,9 +63,9 @@ class RipgrepHeuristicScanner:
             ]
             if definition.fixed_strings:
                 command.insert(1, "-F")
-            completed = subprocess.run(command, check=False, capture_output=True, text=True)
+            completed = run_scanner_process(command, check=False, capture_output=True, text=True)
             if completed.returncode not in (0, 1):
-                raise ScannerExecutionError(completed.stderr.strip() or "ripgrep execution failed")
+                raise ScannerExecutionError(f"ripgrep execution failed (exit status {completed.returncode})")
             results.extend(self.parse_output(completed.stdout, definition))
         return results
 
@@ -132,6 +143,7 @@ class RipgrepHeuristicScanner:
             for submatch in submatches:
                 match_info = submatch.get("match") if isinstance(submatch, dict) else {}
                 match_text = str(match_info.get("text") or "").strip()
+                match_text = redact(match_text, secrets_from={"source_line": line})
                 results.append(
                     ScanMatch(
                         path=path,
@@ -143,7 +155,7 @@ class RipgrepHeuristicScanner:
                         severity=definition.severity,
                         confidence=definition.confidence,
                         indicator=match_text or definition.name,
-                        snippet=line,
+                        snippet="<redacted:ripgrep>",
                         remediation_hint=definition.remediation_hint,
                         raw_payload={"heuristic": definition.name, "match": match_text},
                         metadata={"path": str(path), "heuristic": definition.name},

@@ -6,6 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from orgscan.config import Settings
+from orgscan.http_limits import read_response, response_deadline, ResponseTooLarge
 from orgscan.rate_limit import wait_for_rate_limit
 
 
@@ -22,6 +23,7 @@ class GitHubRepositoryRecord:
     owner_login: str
     owner_type: str
     description: str | None = None
+    homepage: str | None = None
 
     @classmethod
     def from_api_payload(cls, payload: dict[str, object]) -> "GitHubRepositoryRecord":
@@ -36,6 +38,7 @@ class GitHubRepositoryRecord:
             owner_login=str(owner.get("login") or ""),
             owner_type=str(owner.get("type") or "User"),
             description=payload.get("description") if isinstance(payload.get("description"), str) else None,
+            homepage=payload.get("homepage") if isinstance(payload.get("homepage"), str) else None,
         )
 
 
@@ -85,6 +88,12 @@ class GitHubDiscoveryClient:
             raise DiscoveryError("Expected a list of forks from GitHub API")
         return [GitHubRepositoryRecord.from_api_payload(item) for item in payload if isinstance(item, dict)]
 
+    def fetch_repository_commits(self, full_name: str, limit: int = 20) -> list[dict]:
+        payload = self._request_json(f"/repos/{full_name}/commits?per_page={limit}")
+        if not isinstance(payload, list):
+            raise DiscoveryError("Expected a list of commits from GitHub API")
+        return [item for item in payload if isinstance(item, dict)]
+
     def _request_json(self, path: str) -> object:
         headers = {
             "Accept": "application/vnd.github+json",
@@ -96,13 +105,14 @@ class GitHubDiscoveryClient:
         request = Request(f"{self.base_url}{path}", headers=headers)
         try:
             wait_for_rate_limit(self.settings, "github-api")
+            deadline = response_deadline(self.timeout)
             with urlopen(request, timeout=self.timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
+                return json.loads(read_response(response, settings=self.settings, deadline=deadline).decode("utf-8"))
         except HTTPError as exc:
             if exc.code == 403:
                 raise DiscoveryError(
                     "GitHub API request was rate limited or forbidden; configure ORGSCAN_GITHUB_TOKEN to raise limits."
-                ) from exc
-            raise DiscoveryError(f"GitHub API request failed with status {exc.code}") from exc
-        except URLError as exc:
-            raise DiscoveryError(f"GitHub API request failed: {exc.reason}") from exc
+                ) from None
+            raise DiscoveryError(f"GitHub API request failed with status {exc.code}") from None
+        except (OSError, UnicodeError, json.JSONDecodeError, ResponseTooLarge):
+            raise DiscoveryError("GitHub API request failed: transport, size or decoding error") from None

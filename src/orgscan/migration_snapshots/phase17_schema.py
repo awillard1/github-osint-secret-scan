@@ -1,0 +1,373 @@
+"""Frozen Phase 17 baseline create_all schema. Do not update for new models."""
+import sqlalchemy as sa
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, Integer, String, Text
+metadata = sa.MetaData()
+
+sa.Table('organizations', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('name', String(length=255), primary_key=False, nullable=False),
+    sa.Column('tenant_key', String(length=255), primary_key=False, nullable=True),
+    sa.Column('display_name', String(length=255), primary_key=False, nullable=True),
+    sa.Column('github_handle', String(length=255), primary_key=False, nullable=True),
+    sa.Column('description', Text(), primary_key=False, nullable=True),
+    sa.Column('metadata_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_organizations_name', metadata.tables['organizations'].c['name'], unique=True)
+sa.Index('ix_organizations_tenant_key', metadata.tables['organizations'].c['tenant_key'], unique=False)
+sa.Table('rate_limit_states', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('scope', String(length=255), primary_key=False, nullable=False),
+    sa.Column('backend', String(length=32), primary_key=False, nullable=False),
+    sa.Column('requests_per_minute', Integer(), primary_key=False, nullable=False),
+    sa.Column('min_interval_seconds', Float(), primary_key=False, nullable=False),
+    sa.Column('window_seconds', Float(), primary_key=False, nullable=False),
+    sa.Column('request_count', Integer(), primary_key=False, nullable=False),
+    sa.Column('last_request_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('next_allowed_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('metadata_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_rate_limit_states_backend', metadata.tables['rate_limit_states'].c['backend'], unique=False)
+sa.Index('ix_rate_limit_states_next_allowed_at', metadata.tables['rate_limit_states'].c['next_allowed_at'], unique=False)
+sa.Index('ix_rate_limit_states_scope', metadata.tables['rate_limit_states'].c['scope'], unique=True)
+sa.Table('relationships', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('from_entity_type', String(length=64), primary_key=False, nullable=False),
+    sa.Column('from_entity_id', String(length=64), primary_key=False, nullable=False),
+    sa.Column('to_entity_type', String(length=64), primary_key=False, nullable=False),
+    sa.Column('to_entity_id', String(length=64), primary_key=False, nullable=False),
+    sa.Column('relation_type', String(length=64), primary_key=False, nullable=False),
+    sa.Column('confidence', String(length=32), primary_key=False, nullable=False),
+    sa.Column('source', String(length=255), primary_key=False, nullable=True),
+    sa.Column('evidence_summary', Text(), primary_key=False, nullable=True),
+    sa.Column('metadata_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.UniqueConstraint('from_entity_type', 'from_entity_id', 'to_entity_type', 'to_entity_id', 'relation_type', name='uq_relationship_edge'),
+)
+sa.Index('ix_relationships_from_entity_id', metadata.tables['relationships'].c['from_entity_id'], unique=False)
+sa.Index('ix_relationships_from_entity_type', metadata.tables['relationships'].c['from_entity_type'], unique=False)
+sa.Index('ix_relationships_relation_type', metadata.tables['relationships'].c['relation_type'], unique=False)
+sa.Index('ix_relationships_to_entity_id', metadata.tables['relationships'].c['to_entity_id'], unique=False)
+sa.Index('ix_relationships_to_entity_type', metadata.tables['relationships'].c['to_entity_type'], unique=False)
+sa.Table('scan_jobs', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('target_type', String(length=64), primary_key=False, nullable=False),
+    sa.Column('target_id', String(length=1024), primary_key=False, nullable=False),
+    sa.Column('target_ref', String(length=255), primary_key=False, nullable=True),
+    sa.Column('scanner_name', String(length=255), primary_key=False, nullable=False),
+    sa.Column('status', String(length=32), primary_key=False, nullable=False),
+    sa.Column('parameters_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('scope_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('error_message', Text(), primary_key=False, nullable=True),
+    sa.Column('started_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('completed_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_scan_jobs_target_id', metadata.tables['scan_jobs'].c['target_id'], unique=False)
+sa.Index('ix_scan_jobs_target_type', metadata.tables['scan_jobs'].c['target_type'], unique=False)
+sa.Table('scheduled_reports', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('target_type', String(length=64), primary_key=False, nullable=False),
+    sa.Column('target_value', String(length=255), primary_key=False, nullable=True),
+    sa.Column('output_format', String(length=32), primary_key=False, nullable=False),
+    sa.Column('cadence', String(length=32), primary_key=False, nullable=False),
+    sa.Column('enabled', Boolean(), primary_key=False, nullable=False),
+    sa.Column('output_path', String(length=1024), primary_key=False, nullable=True),
+    sa.Column('webhook_url', String(length=1024), primary_key=False, nullable=True),
+    sa.Column('next_run_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('last_run_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('metadata_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_scheduled_reports_target_type', metadata.tables['scheduled_reports'].c['target_type'], unique=False)
+sa.Index('ix_scheduled_reports_target_value', metadata.tables['scheduled_reports'].c['target_value'], unique=False)
+sa.Table('scheduled_scans', metadata,
+    sa.Column('queue_execution_key', String(length=64), primary_key=False, nullable=True),
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('target_type', String(length=64), primary_key=False, nullable=False),
+    sa.Column('target_value', String(length=1024), primary_key=False, nullable=False),
+    sa.Column('scanner_name', String(length=255), primary_key=False, nullable=False),
+    sa.Column('cadence', String(length=32), primary_key=False, nullable=False),
+    sa.Column('enabled', Boolean(), primary_key=False, nullable=False),
+    sa.Column('next_run_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('last_run_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('metadata_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_scheduled_scans_target_type', metadata.tables['scheduled_scans'].c['target_type'], unique=False)
+sa.Index('ix_scheduled_scans_target_value', metadata.tables['scheduled_scans'].c['target_value'], unique=False)
+sa.Table('users', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('username', String(length=255), primary_key=False, nullable=False),
+    sa.Column('email', String(length=255), primary_key=False, nullable=True),
+    sa.Column('display_name', String(length=255), primary_key=False, nullable=True),
+    sa.Column('is_active', Boolean(), primary_key=False, nullable=False),
+    sa.Column('metadata_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.UniqueConstraint('email', name=None),
+)
+sa.Index('ix_users_username', metadata.tables['users'].c['username'], unique=True)
+sa.Table('accounts', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('organization_id', Integer(), sa.ForeignKey('organizations.id'), primary_key=False, nullable=True),
+    sa.Column('username', String(length=255), primary_key=False, nullable=False),
+    sa.Column('provider', String(length=64), primary_key=False, nullable=False),
+    sa.Column('account_type', String(length=64), primary_key=False, nullable=False),
+    sa.Column('display_name', String(length=255), primary_key=False, nullable=True),
+    sa.Column('email', String(length=255), primary_key=False, nullable=True),
+    sa.Column('metadata_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_accounts_username', metadata.tables['accounts'].c['username'], unique=True)
+sa.Table('domains', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('organization_id', Integer(), sa.ForeignKey('organizations.id'), primary_key=False, nullable=True),
+    sa.Column('name', String(length=255), primary_key=False, nullable=False),
+    sa.Column('ownership_confidence', String(length=32), primary_key=False, nullable=False),
+    sa.Column('verification_status', String(length=32), primary_key=False, nullable=False),
+    sa.Column('discovered_emails', JSON(), primary_key=False, nullable=False),
+    sa.Column('discovered_subdomains', JSON(), primary_key=False, nullable=False),
+    sa.Column('discovery_sources', JSON(), primary_key=False, nullable=False),
+    sa.Column('risk_score', Float(), primary_key=False, nullable=True),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_domains_name', metadata.tables['domains'].c['name'], unique=True)
+sa.Table('queue_tasks', metadata,
+    sa.Column('execution_key', String(length=64), primary_key=False, nullable=True),
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('scheduled_scan_id', Integer(), sa.ForeignKey('scheduled_scans.id'), primary_key=False, nullable=False),
+    sa.Column('backend', String(length=32), primary_key=False, nullable=False),
+    sa.Column('queue_name', String(length=255), primary_key=False, nullable=False),
+    sa.Column('status', String(length=32), primary_key=False, nullable=False),
+    sa.Column('attempt_count', Integer(), primary_key=False, nullable=False),
+    sa.Column('max_attempts', Integer(), primary_key=False, nullable=False),
+    sa.Column('available_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('lease_owner', String(length=255), primary_key=False, nullable=True),
+    sa.Column('lease_expires_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('started_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('completed_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('result_scan_job_id', Integer(), primary_key=False, nullable=True),
+    sa.Column('result_tool_run_id', Integer(), primary_key=False, nullable=True),
+    sa.Column('last_error', Text(), primary_key=False, nullable=True),
+    sa.Column('metadata_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_queue_tasks_available_at', metadata.tables['queue_tasks'].c['available_at'], unique=False)
+sa.Index('ix_queue_tasks_backend', metadata.tables['queue_tasks'].c['backend'], unique=False)
+sa.Index('ix_queue_tasks_execution_key', metadata.tables['queue_tasks'].c['execution_key'], unique=True)
+sa.Index('ix_queue_tasks_lease_expires_at', metadata.tables['queue_tasks'].c['lease_expires_at'], unique=False)
+sa.Index('ix_queue_tasks_lease_owner', metadata.tables['queue_tasks'].c['lease_owner'], unique=False)
+sa.Index('ix_queue_tasks_scheduled_scan_id', metadata.tables['queue_tasks'].c['scheduled_scan_id'], unique=False)
+sa.Index('ix_queue_tasks_status', metadata.tables['queue_tasks'].c['status'], unique=False)
+sa.Table('tool_runs', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('scan_job_id', Integer(), sa.ForeignKey('scan_jobs.id'), primary_key=False, nullable=True),
+    sa.Column('tool_name', String(length=255), primary_key=False, nullable=False),
+    sa.Column('tool_version', String(length=64), primary_key=False, nullable=True),
+    sa.Column('target', String(length=1024), primary_key=False, nullable=False),
+    sa.Column('command_line', Text(), primary_key=False, nullable=True),
+    sa.Column('artifact_type', String(length=64), primary_key=False, nullable=True),
+    sa.Column('artifact_path', String(length=1024), primary_key=False, nullable=True),
+    sa.Column('status', String(length=32), primary_key=False, nullable=False),
+    sa.Column('stdout_log', Text(), primary_key=False, nullable=True),
+    sa.Column('stderr_log', Text(), primary_key=False, nullable=True),
+    sa.Column('started_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('completed_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_tool_runs_scan_job_id', metadata.tables['tool_runs'].c['scan_job_id'], unique=False)
+sa.Index('ix_tool_runs_tool_name', metadata.tables['tool_runs'].c['tool_name'], unique=False)
+sa.Table('user_sessions', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('user_id', Integer(), sa.ForeignKey('users.id'), primary_key=False, nullable=False),
+    sa.Column('session_name', String(length=255), primary_key=False, nullable=True),
+    sa.Column('token_hash', String(length=64), primary_key=False, nullable=False),
+    sa.Column('role', String(length=32), primary_key=False, nullable=False),
+    sa.Column('tenant_scopes_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('expires_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('revoked_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('last_used_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('metadata_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_user_sessions_token_hash', metadata.tables['user_sessions'].c['token_hash'], unique=True)
+sa.Index('ix_user_sessions_user_id', metadata.tables['user_sessions'].c['user_id'], unique=False)
+sa.Table('user_tenant_memberships', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('user_id', Integer(), sa.ForeignKey('users.id'), primary_key=False, nullable=False),
+    sa.Column('tenant_key', String(length=255), primary_key=False, nullable=False),
+    sa.Column('role', String(length=32), primary_key=False, nullable=False),
+    sa.Column('metadata_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.UniqueConstraint('user_id', 'tenant_key', name='uq_user_tenant_membership'),
+)
+sa.Index('ix_user_tenant_memberships_tenant_key', metadata.tables['user_tenant_memberships'].c['tenant_key'], unique=False)
+sa.Index('ix_user_tenant_memberships_user_id', metadata.tables['user_tenant_memberships'].c['user_id'], unique=False)
+sa.Table('domain_exposures', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('domain_id', Integer(), sa.ForeignKey('domains.id'), primary_key=False, nullable=False),
+    sa.Column('source', String(length=255), primary_key=False, nullable=False),
+    sa.Column('source_class', String(length=32), primary_key=False, nullable=False),
+    sa.Column('source_name', String(length=255), primary_key=False, nullable=False),
+    sa.Column('query_used', String(length=255), primary_key=False, nullable=True),
+    sa.Column('result_summary', Text(), primary_key=False, nullable=False),
+    sa.Column('confidence', String(length=32), primary_key=False, nullable=False),
+    sa.Column('severity', String(length=32), primary_key=False, nullable=False),
+    sa.Column('first_seen', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('last_seen', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('evidence_url', String(length=1024), primary_key=False, nullable=True),
+    sa.Column('normalized_hash', String(length=64), primary_key=False, nullable=False),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_domain_exposures_domain_id', metadata.tables['domain_exposures'].c['domain_id'], unique=False)
+sa.Index('ix_domain_exposures_normalized_hash', metadata.tables['domain_exposures'].c['normalized_hash'], unique=True)
+sa.Table('identity_correlations', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('domain_id', Integer(), sa.ForeignKey('domains.id'), primary_key=False, nullable=False),
+    sa.Column('email', String(length=255), primary_key=False, nullable=True),
+    sa.Column('username', String(length=255), primary_key=False, nullable=True),
+    sa.Column('person_reference', String(length=512), primary_key=False, nullable=True),
+    sa.Column('source', String(length=255), primary_key=False, nullable=False),
+    sa.Column('confidence', String(length=32), primary_key=False, nullable=False),
+    sa.Column('relation_type', String(length=64), primary_key=False, nullable=False),
+    sa.Column('evidence_reference', String(length=1024), primary_key=False, nullable=True),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_identity_correlations_domain_id', metadata.tables['identity_correlations'].c['domain_id'], unique=False)
+sa.Table('repositories', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('organization_id', Integer(), sa.ForeignKey('organizations.id'), primary_key=False, nullable=True),
+    sa.Column('owner_account_id', Integer(), sa.ForeignKey('accounts.id'), primary_key=False, nullable=True),
+    sa.Column('full_name', String(length=255), primary_key=False, nullable=False),
+    sa.Column('provider', String(length=64), primary_key=False, nullable=False),
+    sa.Column('url', String(length=512), primary_key=False, nullable=True),
+    sa.Column('default_branch', String(length=255), primary_key=False, nullable=True),
+    sa.Column('is_private', Boolean(), primary_key=False, nullable=False),
+    sa.Column('mirror_path', String(length=1024), primary_key=False, nullable=True),
+    sa.Column('last_mirrored_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('metadata_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_repositories_full_name', metadata.tables['repositories'].c['full_name'], unique=True)
+sa.Table('findings', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('organization_id', Integer(), sa.ForeignKey('organizations.id'), primary_key=False, nullable=True),
+    sa.Column('domain_id', Integer(), sa.ForeignKey('domains.id'), primary_key=False, nullable=True),
+    sa.Column('repository_id', Integer(), sa.ForeignKey('repositories.id'), primary_key=False, nullable=True),
+    sa.Column('account_id', Integer(), sa.ForeignKey('accounts.id'), primary_key=False, nullable=True),
+    sa.Column('scan_job_id', Integer(), sa.ForeignKey('scan_jobs.id'), primary_key=False, nullable=True),
+    sa.Column('source_tool', String(length=255), primary_key=False, nullable=False),
+    sa.Column('source_name', String(length=255), primary_key=False, nullable=False),
+    sa.Column('source_class', String(length=32), primary_key=False, nullable=False),
+    sa.Column('category', String(length=128), primary_key=False, nullable=False),
+    sa.Column('severity', String(length=32), primary_key=False, nullable=False),
+    sa.Column('confidence', String(length=32), primary_key=False, nullable=False),
+    sa.Column('title', String(length=255), primary_key=False, nullable=False),
+    sa.Column('description', Text(), primary_key=False, nullable=False),
+    sa.Column('status', String(length=32), primary_key=False, nullable=False),
+    sa.Column('lifecycle_state', String(length=32), primary_key=False, nullable=False),
+    sa.Column('remediated_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('regressed_at', DateTime(timezone=True), primary_key=False, nullable=True),
+    sa.Column('regression_count', Integer(), primary_key=False, nullable=False),
+    sa.Column('triage_state', String(length=32), primary_key=False, nullable=False),
+    sa.Column('triage_owner', String(length=255), primary_key=False, nullable=True),
+    sa.Column('triage_notes', Text(), primary_key=False, nullable=True),
+    sa.Column('remediation_due_date', Date(), primary_key=False, nullable=True),
+    sa.Column('fingerprint', String(length=64), primary_key=False, nullable=False),
+    sa.Column('normalized_hash', String(length=64), primary_key=False, nullable=False),
+    sa.Column('remediation_hint', Text(), primary_key=False, nullable=True),
+    sa.Column('risk_score', Float(), primary_key=False, nullable=True),
+    sa.Column('detected_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('first_seen_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('last_seen_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('raw_payload', JSON(), primary_key=False, nullable=False),
+    sa.Column('metadata_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_findings_category', metadata.tables['findings'].c['category'], unique=False)
+sa.Index('ix_findings_fingerprint', metadata.tables['findings'].c['fingerprint'], unique=True)
+sa.Index('ix_findings_lifecycle_state', metadata.tables['findings'].c['lifecycle_state'], unique=False)
+sa.Index('ix_findings_normalized_hash', metadata.tables['findings'].c['normalized_hash'], unique=True)
+sa.Table('evidence', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('finding_id', Integer(), sa.ForeignKey('findings.id'), primary_key=False, nullable=False),
+    sa.Column('source', String(length=255), primary_key=False, nullable=False),
+    sa.Column('source_url', String(length=1024), primary_key=False, nullable=True),
+    sa.Column('repository_path', String(length=512), primary_key=False, nullable=True),
+    sa.Column('commit_sha', String(length=128), primary_key=False, nullable=True),
+    sa.Column('ref_name', String(length=255), primary_key=False, nullable=True),
+    sa.Column('line_start', Integer(), primary_key=False, nullable=True),
+    sa.Column('line_end', Integer(), primary_key=False, nullable=True),
+    sa.Column('snippet', Text(), primary_key=False, nullable=True),
+    sa.Column('extracted_indicator', String(length=512), primary_key=False, nullable=True),
+    sa.Column('confidence', String(length=32), primary_key=False, nullable=False),
+    sa.Column('observed_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('related_entity_type', String(length=64), primary_key=False, nullable=True),
+    sa.Column('related_entity_id', String(length=64), primary_key=False, nullable=True),
+    sa.Column('source_class', String(length=32), primary_key=False, nullable=False),
+    sa.Column('query_used', String(length=255), primary_key=False, nullable=True),
+    sa.Column('observation_fingerprint', String(length=64), primary_key=False, nullable=True),
+    sa.Column('metadata_json', JSON(), primary_key=False, nullable=False),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_evidence_finding_id', metadata.tables['evidence'].c['finding_id'], unique=False)
+sa.Index('ix_evidence_observation_fingerprint', metadata.tables['evidence'].c['observation_fingerprint'], unique=True)
+sa.Table('finding_history', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('finding_id', Integer(), sa.ForeignKey('findings.id'), primary_key=False, nullable=False),
+    sa.Column('from_state', String(length=32), primary_key=False, nullable=True),
+    sa.Column('to_state', String(length=32), primary_key=False, nullable=False),
+    sa.Column('actor', String(length=255), primary_key=False, nullable=False),
+    sa.Column('reason', Text(), primary_key=False, nullable=True),
+    sa.Column('scan_job_id', Integer(), sa.ForeignKey('scan_jobs.id'), primary_key=False, nullable=True),
+    sa.Column('occurred_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('metadata_json', JSON(), primary_key=False, nullable=False),
+)
+sa.Index('ix_finding_history_finding_id', metadata.tables['finding_history'].c['finding_id'], unique=False)
+sa.Table('risk_scores', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('finding_id', Integer(), sa.ForeignKey('findings.id'), primary_key=False, nullable=True),
+    sa.Column('entity_type', String(length=64), primary_key=False, nullable=False),
+    sa.Column('entity_id', String(length=64), primary_key=False, nullable=False),
+    sa.Column('score', Float(), primary_key=False, nullable=False),
+    sa.Column('severity', String(length=32), primary_key=False, nullable=False),
+    sa.Column('confidence', String(length=32), primary_key=False, nullable=False),
+    sa.Column('rationale', Text(), primary_key=False, nullable=True),
+    sa.Column('calculated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_risk_scores_entity_id', metadata.tables['risk_scores'].c['entity_id'], unique=False)
+sa.Index('ix_risk_scores_entity_type', metadata.tables['risk_scores'].c['entity_type'], unique=False)
+sa.Index('ix_risk_scores_finding_id', metadata.tables['risk_scores'].c['finding_id'], unique=False)
+sa.Table('suppressions', metadata,
+    sa.Column('id', Integer(), primary_key=True, nullable=False),
+    sa.Column('finding_id', Integer(), sa.ForeignKey('findings.id'), primary_key=False, nullable=False),
+    sa.Column('status', String(length=32), primary_key=False, nullable=False),
+    sa.Column('reason', Text(), primary_key=False, nullable=False),
+    sa.Column('owner', String(length=255), primary_key=False, nullable=True),
+    sa.Column('deadline', Date(), primary_key=False, nullable=True),
+    sa.Column('notes', Text(), primary_key=False, nullable=True),
+    sa.Column('created_at', DateTime(timezone=True), primary_key=False, nullable=False),
+    sa.Column('updated_at', DateTime(timezone=True), primary_key=False, nullable=False),
+)
+sa.Index('ix_suppressions_finding_id', metadata.tables['suppressions'].c['finding_id'], unique=False)

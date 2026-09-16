@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+from orgscan.services.secret_evidence import capture
+
+from orgscan.redaction import sanitize_matches
+
 import json
+from hashlib import sha256
 import shutil
-import subprocess
+from orgscan import processes as subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from orgscan.config import Settings
+from orgscan.scanners.execution import run_scanner_process
+from orgscan.scanners.files import read_report, validate_scan_target
 from orgscan.models import ConfidenceLevel, SeverityLevel
-from orgscan.scanners.base import ScanMatch
+from orgscan.scanners.base import ScanMatch, ScannerMetadata, ScannerReadiness, ScannerExecutionError, not_installed_error as _not_installed_error
 
 SEMGREP_SEVERITY_MAP = {
     "critical": SeverityLevel.CRITICAL,
@@ -17,16 +24,6 @@ SEMGREP_SEVERITY_MAP = {
     "warning": SeverityLevel.MEDIUM,
     "info": SeverityLevel.LOW,
 }
-
-
-class ScannerExecutionError(RuntimeError):
-    pass
-
-
-def _not_installed_error(name: str) -> ScannerExecutionError:
-    return ScannerExecutionError(
-        f"{name} is not installed; run orgscan verify-deps and review docs/open-source-tooling-gaps.md for installation guidance."
-    )
 
 
 def _redact(value: str) -> str:
@@ -38,17 +35,27 @@ def _redact(value: str) -> str:
 
 
 def _redact_in_line(line: str, value: str, label: str) -> str:
-    return line.replace(value, f"<redacted:{label}>") if value else line
+    return f"<redacted:{label}>"
 
 
 class GitleaksScanner:
     name = "gitleaks"
     source_class = "free"
+    metadata = ScannerMetadata(
+        scanner_id=name,
+        display_name="Gitleaks",
+        kind="external",
+        description="Generic secret scanner for files and uploaded artifacts.",
+        binary="gitleaks",
+        binary_setting="gitleaks_binary",
+        binary_env_var="ORGSCAN_GITLEAKS_BINARY",
+    )
 
     def __init__(self, *, settings: Settings | None = None) -> None:
         self.binary = settings.gitleaks_binary if settings is not None else self.name
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
+        target = validate_scan_target(target, external=True)
         if not shutil.which(self.binary):
             raise _not_installed_error(self.binary)
 
@@ -56,7 +63,7 @@ class GitleaksScanner:
             report_path = Path(handle.name)
 
         try:
-            completed = subprocess.run(
+            completed = run_scanner_process(
                 [
                     self.binary,
                     "detect",
@@ -68,13 +75,14 @@ class GitleaksScanner:
                     "--report-path",
                     str(report_path),
                 ],
+                output_files=(report_path,),
                 check=False,
                 capture_output=True,
                 text=True,
             )
             if completed.returncode not in (0, 1):
-                raise ScannerExecutionError(completed.stderr.strip() or "gitleaks execution failed")
-            content = report_path.read_text(encoding="utf-8").strip() or "[]"
+                raise ScannerExecutionError(f"gitleaks execution failed (exit status {completed.returncode})")
+            content = read_report(report_path).strip() or "[]"
             return self.parse_output(json.loads(content))
         finally:
             report_path.unlink(missing_ok=True)
@@ -95,6 +103,7 @@ class GitleaksScanner:
                     description=str(item.get("Description") or "Gitleaks identified a potential secret."),
                     severity=SeverityLevel.HIGH,
                     confidence=ConfidenceLevel.LIKELY,
+                    protected_candidates=capture({'secret': match_value}),
                     indicator=_redact(match_value),
                     snippet=_redact_in_line(line, match_value, "gitleaks"),
                     remediation_hint="Rotate the exposed secret and remove it from source control.",
@@ -106,15 +115,16 @@ class GitleaksScanner:
                     metadata={
                         "path": str(item.get("File") or ""),
                         "rule_id": item.get("RuleID"),
+                        **({"secret_digest":sha256(match_value.encode()).hexdigest()} if item.get("Secret") and match_value and "PRIVATE KEY-----" not in match_value else {}),
                     },
                 )
             )
-        return results
+        return sanitize_matches(results, payload)
 
     @classmethod
     def load_report(cls, report_path: Path) -> list[ScanMatch]:
         try:
-            payload = json.loads(report_path.read_text(encoding="utf-8").strip() or "[]")
+            payload = json.loads(read_report(report_path).strip() or "[]")
         except json.JSONDecodeError as exc:
             raise ScannerExecutionError("gitleaks report contained invalid JSON") from exc
         if not isinstance(payload, list):
@@ -125,22 +135,49 @@ class GitleaksScanner:
 class DetectSecretsScanner:
     name = "detect-secrets"
     source_class = "free"
+    metadata = ScannerMetadata(
+        scanner_id=name,
+        display_name="detect-secrets",
+        kind="external",
+        description="Baseline-oriented secret scanner with plugin coverage.",
+        binary="detect-secrets",
+        binary_setting="detect_secrets_binary",
+        binary_env_var="ORGSCAN_DETECT_SECRETS_BINARY",
+    )
 
     def __init__(self, *, settings: Settings | None = None) -> None:
         self.binary = settings.detect_secrets_binary if settings is not None else self.name
 
+    def readiness(self):
+        binary = shutil.which(self.binary)
+        if not binary:
+            return ScannerReadiness(False, 'missing_binary')
+        try:
+            version_result = run_scanner_process([self.binary, '--version'], timeout=5)
+            version = version_result.stdout.strip()
+            help_result = run_scanner_process([self.binary, 'scan', '--help'], timeout=5)
+            import re
+            if version_result.returncode or not re.fullmatch(r'1\.5\.\d+', version) or help_result.returncode or not all(flag in help_result.stdout for flag in ('--all-files', '--force-use-all-plugins')):
+                return ScannerReadiness(False, 'unsupported', binary_path=binary,
+                                        warnings=('Supported detect-secrets contract is 1.5.x with baseline JSON scan output',))
+            return ScannerReadiness(True, 'ready', binary_path=binary, version=version)
+        except ScannerExecutionError:
+            return ScannerReadiness(False, 'unsupported', binary_path=binary,
+                                    warnings=('detect-secrets command compatibility could not be established',))
+
     def scan_path(self, target: Path) -> list[ScanMatch]:
+        target = validate_scan_target(target, external=True)
         if not shutil.which(self.binary):
             raise _not_installed_error(self.binary)
 
-        completed = subprocess.run(
-            [self.binary, "scan", "--all-files", "--force-use-all-plugins", "--json", str(target)],
+        completed = run_scanner_process(
+            [self.binary, "scan", "--all-files", "--force-use-all-plugins", str(target)],
             check=False,
             capture_output=True,
             text=True,
         )
         if completed.returncode != 0:
-            raise ScannerExecutionError(completed.stderr.strip() or "detect-secrets execution failed")
+            raise ScannerExecutionError(f"detect-secrets execution failed (exit status {completed.returncode})")
         try:
             payload = json.loads((completed.stdout or "").strip() or "{}")
         except json.JSONDecodeError as exc:
@@ -152,7 +189,7 @@ class DetectSecretsScanner:
         results: list[ScanMatch] = []
         raw_results = payload.get("results")
         if not isinstance(raw_results, dict):
-            return results
+            return sanitize_matches(results, payload)
 
         for path, findings in raw_results.items():
             if not isinstance(findings, list):
@@ -185,15 +222,16 @@ class DetectSecretsScanner:
                         metadata={
                             "path": path,
                             "type": secret_type,
+                            **({"observation_digest":sha256(hashed_secret.encode()).hexdigest()} if hashed_secret else {}),
                         },
                     )
                 )
-        return results
+        return sanitize_matches(results, payload)
 
     @classmethod
     def load_report(cls, report_path: Path) -> list[ScanMatch]:
         try:
-            payload = json.loads(report_path.read_text(encoding="utf-8").strip() or "{}")
+            payload = json.loads(read_report(report_path).strip() or "{}")
         except json.JSONDecodeError as exc:
             raise ScannerExecutionError("detect-secrets report contained invalid JSON") from exc
         if not isinstance(payload, dict):
@@ -204,22 +242,49 @@ class DetectSecretsScanner:
 class SemgrepScanner:
     name = "semgrep"
     source_class = "free"
+    metadata = ScannerMetadata(
+        scanner_id=name,
+        display_name="Semgrep",
+        kind="external",
+        description="Code and configuration rule scanner for policy findings.",
+        binary="semgrep",
+        binary_setting="semgrep_binary",
+        binary_env_var="ORGSCAN_SEMGREP_BINARY",
+        file_settings=("semgrep_rules_path",),
+        configuration_requirements=("ORGSCAN_SEMGREP_RULES_PATH: readable local rules file",),
+    )
 
     def __init__(self, *, settings: Settings | None = None) -> None:
-        self.binary = settings.semgrep_binary if settings is not None else self.name
+        settings = settings or Settings()
+        self.binary = settings.semgrep_binary
+        self.rules = settings.semgrep_rules_path
+        self.metrics = settings.semgrep_metrics
+
+    def readiness(self):
+        binary = shutil.which(self.binary)
+        if not binary:
+            return ScannerReadiness(False, 'missing_binary')
+        if not self.rules or not Path(self.rules).is_file():
+            return ScannerReadiness(False, 'missing_configuration', binary_path=binary,
+                                    missing_requirements=('semgrep requires ORGSCAN_SEMGREP_RULES_PATH pointing to local rules',))
+        return ScannerReadiness(True, 'ready', binary_path=binary,
+                                warnings=('Local rules configured; runtime rule compatibility is not certified',))
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
+        target = validate_scan_target(target, external=True)
         if not shutil.which(self.binary):
             raise _not_installed_error(self.binary)
 
-        completed = subprocess.run(
-            [self.binary, "scan", "--config", "auto", "--json", "--metrics=off", str(target)],
+        if not self.readiness().ready:
+            raise ScannerExecutionError('semgrep requires a readable local ORGSCAN_SEMGREP_RULES_PATH')
+        completed = run_scanner_process(
+            [self.binary, "scan", "--config", str(Path(self.rules).resolve()), "--json", "--metrics=on" if self.metrics else "--metrics=off", str(target)],
             check=False,
             capture_output=True,
             text=True,
         )
         if completed.returncode not in (0, 1):
-            raise ScannerExecutionError(completed.stderr.strip() or "semgrep execution failed")
+            raise ScannerExecutionError(f"semgrep execution failed (exit status {completed.returncode})")
         try:
             payload = json.loads((completed.stdout or "").strip() or "{}")
         except json.JSONDecodeError as exc:
@@ -231,7 +296,7 @@ class SemgrepScanner:
         results: list[ScanMatch] = []
         items = payload.get("results")
         if not isinstance(items, list):
-            return results
+            return sanitize_matches(results, payload)
 
         for item in items:
             if not isinstance(item, dict):
@@ -250,11 +315,12 @@ class SemgrepScanner:
                     line_end=int(end.get("line") or start.get("line") or 1),
                     category="code-policy",
                     title=f"Semgrep: {check_id}",
-                    description=str(extra.get("message") or "Semgrep detected a policy or code issue."),
+                    protected_candidates=capture(extra),
+                    description="Semgrep detected a policy or code issue; review the rule and location.",
                     severity=SEMGREP_SEVERITY_MAP.get(severity, SeverityLevel.LOW),
                     confidence=ConfidenceLevel.LIKELY,
                     indicator=check_id,
-                    snippet=lines,
+                    snippet="<redacted:semgrep>",
                     remediation_hint="Review the matched rule, validate impact, and remediate the flagged code or configuration.",
                     raw_payload={
                         "check_id": check_id,
@@ -268,12 +334,12 @@ class SemgrepScanner:
                     },
                 )
             )
-        return results
+        return sanitize_matches(results, payload)
 
     @classmethod
     def load_report(cls, report_path: Path) -> list[ScanMatch]:
         try:
-            payload = json.loads(report_path.read_text(encoding="utf-8").strip() or "{}")
+            payload = json.loads(read_report(report_path).strip() or "{}")
         except json.JSONDecodeError as exc:
             raise ScannerExecutionError("semgrep report contained invalid JSON") from exc
         if not isinstance(payload, dict):
@@ -284,22 +350,32 @@ class SemgrepScanner:
 class TruffleHogScanner:
     name = "trufflehog"
     source_class = "free"
+    metadata = ScannerMetadata(
+        scanner_id=name,
+        display_name="TruffleHog",
+        kind="external",
+        description="Secret scanner with verified-detector support.",
+        binary="trufflehog",
+        binary_setting="trufflehog_binary",
+        binary_env_var="ORGSCAN_TRUFFLEHOG_BINARY",
+    )
 
     def __init__(self, *, settings: Settings | None = None) -> None:
         self.binary = settings.trufflehog_binary if settings is not None else self.name
 
     def scan_path(self, target: Path) -> list[ScanMatch]:
+        target = validate_scan_target(target, external=True)
         if not shutil.which(self.binary):
             raise _not_installed_error(self.binary)
 
-        completed = subprocess.run(
+        completed = run_scanner_process(
             [self.binary, "filesystem", "--json", str(target)],
             check=False,
             capture_output=True,
             text=True,
         )
         if completed.returncode not in (0, 1):
-            raise ScannerExecutionError(completed.stderr.strip() or "trufflehog execution failed")
+            raise ScannerExecutionError(f"trufflehog execution failed (exit status {completed.returncode})")
         try:
             lines = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
         except json.JSONDecodeError as exc:
@@ -326,6 +402,7 @@ class TruffleHogScanner:
                     description="TruffleHog identified a potential secret.",
                     severity=SeverityLevel.HIGH,
                     confidence=ConfidenceLevel.VERIFIED if item.get("Verified") else ConfidenceLevel.LIKELY,
+                    protected_candidates=capture({'secret': match_value}),
                     indicator=_redact(match_value),
                     snippet=_redact_in_line(line, match_value, "trufflehog"),
                     remediation_hint="Rotate the exposed secret and remove it from source control.",
@@ -337,15 +414,16 @@ class TruffleHogScanner:
                     metadata={
                         "path": str(filesystem.get("file") or ""),
                         "detector": detector_name,
+                        **({"secret_digest":sha256(match_value.encode()).hexdigest()} if match_value and "PRIVATE KEY-----" not in match_value else {}),
                     },
                 )
             )
-        return results
+        return sanitize_matches(results, payload)
 
     @classmethod
     def load_report(cls, report_path: Path) -> list[ScanMatch]:
         results: list[dict[str, Any]] = []
-        for line in report_path.read_text(encoding="utf-8").splitlines():
+        for line in read_report(report_path).splitlines():
             if not line.strip():
                 continue
             try:

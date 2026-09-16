@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import time
+from contextvars import ContextVar
+from contextlib import contextmanager
 import shutil
-import subprocess
+from orgscan import processes as subprocess
 import tempfile
 from base64 import b64encode
 from dataclasses import dataclass
@@ -11,14 +14,27 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request, urlopen as _stdlib_urlopen, build_opener, HTTPRedirectHandler
 
 import dns.exception
 import dns.resolver
 
 from orgscan.config import Settings
+from orgscan.http_limits import read_response, response_deadline, ResponseTooLarge
+from orgscan.services.job_policy import Failure, classify_failure
 from orgscan.rate_limit import wait_for_rate_limit
 from orgscan.repositories import Storage
+
+
+class _NoTargetRedirect(HTTPRedirectHandler):
+    def redirect_request(self,*args,**kwargs):
+        return None
+
+
+def urlopen(request,**kwargs):
+    if getattr(request,'orgscan_target_scope',False):
+        return build_opener(_NoTargetRedirect()).open(request,**kwargs)
+    return _stdlib_urlopen(request,**kwargs)
 
 
 @dataclass(frozen=True)
@@ -26,10 +42,55 @@ class DomainProviderResult:
     exposures: list[str]
     identity_correlations: list[str]
     warnings: list[str] | None = None
+    failure: Failure | None = None
+    observations: list[dict] | None = None
+
+    def __post_init__(self):
+        from orgscan.redaction import redact
+        values = redact({'exposures':self.exposures, 'identity_correlations':self.identity_correlations, 'warnings':self.warnings,'observations':self.observations})
+        for key, value in values.items():
+            object.__setattr__(self, key, value)
 
 
 class DomainProviderError(RuntimeError):
-    pass
+    def __init__(self, message, *, failure=None):
+        self.failure = failure
+        super().__init__(failure.message if failure is not None else message)
+
+
+_PROVIDER_DEADLINE = ContextVar('orgscan_provider_deadline',default=None)
+
+
+@contextmanager
+def provider_budget(seconds):
+    marker=_PROVIDER_DEADLINE.set(time.monotonic()+seconds)
+    try:yield
+    finally:_PROVIDER_DEADLINE.reset(marker)
+
+
+def _remaining_timeout(seconds):
+    deadline=_PROVIDER_DEADLINE.get()
+    if deadline is None:return seconds
+    remaining=deadline-time.monotonic()
+    if remaining<=0:
+        raise DomainProviderError('LIMIT REACHED: provider deadline',failure=Failure('limit_reached',False,'LIMIT REACHED: provider deadline'))
+    return min(seconds,remaining)
+
+
+def _run_provider_process(command, **kwargs):
+    try:
+        kwargs['timeout']=_remaining_timeout(kwargs.get('timeout',300))
+        from orgscan.recon.registry import controlled_environment
+        with tempfile.TemporaryDirectory(prefix='orgscan-provider-') as work:
+            kwargs.setdefault('cwd',work)
+            kwargs.setdefault('env',controlled_environment(work))
+            return subprocess.run(command, **kwargs)
+    except subprocess.TimeoutExpired:
+        raise DomainProviderError('Provider process timed out', failure=Failure('process_timeout',True,'Provider process timed out')) from None
+    except subprocess.OutputLimitExceeded:
+        raise DomainProviderError('Provider process output exceeded the allowed limit') from None
+    except OSError:
+        raise DomainProviderError('Provider process could not be started') from None
 
 
 class DomainIntelligenceProvider:
@@ -38,7 +99,20 @@ class DomainIntelligenceProvider:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings
 
+    def _protected_record(self, record):
+        from orgscan.services.secret_evidence import capture
+        from orgscan.redaction import redact
+        candidates = capture(record, settings=self.settings)
+        return redact(record), candidates
+
+    def discover_context(self, storage: Storage, context) -> DomainProviderResult:
+        from orgscan.storage.domain_identity import domain_scope
+        with domain_scope(storage, context):
+            return self.discover(storage, context.name)
+
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         raise NotImplementedError
 
 
@@ -46,7 +120,8 @@ def _resolve_binary(command: str) -> str | None:
     candidate = Path(command)
     if candidate.is_absolute():
         return str(candidate) if candidate.exists() else None
-    return shutil.which(command)
+    found=shutil.which(command)
+    return str(Path(found).resolve()) if found else None
 
 
 def _require_setting(value: str | None, message: str) -> str:
@@ -65,22 +140,42 @@ def _request_json(
     data: bytes | None = None,
     timeout: int = 15,
     expected: type[list[Any]] | type[dict[str, Any]] | None = None,
+    response_metadata: dict[str, Any] | None = None,
 ) -> object:
+    timeout=_remaining_timeout(timeout)
     request = Request(url, headers=headers or {}, method=method, data=data)
     try:
         wait_for_rate_limit(settings, scope)
+        timeout=_remaining_timeout(timeout)
+        deadline = response_deadline(timeout)
         with urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8") or "null")
+            if response_metadata is not None:
+                response_metadata.update(_response_metadata(response))
+            payload = json.loads(read_response(response, settings=settings, deadline=deadline).decode("utf-8") or "null")
     except HTTPError as exc:
-        raise DomainProviderError(f"request failed with status {exc.code}") from exc
-    except URLError as exc:
-        raise DomainProviderError(f"request failed: {exc.reason}") from exc
+        if response_metadata is not None:
+            response_metadata.update(_response_metadata(exc))
+        raise DomainProviderError(f"request failed with status {exc.code}", failure=classify_failure(exc)) from None
+    except ResponseTooLarge:
+        raise DomainProviderError("HTTP response exceeds the allowed size limit") from None
+    except (OSError, UnicodeError) as exc:
+        raise DomainProviderError("Provider transport or decoding failure", failure=classify_failure(exc)) from None
     except json.JSONDecodeError as exc:
-        raise DomainProviderError("provider returned invalid JSON output") from exc
+        raise DomainProviderError("provider returned invalid JSON output", failure=classify_failure(exc)) from None
     if expected is not None and not isinstance(payload, expected):
         expected_name = "array" if expected is list else "object"
         raise DomainProviderError(f"provider response must be a JSON {expected_name}")
     return payload
+
+
+def _response_metadata(response) -> dict[str, Any]:
+    headers = getattr(response, "headers", {})
+    selected = ("X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "Retry-After")
+    return {
+        "http_status": getattr(response, "status", getattr(response, "code", 200)),
+        "rate_limit": {key.lower(): headers.get(key) for key in selected if headers.get(key) is not None},
+        "has_next": 'rel="next"' in headers.get("Link", ""),
+    }
 
 
 class LocalMetadataDomainProvider(DomainIntelligenceProvider):
@@ -91,43 +186,46 @@ class LocalMetadataDomainProvider(DomainIntelligenceProvider):
         return sha256("::".join(parts).encode("utf-8")).hexdigest()
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         needle = domain_name.lower()
         exposures: list[str] = []
         identity_correlations: list[str] = []
 
-        for repository in storage.list_repositories():
-            haystacks = [
-                repository.full_name.lower(),
-                (repository.url or "").lower(),
-                json.dumps(repository.metadata_json).lower(),
-            ]
-            if any(needle in haystack for haystack in haystacks):
-                summary = f"Repository metadata references domain {domain_name}: {repository.full_name}"
-                storage.create_domain_exposure(
-                    domain_record.id,
-                    source="github-metadata",
-                    source_name=self.name,
-                    result_summary=summary,
-                    normalized_hash=self._hash("repo", domain_name, repository.full_name),
-                    source_class="free",
-                    confidence="likely",
-                    severity="low",
-                )
-                exposures.append(summary)
+        with storage.domain_sources(domain_record) as sources:
+            for repository in sources.list_repositories():
+                haystacks = [
+                    repository.full_name.lower(),
+                    (repository.url or "").lower(),
+                    json.dumps(repository.metadata_json).lower(),
+                ]
+                if any(needle in haystack for haystack in haystacks):
+                    summary = f"Repository metadata references domain {domain_name}: {repository.full_name}"
+                    storage.create_domain_exposure(
+                        domain_record.id,
+                        source="github-metadata",
+                        source_name=self.name,
+                        result_summary=summary,
+                        normalized_hash=self._hash("repo", domain_name, repository.full_name),
+                        source_class="free",
+                        confidence="likely",
+                        severity="low",
+                    )
+                    exposures.append(summary)
 
-        for account in storage.list_accounts():
-            if account.email and account.email.lower().endswith(f"@{needle}"):
-                storage.create_identity_correlation(
-                    domain_record.id,
-                    source="github-metadata",
-                    relation_type="email-domain-match",
-                    email=account.email,
-                    username=account.username,
-                    confidence="likely",
-                    evidence_reference=account.email,
-                )
-                identity_correlations.append(account.username)
+            for account in sources.list_accounts():
+                if account.email and account.email.lower().endswith(f"@{needle}"):
+                    storage.create_identity_correlation(
+                        domain_record.id,
+                        source="github-metadata",
+                        relation_type="email-domain-match",
+                        email=account.email,
+                        username=account.username,
+                        confidence="likely",
+                        evidence_reference=account.email,
+                    )
+                    identity_correlations.append(account.username)
 
         return DomainProviderResult(exposures=exposures, identity_correlations=identity_correlations, warnings=[])
 
@@ -146,18 +244,20 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
 
     def _run_subfinder(self, domain_name: str) -> list[dict[str, Any]]:
         settings = self._require_settings()
-        binary = _resolve_binary(settings.subfinder_binary)
+        from orgscan.recon.registry import get_registry
+        binary = _resolve_binary(get_registry().binary('subfinder', settings) or settings.subfinder_binary)
         if binary is None:
             raise DomainProviderError("subfinder is not installed; configure ORGSCAN_SUBFINDER_BINARY or install the ProjectDiscovery binary.")
 
-        completed = subprocess.run(
-            [binary, "-d", domain_name, "-silent", "-oJ"],
+        completed = _run_provider_process(
+            [binary, "-d", domain_name, "-silent", "-oJ", "-duc"],
             check=False,
             capture_output=True,
             text=True,
+            timeout=settings.http_timeout_seconds,
         )
         if completed.returncode != 0:
-            raise DomainProviderError(completed.stderr.strip() or "subfinder execution failed")
+            raise DomainProviderError("subfinder execution failed; review provider readiness")
 
         results: list[dict[str, Any]] = []
         for line in completed.stdout.splitlines():
@@ -166,7 +266,7 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
             try:
                 item = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise DomainProviderError("subfinder produced invalid JSON output") from exc
+                raise DomainProviderError("subfinder produced invalid JSON output", failure=classify_failure(exc)) from None
             if isinstance(item, dict):
                 results.append(item)
         return results
@@ -175,7 +275,8 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
         if not hosts:
             return []
         settings = self._require_settings()
-        binary = _resolve_binary(settings.httpx_binary)
+        from orgscan.recon.registry import get_registry
+        binary = _resolve_binary(get_registry().binary('httpx', settings) or settings.httpx_binary)
         if binary is None:
             raise DomainProviderError("httpx is not installed; configure ORGSCAN_HTTPX_BINARY or install the ProjectDiscovery binary.")
 
@@ -183,16 +284,17 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
             handle.write("\n".join(hosts) + "\n")
             input_path = Path(handle.name)
         try:
-            completed = subprocess.run(
-                [binary, "-silent", "-json", "-l", str(input_path)],
+            completed = _run_provider_process(
+                [binary, "-silent", "-json", "-l", str(input_path), "-duc"],
                 check=False,
                 capture_output=True,
                 text=True,
+                timeout=settings.http_timeout_seconds,
             )
         finally:
             input_path.unlink(missing_ok=True)
         if completed.returncode != 0:
-            raise DomainProviderError(completed.stderr.strip() or "httpx execution failed")
+            raise DomainProviderError("httpx execution failed; review provider readiness")
 
         results: list[dict[str, Any]] = []
         for line in completed.stdout.splitlines():
@@ -201,23 +303,28 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
             try:
                 item = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise DomainProviderError("httpx produced invalid JSON output") from exc
+                raise DomainProviderError("httpx produced invalid JSON output", failure=classify_failure(exc)) from None
             if isinstance(item, dict):
                 results.append(item)
         return results
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         exposures: list[str] = []
 
         subfinder_results = self._run_subfinder(domain_name)
+        from orgscan.recon.observations import scoped_host
         subdomains = sorted(
             {
                 str(item.get("host") or item.get("input") or "").strip().lower()
                 for item in subfinder_results
-                if str(item.get("host") or item.get("input") or "").strip()
+                if scoped_host(str(item.get("host") or item.get("input") or "").strip(),domain_name)
             }
         )
+        if len(subdomains)>(self.settings.recon_max_domains if self.settings else 1000):
+            raise DomainProviderError('LIMIT REACHED: discovered domains')
         if subdomains:
             existing_subdomains = {value.lower() for value in domain_record.discovered_subdomains}
             domain_record.discovered_subdomains = sorted(existing_subdomains.union(subdomains))
@@ -241,6 +348,7 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
             exposures.append(summary)
 
         for item in self._run_httpx(subdomains):
+            item, protected_candidates = self._protected_record(item)
             host = str(item.get("input") or item.get("host") or "").strip().lower()
             url = str(item.get("url") or "").strip()
             status_code = item.get("status_code")
@@ -255,6 +363,7 @@ class ProjectDiscoveryDomainProvider(DomainIntelligenceProvider):
                 domain_record.id,
                 source="projectdiscovery",
                 source_name="httpx",
+                protected_candidates=protected_candidates,
                 result_summary=summary,
                 normalized_hash=self._hash("httpx", domain_name, host or domain_name, url or ""),
                 source_class="free",
@@ -295,24 +404,30 @@ class CrtShDomainProvider(DomainIntelligenceProvider):
             },
         )
         try:
-            with urlopen(request, timeout=settings.http_timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8") or "[]")
+            deadline = response_deadline(_remaining_timeout(settings.http_timeout_seconds))
+            with urlopen(request, timeout=_remaining_timeout(settings.http_timeout_seconds)) as response:
+                payload = json.loads(read_response(response, settings=settings, deadline=deadline).decode("utf-8") or "[]")
         except HTTPError as exc:
-            raise DomainProviderError(f"crt.sh request failed with status {exc.code}") from exc
-        except URLError as exc:
-            raise DomainProviderError(f"crt.sh request failed: {exc.reason}") from exc
+            raise DomainProviderError(f"crt.sh request failed with status {exc.code}", failure=classify_failure(exc)) from None
+        except ResponseTooLarge:
+            raise DomainProviderError("HTTP response exceeds the allowed size limit") from None
+        except (OSError, UnicodeError) as exc:
+            raise DomainProviderError("crt.sh transport or decoding failure", failure=classify_failure(exc)) from None
         except json.JSONDecodeError as exc:
-            raise DomainProviderError("crt.sh returned invalid JSON output") from exc
+            raise DomainProviderError("crt.sh returned invalid JSON output", failure=classify_failure(exc)) from None
 
         if not isinstance(payload, list):
             raise DomainProviderError("crt.sh response must be a JSON array")
         return [item for item in payload if isinstance(item, dict)]
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         records = self._fetch_records(domain_name)
         exposures: list[str] = []
         discovered_hosts: set[str] = set()
+        observations=[]
 
         for item in records:
             names = str(item.get("name_value") or "").splitlines()
@@ -321,10 +436,11 @@ class CrtShDomainProvider(DomainIntelligenceProvider):
             not_after = str(item.get("not_after") or "").strip()
             entry_id = str(item.get("id") or "")
             for raw_name in names:
-                host = raw_name.strip().lower()
-                if not host or "*" in host or not host.endswith(domain_name.lower()):
+                host = raw_name.strip().lower().removeprefix('*.').rstrip('.')
+                if not host or "*" in host or not (host==domain_name.lower() or host.endswith('.'+domain_name.lower())):
                     continue
                 discovered_hosts.add(host)
+                observations.append({'kind':'certificate','value':'crtsh:'+entry_id+':'+host,'provider':'crtsh','attributes':{'hostname':host,'issuer':issuer,'not_before':not_before,'not_after':not_after}})
                 validity = f" valid={not_before}->{not_after}" if not_before or not_after else ""
                 summary = f"Certificate transparency entry for {host} via {issuer}{validity}".strip()
                 storage.create_domain_exposure(
@@ -348,7 +464,7 @@ class CrtShDomainProvider(DomainIntelligenceProvider):
             existing_sources.add("crtsh")
             domain_record.discovery_sources = sorted(existing_sources)
 
-        return DomainProviderResult(exposures=exposures, identity_correlations=[], warnings=[])
+        return DomainProviderResult(exposures=exposures, identity_correlations=[], warnings=[],observations=observations)
 
 
 class WhoisDomainProvider(DomainIntelligenceProvider):
@@ -368,14 +484,15 @@ class WhoisDomainProvider(DomainIntelligenceProvider):
         binary = _resolve_binary(settings.whois_binary)
         if binary is None:
             raise DomainProviderError("whois is not installed; configure ORGSCAN_WHOIS_BINARY or install the whois client.")
-        completed = subprocess.run(
+        completed = _run_provider_process(
             [binary, domain_name],
             check=False,
             capture_output=True,
             text=True,
+            timeout=settings.http_timeout_seconds,
         )
         if completed.returncode != 0:
-            raise DomainProviderError(completed.stderr.strip() or "whois execution failed")
+            raise DomainProviderError("whois execution failed; review provider readiness")
         return completed.stdout
 
     @staticmethod
@@ -393,6 +510,8 @@ class WhoisDomainProvider(DomainIntelligenceProvider):
         return fields
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         fields = self._parse_fields(self._fetch_output(domain_name))
         exposures: list[str] = []
@@ -453,13 +572,15 @@ class WhoisDomainProvider(DomainIntelligenceProvider):
             )
             exposures.append(ns_summary)
 
-        return DomainProviderResult(exposures=exposures, identity_correlations=[], warnings=[])
+        return DomainProviderResult(exposures=exposures, identity_correlations=[], warnings=[],observations=[{'kind':'domain','value':domain_name,'provider':'whois','attributes':{'registration':{'registrar':registrar,'created':created,'expires':expires,'organization':registrant_org,'nameservers':nameservers,'ownership_proof':False}}}])
 
 
 class AggregateDomainProvider(DomainIntelligenceProvider):
     name = "all"
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         exposures: list[str] = []
         identity_correlations: list[str] = []
         warnings: list[str] = []
@@ -486,6 +607,8 @@ class EnrichedAggregateDomainProvider(DomainIntelligenceProvider):
     name = "all-enriched"
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         exposures: list[str] = []
         identity_correlations: list[str] = []
         warnings: list[str] = []
@@ -536,16 +659,20 @@ class SecurityTxtDomainProvider(DomainIntelligenceProvider):
                     "Accept": "text/plain",
                 },
             )
+            request.orgscan_target_scope=True
             try:
                 wait_for_rate_limit(settings, "securitytxt")
-                with urlopen(request, timeout=settings.http_timeout_seconds if settings else 15) as response:
-                    return response.read().decode("utf-8", errors="replace"), url
+                deadline = response_deadline(_remaining_timeout(settings.http_timeout_seconds if settings else 15))
+                with urlopen(request, timeout=_remaining_timeout(settings.http_timeout_seconds if settings else 15)) as response:
+                    return read_response(response, settings=settings, deadline=deadline).decode("utf-8", errors="replace"), url
             except HTTPError as exc:
                 if exc.code == 404:
                     continue
-                raise DomainProviderError(f"security.txt request failed with status {exc.code}") from exc
-            except URLError as exc:
-                raise DomainProviderError(f"security.txt request failed: {exc.reason}") from exc
+                raise DomainProviderError(f"security.txt request failed with status {exc.code}", failure=classify_failure(exc)) from None
+            except ResponseTooLarge:
+                raise DomainProviderError("HTTP response exceeds the allowed size limit") from None
+            except (OSError, UnicodeError) as exc:
+                raise DomainProviderError("security.txt transport or decoding failure", failure=classify_failure(exc)) from None
         return None, None
 
     @staticmethod
@@ -563,6 +690,8 @@ class SecurityTxtDomainProvider(DomainIntelligenceProvider):
         return fields
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         exposures: list[str] = []
         identity_correlations: list[str] = []
@@ -644,14 +773,19 @@ class GitHubSearchDomainProvider(DomainIntelligenceProvider):
             "Accept": "application/vnd.github+json",
         }
         if settings.github_token:
-            headers["Authorization"] = f"******"
+            headers["Authorization"] = f"Bearer {settings.github_token}"
+        self.last_response_metadata = {}
+        paced_settings = settings.model_copy(update={
+            "outbound_min_interval_seconds": max(7.0, settings.outbound_min_interval_seconds),
+        })
         return _request_json(
             f"{settings.github_api_base_url.rstrip('/')}{path}",
-            settings=settings,
-            scope="github-api",
+            settings=paced_settings,
+            scope="github-search",
             headers=headers,
             timeout=settings.http_timeout_seconds,
             expected=expected,
+            response_metadata=self.last_response_metadata,
         )
 
     def _search_repositories(self, domain_name: str) -> list[dict[str, Any]]:
@@ -672,109 +806,19 @@ class GitHubSearchDomainProvider(DomainIntelligenceProvider):
         items = payload.get("items") if isinstance(payload, dict) else None
         return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
 
+    def search_target(self, storage: Storage, value: str, *, target_type: str = "domain", tenant_key: str | None = None) -> DomainProviderResult:
+        from orgscan.services.github_search import GitHubSearchService
+        service = GitHubSearchService(
+            self._require_settings(), self._github_request_json,
+            lambda: getattr(self, "last_response_metadata", {}),
+        )
+        result = service.search(storage, value, target_type=target_type, tenant_key=tenant_key)
+        return DomainProviderResult(result.exposures, result.accounts, result.warnings, result.failure)
+
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
-        domain_record, _ = storage.get_or_create_domain(domain_name)
-        exposures: list[str] = []
-        identity_correlations: list[str] = []
-
-        existing_sources = set(domain_record.discovery_sources)
-        existing_sources.add("github-search")
-        domain_record.discovery_sources = sorted(existing_sources)
-
-        for item in self._search_repositories(domain_name):
-            full_name = str(item.get("full_name") or "unknown/repository").strip()
-            description = str(item.get("description") or "").strip()
-            owner = item.get("owner") if isinstance(item.get("owner"), dict) else {}
-            owner_login = str(owner.get("login") or "").strip()
-            summary = f"GitHub repository mentions {domain_name}: {full_name}"
-            if description:
-                summary = f"{summary} description={description}"
-            storage.create_domain_exposure(
-                domain_record.id,
-                source="github-search",
-                source_name=self.name,
-                result_summary=summary,
-                normalized_hash=self._hash("github-repo", domain_name, full_name),
-                source_class="free",
-                confidence="likely",
-                severity="low",
-                query_used=domain_name,
-                evidence_url=str(item.get("html_url") or "") or None,
-            )
-            exposures.append(summary)
-            if owner_login:
-                storage.create_identity_correlation(
-                    domain_record.id,
-                    source="github-search",
-                    relation_type="github-repository-domain-reference",
-                    username=owner_login,
-                    confidence="heuristic",
-                    evidence_reference=full_name,
-                )
-                identity_correlations.append(owner_login)
-
-        for item in self._search_code(domain_name):
-            repository = item.get("repository") if isinstance(item.get("repository"), dict) else {}
-            full_name = str(repository.get("full_name") or "unknown/repository").strip()
-            owner = repository.get("owner") if isinstance(repository.get("owner"), dict) else {}
-            owner_login = str(owner.get("login") or "").strip()
-            path = str(item.get("path") or "unknown").strip()
-            summary = f"GitHub code search match for {domain_name}: {full_name}:{path}"
-            storage.create_domain_exposure(
-                domain_record.id,
-                source="github-search",
-                source_name=self.name,
-                result_summary=summary,
-                normalized_hash=self._hash("github-code", domain_name, full_name, path),
-                source_class="free",
-                confidence="likely",
-                severity="medium",
-                query_used=f'"{domain_name}" in:file',
-                evidence_url=str(item.get("html_url") or "") or None,
-            )
-            exposures.append(summary)
-            if owner_login:
-                storage.create_identity_correlation(
-                    domain_record.id,
-                    source="github-search",
-                    relation_type="github-code-domain-reference",
-                    username=owner_login,
-                    confidence="heuristic",
-                    evidence_reference=f"{full_name}:{path}",
-                )
-                identity_correlations.append(owner_login)
-
-        for item in self._search_issues(domain_name):
-            title = str(item.get("title") or "untitled issue").strip()
-            state = str(item.get("state") or "open").strip()
-            user = item.get("user") if isinstance(item.get("user"), dict) else {}
-            user_login = str(user.get("login") or "").strip()
-            summary = f"GitHub issue mentions {domain_name}: {title} state={state}"
-            storage.create_domain_exposure(
-                domain_record.id,
-                source="github-search",
-                source_name=self.name,
-                result_summary=summary,
-                normalized_hash=self._hash("github-issue", domain_name, title, state),
-                source_class="free",
-                confidence="heuristic",
-                severity="low",
-                query_used=f'"{domain_name}" type:issue',
-                evidence_url=str(item.get("html_url") or "") or None,
-            )
-            exposures.append(summary)
-            if user_login:
-                storage.create_identity_correlation(
-                    domain_record.id,
-                    source="github-search",
-                    relation_type="github-issue-domain-reference",
-                    username=user_login,
-                    confidence="heuristic",
-                    evidence_reference=title,
-                )
-                identity_correlations.append(user_login)
-
-        return DomainProviderResult(exposures=exposures, identity_correlations=identity_correlations, warnings=[])
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
+        return self.search_target(storage, domain_name)
 
 
 class HaveIBeenPwnedDomainProvider(DomainIntelligenceProvider):
@@ -807,11 +851,14 @@ class HaveIBeenPwnedDomainProvider(DomainIntelligenceProvider):
         return [item for item in payload if isinstance(item, dict)]  # type: ignore[arg-type]
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         exposures: list[str] = []
         normalized_domain = domain_name.lower()
 
         for item in self._fetch_breaches():
+            item, protected_candidates = self._protected_record(item)
             breach_domain = str(item.get("Domain") or "").strip().lower()
             if breach_domain != normalized_domain:
                 continue
@@ -824,6 +871,7 @@ class HaveIBeenPwnedDomainProvider(DomainIntelligenceProvider):
             storage.create_domain_exposure(
                 domain_record.id,
                 source="hibp",
+                protected_candidates=protected_candidates,
                 source_name=self.name,
                 result_summary=summary,
                 normalized_hash=self._hash("hibp", domain_name, breach_name, breach_date),
@@ -871,12 +919,15 @@ class DeHashedDomainProvider(DomainIntelligenceProvider):
         return [item for item in entries if isinstance(item, dict)] if isinstance(entries, list) else []
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         exposures: list[str] = []
         identity_correlations: list[str] = []
         normalized_suffix = f"@{domain_name.lower()}"
 
         for item in self._fetch_records(domain_name):
+            item, protected_candidates = self._protected_record(item)
             email = str(item.get("email") or "").strip().lower()
             username = str(item.get("username") or "").strip() or None
             source_ip = str(item.get("ip_address") or "").strip()
@@ -889,6 +940,7 @@ class DeHashedDomainProvider(DomainIntelligenceProvider):
             storage.create_domain_exposure(
                 domain_record.id,
                 source="dehashed",
+                protected_candidates=protected_candidates,
                 source_name=self.name,
                 result_summary=summary,
                 normalized_hash=self._hash("dehashed", domain_name, email, username or "", database_name),
@@ -949,12 +1001,15 @@ class IntelligenceXDomainProvider(DomainIntelligenceProvider):
         return [item for item in records if isinstance(item, dict)] if isinstance(records, list) else []
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         exposures: list[str] = []
         identity_correlations: list[str] = []
         needle = domain_name.lower()
 
         for item in self._search_results(domain_name):
+            item, protected_candidates = self._protected_record(item)
             record_type = str(item.get("type") or item.get("bucket") or "record").strip()
             system_id = str(item.get("systemid") or item.get("id") or "").strip()
             name = str(item.get("name") or item.get("selectorvalue") or "").strip()
@@ -967,6 +1022,7 @@ class IntelligenceXDomainProvider(DomainIntelligenceProvider):
             storage.create_domain_exposure(
                 domain_record.id,
                 source="intelligencex",
+                protected_candidates=protected_candidates,
                 source_name=self.name,
                 result_summary=summary,
                 normalized_hash=self._hash("intelligencex", domain_name, record_type, system_id, name),
@@ -1012,7 +1068,7 @@ class DnsDomainProvider(DomainIntelligenceProvider):
 
     def _resolve_records(self, name: str, record_type: str) -> list[str]:
         try:
-            answers = dns.resolver.resolve(name, record_type)
+            answers = dns.resolver.resolve(name, record_type, lifetime=_remaining_timeout(self.settings.http_timeout_seconds if self.settings else 15))
         except (
             dns.resolver.NoAnswer,
             dns.resolver.NXDOMAIN,
@@ -1021,7 +1077,7 @@ class DnsDomainProvider(DomainIntelligenceProvider):
         ):
             return []
         except dns.exception.DNSException as exc:
-            raise DomainProviderError(f"dns lookup failed for {name} {record_type}: {exc}") from exc
+            raise DomainProviderError(f"dns lookup failed for {name} {record_type}: {exc}", failure=classify_failure(exc)) from None
 
         results: list[str] = []
         for answer in answers:
@@ -1031,6 +1087,8 @@ class DnsDomainProvider(DomainIntelligenceProvider):
         return results
 
     def discover(self, storage: Storage, domain_name: str) -> DomainProviderResult:
+        if self.settings is not None:
+            storage.session.info['secret_settings'] = self.settings
         domain_record, _ = storage.get_or_create_domain(domain_name)
         exposures: list[str] = []
         warnings: list[str] = []
