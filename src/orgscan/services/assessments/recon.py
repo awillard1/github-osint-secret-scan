@@ -330,7 +330,13 @@ def discover_target(storage,assessment,target,settings,*,configuration=None,prog
     if mode=='public':options['include_private']=False
     elif configuration is None and mode=='private':options['include_private']=True
     if target.target_type=='domain':
-        domain,_=storage.get_or_create_domain(target.normalized_value,organization_id=assessment.organization_id)
+        domain=storage.get_domain_by_name(target.normalized_value)
+        if domain is not None and domain.organization_id is not None:
+            # Reuse a canonical tenant-owned domain without changing its owner.
+            # Foreign-tenant domains still fail closed.
+            domain=AssessmentStorage(storage.session).entity(assessment,'domain',domain.id)
+        else:
+            domain,_=storage.get_or_create_domain(target.normalized_value,organization_id=assessment.organization_id)
         AssessmentStorage(storage.session).link(assessment,'domain',domain.id,source='operator',confidence='verified')
         from orgscan.recon.pipeline import run_pipeline
         return run_pipeline(storage,assessment,domain,options,settings,progress)

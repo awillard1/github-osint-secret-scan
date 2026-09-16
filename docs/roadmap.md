@@ -417,3 +417,9 @@ results expose provider observation details; repeated observations use bounded
 batch identity reuse. Scale coverage includes 400 mixed GitHub/GHES/domain targets
 and 1,000 observations correlated into 100 domains. Final certification evidence
 is maintained in the two assessment/recon validation documents.
+
+The autonomous edge-case follow-up preserves provider attributes on refresh,
+allows canonical domain reuse across assessments in one tenant without reassigning
+ownership, and rejects oversized template configuration before replacing a valid
+file. Cross-tenant duplicate-domain creation remains unsupported; foreign-domain
+links and reassignment continue to fail closed. No schema change is involved.

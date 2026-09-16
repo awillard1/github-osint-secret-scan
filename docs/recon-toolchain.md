@@ -111,7 +111,8 @@ In **Settings → Recon Tools → Nuclei → Configure**, a platform administrat
 save up to 20 absolute local template directories (one per line). An empty list
 disables execution. Configuration is validated and atomically stored with private
 permissions in `<tools directory>/templates.json`, shared by API, workers and doctor.
-All processes must share that directory. It overrides the backward-compatible
+All processes must share that directory. Serialized path configuration is capped
+at 16 KiB; an oversized save preserves the previous configuration. It overrides the backward-compatible
 `ORGSCAN_NUCLEI_TEMPLATES_PATH` environment setting. No configured application database
 is changed. Readiness distinguishes **Binary Ready** from **Templates Missing**.
 The supported policy permits a combined 1–100 YAML HTTP templates (at most 64 KiB each): GET/HEAD,
@@ -176,7 +177,9 @@ those engines is not present, and adding a binary alone would not supply that
 policy. RDAP currently supports domain registration, not standalone IP-network
 registration targets. Historical URL identity is scheme/host/port/path based;
 queries are deliberately omitted. Existing globally unique Domain ownership still
-fails closed on cross-tenant conflicts.
+fails closed on cross-tenant conflicts. Assessments in the same tenant reuse an
+existing domain without changing its owner; unassigned legacy domains retain the
+existing storage claim policy.
 
 Live upstream compatibility, GHES deployments, Windows and distributed locking
 are not certified by mocked tests. The recon runner supports Linux/macOS POSIX

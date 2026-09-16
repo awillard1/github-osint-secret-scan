@@ -81,7 +81,7 @@ def _run(storage,assessment,parent,options,settings,progress):
                         if (entity:=http_entities.get(value) or domain_entities.get(value))])
                 if time.monotonic()>=deadline:raise ReconError('LIMIT REACHED: pipeline timeout','limit_reached')
                 if tool not in TOOLS:
-                    plan=resolve_scan_plan(target=root,target_type='domain',domain_id=parent.id,organization_id=assessment.organization_id,
+                    plan=resolve_scan_plan(target=root,target_type='domain',domain_id=parent.id,organization_id=parent.organization_id,
                         tenant_key=assessment.tenant_key,discovery_provider=tool,settings=settings)
                     from orgscan.providers import provider_budget
                     with provider_budget(min(settings.recon_tool_timeout_seconds,max(0,deadline-time.monotonic()))):

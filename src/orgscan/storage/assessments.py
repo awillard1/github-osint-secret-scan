@@ -87,11 +87,15 @@ class AssessmentStorage:
         metadata['sources']=list(dict.fromkeys([*metadata.get('sources',[row.source]),source]))
         metadata.setdefault('first_seen',now);metadata['last_seen']=now
         observations=dict(metadata.get('observations',{}))
-        observations[source]={'first_seen':observations.get(source,{}).get('first_seen',now),'last_seen':now,'confidence':confidence,'reasons':reasons or []}
+        previous=observations.get(source,{})
+        levels=('unverified','heuristic','likely','verified')
+        observed_confidence=levels[max(levels.index(previous.get('confidence','unverified')),levels.index(confidence))]
+        observations[source]={**previous,'first_seen':previous.get('first_seen',now),'last_seen':now,
+            'confidence':observed_confidence,
+            'reasons':list(dict.fromkeys([*previous.get('reasons',[]),*(reasons or [])]))}
         metadata['observations']=observations
         if len(str(metadata))>16000:raise ValueError('Association provenance exceeds configured record budget')
         row.metadata_json=metadata
-        levels=('unverified','heuristic','likely','verified')
         if levels.index(confidence)>levels.index(row.confidence):row.confidence=confidence
         return row
 

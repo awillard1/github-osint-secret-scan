@@ -69,12 +69,15 @@ def save_template_locations(settings, locations):
         if count > 100:
             raise ValueError('Select at most 100 approved local HTTP templates')
         normalized.append(name)
+    encoded = json.dumps(normalized)
+    if len(encoded.encode('utf-8')) > 16384:
+        raise ValueError('Template configuration exceeds the storage limit')
     target = configuration_file(settings)
     with installation_lock(target.parent):
         descriptor, temporary = tempfile.mkstemp(dir=target.parent, prefix='.templates-')
         try:
             with os.fdopen(descriptor, 'w') as stream:
-                json.dump(normalized, stream)
+                stream.write(encoded)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, target)

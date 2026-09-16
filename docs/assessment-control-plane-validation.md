@@ -1,5 +1,9 @@
 # Assessment control plane validation — 2026-09-15 continuation
 
+> Current status: see **Autonomous edge-case follow-up** at the end of this file.
+> Earlier sections preserve historical implementation and certification results.
+> Migration 0015 is committed and is not an editable development migration.
+
 ## Autonomous continuation classification (2026-09-16)
 
 This review preserves the historical acceptance results below. Initial backlog:
@@ -17,7 +21,7 @@ This review preserves the historical acceptance results below. Initial backlog:
 | Distributed PostgreSQL/Redis deployment certification | OPERATOR CONFIGURATION | Requires deployment environment |
 | Cross-tenant duplicate globally unique domains | BLOCKED | Requires separately reviewed ownership/schema migration; retain fail-closed boundary |
 | Uncover, tlsx, asnmap; Amass newer than v3 | BLOCKED | Unsupported by current compatibility policy; do not advertise support |
-| Standalone IP registration targets, distributed installer jobs, interactive graph | COMPLETE | Existing bounded domain-RDAP, local installer and table graph contracts; outside accepted product scope |
+| Domain registration, local installer jobs and relationship tables | COMPLETE | Existing bounded contracts; standalone IP targets, distributed installers and interactive graph extensions are outside the accepted scope |
 
 No new tool adapter is NOT STARTED within the supported inventory. Historical
 limits are retained rather than represented as new product regressions.
@@ -256,3 +260,37 @@ Optional tool availability, Nuclei template choice, live GHES and Windows/WSL
 Ollama reachability require operator configuration; they do not prevent the
 independently tested workflow. A fresh loopback-only `/api/tags` check remained unreachable. No Windows
 networking/firewall changes were made.
+
+## Autonomous edge-case follow-up (2026-09-16)
+
+Reviewed the existing backlog after commit `f4764ca`; did not restart completed
+integrations or modify configured application data. Baseline: **31 passed**.
+Three new regressions failed before fixes; the foreign-tenant rejection already
+passed and remains enforced.
+
+| Item | Status | Result |
+|---|---|---|
+| Provider observation refresh | COMPLETE | Preserve attributes, first-seen time, accumulated reasons and strongest confidence when a later link supplies no new attributes |
+| Existing domain in another assessment of the same tenant | COMPLETE | Reuse the canonical domain and preserve its original organization; legacy provider plans retain that owner; unassigned domains retain the existing storage claim policy |
+| Foreign-tenant domain | COMPLETE safety boundary | Reject before linking or reassignment; independent duplicate-domain creation remains unsupported under the legacy unique key |
+| Nuclei configuration storage budget | COMPLETE | Validate serialized size before replacement; failed saves preserve the prior configuration |
+| Established operator workflow | COMPLETE | Retained full web/service/API workflow and local/mocked acceptance |
+| External service certification | OPERATOR CONFIGURATION REQUIRED | GHES credentials/deployments, authorized external domain, Windows Ollama endpoint and optional binary/template selection |
+| Unsupported adapter extensions | Outside supported backlog | tlsx/asnmap/Uncover and newer Amass remain excluded, as explicitly requested |
+
+**Partial:** live external-service certification remains unavailable; local and
+mocked tests do not claim that coverage. **Blocked product boundary:** creating
+independently owned duplicate domain identities in different tenants is not
+supported by the current globally unique schema and name-only legacy provider
+contract. Same-tenant reuse is now supported. No existing domain is reassigned
+or exposed to another tenant.
+
+Validation: focused **35 passed**, plus final ownership-compatibility/pipeline
+regressions **18 passed**; final full suite **904 passed, 14 skipped**, two existing dependency warnings (751.71 seconds);
+local live suite **8 passed, 5 skipped** (101.63 seconds); doctor passed, 21 warnings;
+build passed; clean install passed;
+compile/whitespace passed. The full suite includes migration,
+projection, tenant isolation, Reveal, report/AI redaction and queue regressions.
+Migration head remains **20260915_0015**. No migration, tool installation, external
+reconnaissance, firewall change, commit, tag replacement or push occurs in this
+follow-up. Changes are left reviewable in the working tree.
