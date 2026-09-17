@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">Action requires attention</p><h1>Review this action</h1></div></div>
+<section class="panel"><p role="alert">{{ message }}</p><p class="muted">Your existing assessment data is retained. Return to the previous page to review the form or scope.</p><a href="/dashboard/assessments">Open assessments</a></section>
+{% endblock %}

@@ -4,12 +4,13 @@ One UNION query reads ordinary string/JSON columns, never ORM graphs, encrypted
 evidence, authentication tables or keys. Display filtering is not source scoping.
 """
 import json
+from collections.abc import Iterable
 
 from sqlalchemy import JSON, String, cast, false, func, literal, select, union_all
 
 from orgscan import models as m
 from orgscan.config import Settings
-from orgscan.redaction import MAX_STRING_CHARS, MAX_TOTAL_CHARS, SanitizationLimitError, redact
+from orgscan.redaction import MAX_STRING_CHARS, MAX_TOTAL_CHARS, MAX_NODES, MAX_KNOWN_SECRETS, SanitizationLimitError, redact
 from orgscan.security_context import current_auth
 from orgscan.storage.visibility import visibility_ids
 
@@ -33,6 +34,25 @@ PROJECTION_SOURCES = {
 }
 _REFERENCES = {'fingerprint', 'normalized_hash', 'observation_fingerprint', 'commit_sha',
                'tenant_key', 'from_entity_id', 'to_entity_id', 'entity_id'}
+CONTEXT_BATCH_ROWS = 128
+MAX_CONTEXT_NODES = 5 * MAX_NODES
+
+
+def _source_cost(value):
+    """Bound aggregate structure and text while the sanitizer bounds each batch."""
+    count = chars = 0
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        count += 1
+        if isinstance(item, str):
+            chars += len(item)
+        if isinstance(item, dict):
+            for key, child in item.items():
+                pending.extend((str(key), child))
+        elif isinstance(item, (list, tuple)):
+            pending.extend(item)
+    return count, chars
 
 
 class CredentialContext:
@@ -40,7 +60,27 @@ class CredentialContext:
 
     def __init__(self, sources):
         known = set()
-        redact(sources, _knowledge=known)
+        rows = sources if isinstance(sources, Iterable) and not isinstance(sources, (dict, str, bytes)) else (sources,)
+        batch = []
+        total_nodes = total_chars = 0
+        for source in rows:
+            nodes, chars = _source_cost(source)
+            total_nodes += nodes
+            total_chars += chars
+            if total_nodes > MAX_CONTEXT_NODES:
+                raise SanitizationLimitError('Credential context node limit exceeded')
+            if total_chars > MAX_TOTAL_CHARS:
+                raise SanitizationLimitError('Credential context character limit exceeded')
+            batch.append(source)
+            if len(batch) == CONTEXT_BATCH_ROWS:
+                redact(batch, _knowledge=known)
+                if len(known) > MAX_KNOWN_SECRETS:
+                    raise SanitizationLimitError('Credential context secret limit exceeded')
+                batch.clear()
+        if batch:
+            redact(batch, _knowledge=known)
+            if len(known) > MAX_KNOWN_SECRETS:
+                raise SanitizationLimitError('Credential context secret limit exceeded')
         self._values = tuple(known)
 
     def __repr__(self):
@@ -112,8 +152,8 @@ def _sources(storage, models, *, tenant_keys=None, finding_ids=None, max_rows):
 
 def build_report_context(storage, *, tenant_keys=None, max_rows=None):
     limit = Settings().report_context_max_rows if max_rows is None else max_rows
-    return CredentialContext([values for _, values in _sources(storage, REPORT_SOURCES,
-        tenant_keys=tenant_keys, max_rows=limit)])
+    return CredentialContext(values for _, values in _sources(storage, REPORT_SOURCES,
+        tenant_keys=tenant_keys, max_rows=limit))
 
 
 def build_projection_context(storage, *, family, tenant_keys=None):
@@ -123,8 +163,8 @@ def build_projection_context(storage, *, family, tenant_keys=None):
     Numeric aggregation does not make its stored grouping labels trustworthy.
     """
     models = PROJECTION_SOURCES[family]
-    return CredentialContext([values for _, values in _sources(storage, models,
-        tenant_keys=tenant_keys, max_rows=Settings().projection_context_max_rows)])
+    return CredentialContext(values for _, values in _sources(storage, models,
+        tenant_keys=tenant_keys, max_rows=Settings().projection_context_max_rows))
 
 
 def bind_finding_contexts(storage, findings, *, tenant_keys=None):

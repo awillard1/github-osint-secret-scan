@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">Assessment / Start</p><h1>New assessment</h1><p class="muted">Create an authorized workspace, then add targets and select a discovery profile.</p></div><a href="/dashboard/assessments">Back to assessments</a></div>
+<nav class="assessment-steps" aria-label="Assessment steps"><a href="#assessment-info" aria-current="step">1 · Information</a><span>2 · Targets</span><span>3 · Discovery</span><span>4 · Review</span></nav>
+<section class="panel" id="assessment-info"><h2>Assessment information</h2><form method="post" action="/dashboard/assessments/new" class="discovery-form">{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<label>Tenant <input name="tenant" value="{{ tenant }}" required></label><label>Name <input name="name" required maxlength="255"></label><label>Description <textarea name="description" rows="4"></textarea></label><button type="submit">Create assessment</button></form></section>
+{% endblock %}

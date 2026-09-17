@@ -1,0 +1,4 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="auth-layout"><section class="panel"><p class="eyebrow">Authorized operator access</p><h1>Sign in</h1><p>Use a session token issued by your orgscan administrator.</p><form method="post" action="/login" class="discovery-form"><label>Session token<input type="password" name="token" required autocomplete="off"></label><input type="hidden" name="csrf_token" value="{{ challenge }}"><button type="submit">Sign in</button></form></section></div>
+{% endblock %}

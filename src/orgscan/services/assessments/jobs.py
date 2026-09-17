@@ -18,7 +18,7 @@ from orgscan.security_context import current_auth,AuthContext
 class AssessmentJobs(AssessmentService):
     def publish(self, identity, *, kind='discovery', limit=500):
         """Publish this assessment's due jobs without touching other tenants' schedules."""
-        if kind not in ('discovery', 'scan', 'ai'):
+        if kind not in ('discovery', 'scan', 'ai', 'http_probe'):
             raise ValueError('Unsupported assessment job kind')
         with self.factory() as session:
             AssessmentStorage(session).assessment(identity, 'analyst')
@@ -47,6 +47,86 @@ class AssessmentJobs(AssessmentService):
     def launch_and_publish(self, identity, kind, *, options=None):
         launched = self.launch(identity, kind, options=options)
         return {**launched, **self.publish(identity, kind=kind)}
+
+    def http_probe_scope(self, identity):
+        """Small authorized readiness summary for the Domains action."""
+        with self.factory() as s:
+            AssessmentStorage(s).assessment(identity)
+            targets=s.scalar(select(func.count()).select_from(m.AssessmentTarget).where(
+                m.AssessmentTarget.assessment_id==identity,m.AssessmentTarget.target_type=='domain',
+                m.AssessmentTarget.validation_status=='valid')) or 0
+            return {'domain_targets':targets}
+
+    def launch_http_probe(self, identity, *, domain_ids=None, active_authorized=False):
+        """Schedule HTTPX only for linked domains that have not had a probe job."""
+        if domain_ids is not None and (not domain_ids or len(domain_ids)>100 or
+                                   any(type(value) is not int or value<=0 for value in domain_ids)):
+            raise ValueError('Select up to 100 valid domain IDs')
+        from orgscan.recon.registry import get_registry
+        from orgscan.recon.observations import scoped_host
+        from orgscan.storage.visibility import visibility_ids
+        from orgscan.security_context import LOCAL_CONTEXT
+        with self.factory() as s:
+            st=AssessmentStorage(s);a=st.assessment(identity,'analyst')
+            if active_authorized is not True:
+                raise ValueError('Authorize active HTTP probing of assessment domains')
+            if a.status in ('archived','completed'):
+                raise ValueError('Reopen the assessment before starting jobs')
+            if not get_registry().readiness('httpx',self.settings)['ready']:
+                raise ValueError('HTTPX is unavailable; check Recon Tools readiness')
+            roots=list(s.scalars(select(m.AssessmentTarget.normalized_value).where(
+                m.AssessmentTarget.assessment_id==identity,m.AssessmentTarget.target_type=='domain',
+                m.AssessmentTarget.validation_status=='valid').limit(self.settings.projection_context_max_rows+1)))
+            if not roots or len(roots)>self.settings.projection_context_max_rows:
+                raise ValueError('A valid domain target is required for active HTTP probing')
+            query=(select(m.AssessmentEntity,m.Domain).join(m.Domain,m.Domain.id==m.AssessmentEntity.entity_id)
+                .where(m.AssessmentEntity.assessment_id==identity,m.AssessmentEntity.entity_type=='domain',
+                       m.Domain.id.in_(visibility_ids([a.tenant_key])[m.Domain]))
+                .order_by(m.AssessmentEntity.id))
+            if domain_ids is not None:query=query.where(m.AssessmentEntity.entity_id.in_(domain_ids))
+            rows=list(s.execute(query.limit(self.settings.projection_context_max_rows+1)))
+            if len(rows)>self.settings.projection_context_max_rows:
+                raise ValueError('Assessment domain selection exceeds the context budget')
+            if domain_ids is not None and {link.entity_id for link,_ in rows}!=set(domain_ids):
+                raise ValueError('A selected domain is outside this assessment')
+            prior=select(m.AssessmentRun.metadata_json['domain_id'].as_integer(),
+                         m.ScheduledScan.enabled,m.QueueTask.status).join(
+                m.ScheduledScan,m.ScheduledScan.id==m.AssessmentRun.scheduled_scan_id).outerjoin(
+                m.QueueTask,m.QueueTask.scheduled_scan_id==m.ScheduledScan.id).where(
+                m.AssessmentRun.assessment_id==identity,m.AssessmentRun.kind=='http_probe').limit(
+                    self.settings.projection_context_max_rows+1)
+            prior_rows=list(s.execute(prior))
+            if len(prior_rows)>self.settings.projection_context_max_rows:
+                raise ValueError('HTTP probe history exceeds the context budget')
+            attempted={domain_id for domain_id,enabled,status in prior_rows
+                       if status!='cancelled' and (status is not None or enabled)}
+            chosen=[]
+            for link,domain in rows:
+                matching=[root for root in roots if scoped_host(domain.name,root)]
+                if not matching:
+                    if domain_ids is not None:
+                        raise ValueError('A selected domain is outside saved domain target scope')
+                    continue
+                if link.entity_id in attempted or 'httpx' in ((link.metadata_json or {}).get('observations') or {}):
+                    continue
+                chosen.append((link,max(matching,key=len)))
+                if len(chosen)==100:break
+            if not chosen:raise ValueError('No unprobed assessment domains remain in this selection')
+            launch_id=uuid4().hex;now=datetime.now(UTC)
+            actor=current_auth.get() or LOCAL_CONTEXT
+            for link,root in chosen:
+                metadata={'assessment_id':identity,'assessment_action':'http_probe',
+                          'assessment_domain_id':link.entity_id,'authorized_root':root,
+                          'organization_id':a.organization_id,
+                          'tenant_key':a.tenant_key,'authorized_by':actor.name,
+                          'authorized_at':now.isoformat()}
+                schedule=Storage(s).create_scheduled_scan('assessment',str(identity),'http_probe',now,
+                    cadence='manual',metadata_json=metadata)
+                s.add(m.AssessmentRun(assessment_id=identity,scheduled_scan_id=schedule.id,
+                    kind='http_probe',metadata_json={'domain_id':link.entity_id,'launch_id':launch_id}))
+            a.status='active';a.started_at=a.started_at or now
+            s.commit()
+        return {'scheduled':len(chosen),'assessment_id':identity,'state':'pending-enqueue'}
 
     def queued_schedule_ids(self, identity, *, kind='discovery', limit=500):
         if self.settings.scan_queue_backend != 'db':
@@ -155,10 +235,13 @@ class AssessmentJobs(AssessmentService):
             if not count:raise ValueError('Select repositories before reviewing a scan')
             return st.safe({'repositories':count,'scanners':sorted(scanners),'history_enabled':history,'sample_plans':sample,'options':options},a.tenant_key)
 
-    def progress(self,identity,*,limit=50,offset=0):
+    def progress(self,identity,*,limit=50,offset=0,kind=None):
+        if kind is not None and kind not in ('discovery','scan','ai','http_probe'):
+            raise ValueError('Unsupported assessment job kind')
         with self.factory() as s:
             st=AssessmentStorage(s);a=st.assessment(identity)
             query=select(m.AssessmentRun).where(m.AssessmentRun.assessment_id==identity).order_by(m.AssessmentRun.id.desc())
+            if kind is not None:query=query.where(m.AssessmentRun.kind==kind)
             total,runs=st.page(query,limit=limit,offset=offset)
             schedules={r.id:r for r in s.scalars(select(m.ScheduledScan).where(m.ScheduledScan.id.in_([r.scheduled_scan_id for r in runs])))}
             tasks={r.scheduled_scan_id:r for r in s.scalars(select(m.QueueTask).where(m.QueueTask.scheduled_scan_id.in_(schedules)).order_by(m.QueueTask.id))}
@@ -166,6 +249,7 @@ class AssessmentJobs(AssessmentService):
             latest=select(func.max(m.QueueTask.id)).where(m.QueueTask.scheduled_scan_id.in_(all_schedule_ids)).group_by(m.QueueTask.scheduled_scan_id)
             state=func.coalesce(m.QueueTask.status,case((m.ScheduledScan.enabled.is_(True),'pending'),else_='completed'))
             status_query=select(state,func.count()).select_from(m.AssessmentRun).join(m.ScheduledScan,m.ScheduledScan.id==m.AssessmentRun.scheduled_scan_id).outerjoin(m.QueueTask,(m.QueueTask.scheduled_scan_id==m.ScheduledScan.id)&m.QueueTask.id.in_(latest)).where(m.AssessmentRun.assessment_id==identity).group_by(state)
+            if kind is not None:status_query=status_query.where(m.AssessmentRun.kind==kind)
             statuses=dict(s.execute(status_query).all())
             repository_states=dict(s.execute(status_query.where(m.AssessmentRun.kind=='scan')).all())
             latest_repositories=select(func.max(m.AssessmentRun.id)).where(m.AssessmentRun.assessment_id==identity,m.AssessmentRun.kind=='scan').group_by(m.AssessmentRun.metadata_json['repository_id'].as_integer())
@@ -178,9 +262,17 @@ class AssessmentJobs(AssessmentService):
             for run in runs:
                 schedule=schedules[run.scheduled_scan_id];task=tasks.get(schedule.id)
                 status=task.status if task else ('pending' if schedule.enabled else 'completed')
+                plan=((schedule.metadata_json or {}).get('scan_plan') or {}) if run.kind=='scan' else {}
                 rows.append({**fields(run),'status':status,'scan_job_id':(stage_jobs[schedule.id].id if schedule.id in stage_jobs else task.result_scan_job_id if task else None),'stages':(stage_jobs[schedule.id].scope_json or {}).get('stages',{}) if schedule.id in stage_jobs else {},
-                             'failure_code':(task.metadata_json or {}).get('failure_code') if task else None,'attempts':task.attempt_count if task else 0,'next_attempt_at':task.available_at if task and task.status in ('queued','retrying') else None,'error':task.last_error if task else (schedule.metadata_json or {}).get('last_error')})
-            return st.safe({'total':total,'states':statuses,'items':rows,'repository_jobs':{'completed':repository_states.get('completed',0),'total':sum(repository_states.values()),'states':repository_states},'repositories':{'completed':unique_states.get('completed',0),'total':sum(unique_states.values()),'states':unique_states},'findings':{key:severities.get(key,0) for key in ('critical','high','medium','low','info')},'offset':offset,'limit':limit},a.tenant_key)
+                             'failure_code':(task.metadata_json or {}).get('failure_code') if task else None,'attempts':task.attempt_count if task else 0,'next_attempt_at':task.available_at if task and task.status in ('queued','retrying') else None,'error':task.last_error if task else (schedule.metadata_json or {}).get('last_error'),
+                             'target':plan.get('target') if isinstance(plan,dict) else None,'profile':plan.get('profile') if isinstance(plan,dict) else None,
+                             'domain_id':(schedule.metadata_json or {}).get('assessment_domain_id') if run.kind=='http_probe' else None,
+                             'scanners':plan.get('scanners',[]) if isinstance(plan,dict) else [],
+                             'created_at':run.created_at,'queued_at':task.created_at if task else None,
+                             'started_at':task.started_at if task else None,'completed_at':task.completed_at if task else None})
+            selected_repositories=s.scalar(select(func.count()).select_from(m.AssessmentEntity).where(
+                m.AssessmentEntity.assessment_id==identity,m.AssessmentEntity.entity_type=='repository',m.AssessmentEntity.included.is_(True))) or 0
+            return st.safe({'total':total,'states':statuses,'items':rows,'repository_jobs':{'completed':repository_states.get('completed',0),'total':sum(repository_states.values()),'states':repository_states},'repositories':{'completed':unique_states.get('completed',0),'total':sum(unique_states.values()),'states':unique_states},'selected_repositories':selected_repositories,'findings':{key:severities.get(key,0) for key in ('critical','high','medium','low','info')},'offset':offset,'limit':limit},a.tenant_key)
 
     def pause(self,identity):
         # Cooperative stop: no process is killed. Already-running operations finish.
@@ -234,7 +326,7 @@ class AssessmentJobs(AssessmentService):
             task=s.scalar(select(m.QueueTask).where(m.QueueTask.scheduled_scan_id==run.scheduled_scan_id).order_by(m.QueueTask.id.desc()))
             if task is None or task.status!='failed':raise ValueError('Only failed terminal jobs can be retried')
             old=s.get(m.ScheduledScan,run.scheduled_scan_id)
-            metadata={k:v for k,v in old.metadata_json.items() if k in ('assessment_id','assessment_action','assessment_target_id','scan_plan','clone_url','connection_id','organization_id','tenant_key','ai_options','discovery_options')}
+            metadata={k:v for k,v in old.metadata_json.items() if k in ('assessment_id','assessment_action','assessment_target_id','assessment_domain_id','authorized_root','authorized_by','authorized_at','scan_plan','clone_url','connection_id','organization_id','tenant_key','ai_options','discovery_options')}
             schedule=Storage(s).create_scheduled_scan('assessment',str(identity),run.kind,datetime.now(UTC),cadence='manual',metadata_json=metadata)
             s.add(m.AssessmentRun(assessment_id=identity,target_id=run.target_id,scheduled_scan_id=schedule.id,kind=run.kind,metadata_json=run.metadata_json))
             a.status='active';s.commit();return {'scheduled_scan_id':schedule.id,'kind':run.kind}
@@ -300,7 +392,25 @@ def execute_assessment_task(storage,scheduled,settings):
         storage.mark_scan_job_running(job);storage.session.commit()
         try:
             check_cancelled()
-            if action=='discovery':
+            if action=='http_probe':
+                domain_id=metadata.get('assessment_domain_id')
+                domain=AssessmentStorage(storage.session).entity(assessment,'domain',domain_id)
+                if not metadata.get('authorized_by') or not metadata.get('authorized_at'):
+                    raise ValueError('Active HTTP probe authorization is missing')
+                from orgscan.recon.observations import scoped_host
+                root=metadata.get('authorized_root')
+                authorized=storage.session.scalar(select(m.AssessmentTarget.id).where(
+                    m.AssessmentTarget.assessment_id==assessment.id,
+                    m.AssessmentTarget.target_type=='domain',
+                    m.AssessmentTarget.validation_status=='valid',
+                    m.AssessmentTarget.normalized_value==root).limit(1))
+                if not authorized or not scoped_host(domain.name,root):
+                    raise ValueError('HTTP probe target scope changed; launch a new operation')
+                from orgscan.services.assessments.discovery_progress import DiscoveryProgress
+                from orgscan.recon.pipeline import run_pipeline
+                run_pipeline(storage,assessment,domain,{'providers':['httpx'],'active_authorized':True},
+                    settings,DiscoveryProgress(storage,job),include_linked_domains=False)
+            elif action=='discovery':
                 target=storage.session.get(m.AssessmentTarget,metadata.get('assessment_target_id'))
                 if target is None or target.assessment_id!=assessment.id or target.validation_status!='valid':raise ValueError('Assessment target is unavailable')
                 from orgscan.services.assessments.discovery_progress import DiscoveryProgress

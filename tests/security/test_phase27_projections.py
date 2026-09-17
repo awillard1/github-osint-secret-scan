@@ -18,9 +18,19 @@ from orgscan.schemas import CanonicalFinding
 from orgscan.security_context import AuthContext, AuthorizationError, current_auth
 from orgscan.services.secret_evidence import SecretEvidenceService
 from orgscan.redaction import SanitizationLimitError
-from orgscan.storage.credential_context import build_projection_context
+from orgscan.storage.credential_context import CredentialContext, build_projection_context
 
 SECRET = 'AuditLegacyOpaque987654!'
+
+
+def test_large_context_batches_preserve_complete_secret_knowledge():
+    # A routine multi-provider discovery can exceed the sanitizer's per-call
+    # node budget even when the bounded source population is legitimate.
+    sources = [{'observations': [f'asset-{index}-{part}' for part in range(55)]}
+               for index in range(1800)]
+    sources[-1]['token'] = SECRET
+    context = CredentialContext(sources)
+    assert SECRET not in str(context.sanitize({'copied': f'Observed {SECRET}'}))
 
 
 @pytest.fixture

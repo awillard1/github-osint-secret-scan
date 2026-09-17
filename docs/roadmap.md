@@ -440,17 +440,30 @@ The live dashboard, operator overview cards, queue drill-down, assessment index 
 now use autoescaped Jinja templates and a shared responsive light/dark visual system.
 Finding detail has a protected decision form that returns to the same record; the
 existing service still owns lifecycle policy. Browser static assets are packaged
-with the application. Legacy assessment tabs, scan-job detail, settings,
-login and standalone HTML reporting still use escaped Python HTML and need a later
-incremental migration. No schema, scanner, CLI or report-format change is involved.
+with the application. Assessment tabs, recon results/settings, scan-job detail,
+login and user administration now share those autoescaped templates. Standalone
+HTML reporting remains self-contained. No schema, CLI or report-format change is involved.
 
 The assessment overview and Discovery page now include a service-backed activity
 projection and server-rendered live fragment. Durable schedule publication, worker
 claim, stage progress, stale-update warning and partial failure are distinct
 operator states; the browser polls only while activity is nonterminal and visible.
 Worker heartbeat is inferred from persisted updates, so a long-running stage can
-appear stale without proving the worker stopped. Other legacy assessment tabs and
-detailed worker liveness instrumentation remain follow-up work.
+appear stale without proving the worker stopped. Detailed worker liveness
+instrumentation remains follow-up work.
+
+Discovery Results now schedules HTTPX follow-up jobs for linked names under saved
+valid domain targets, with explicit active authorization and worker-time scope
+revalidation. The existing queue, adapter, observation store, retry and cancellation
+paths remain authoritative. The browser can start bounded DB queue batches; Redis/RQ
+needs a supervised worker. The live browser pages now share the console templates.
+
+The assessment Scans tab now uses the console shell for scope, scanner readiness,
+launch review and durable scan-run status. Analysts can publish pending jobs and
+request a bounded DB queue execution batch from the browser. Discovery-generated
+source populations exposed prior report/projection row and sanitizer work budgets;
+the defaults are now 10,000 rows with bounded, shared-knowledge source batching and
+aggregate text/structure limits. No schema or scanner behavior changed.
 
 Assessment discovery launch now publishes the selected assessment's jobs immediately
 where queue health permits, with browser retry for pending publication. Database

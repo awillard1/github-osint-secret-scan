@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+{% set root = '/dashboard/assessments/' ~ assessment.id %}
+{% set pending = jobs['states'].get('pending', 0) %}
+{% set queued = jobs['states'].get('queued', 0) %}
+{% set running = jobs['states'].get('running', 0) %}
+{% set failed = jobs['states'].get('failed', 0) %}
+<div class="page-heading"><div><p class="eyebrow">Assessment / Repository scans</p><h1>{{ assessment.name }}</h1><p class="muted">Review scope, choose scanners, then monitor each durable scan run.</p></div><a class="button" href="{{ root }}/repositories">Manage repository scope</a></div>
+<nav class="assessment-links" aria-label="Assessment workspace"><a href="{{ root }}/overview">Overview</a><a href="{{ root }}/discovery">Discovery</a><a href="{{ root }}/recon-results">Discovery results</a><a href="{{ root }}/relationships">Relationships</a><a href="{{ root }}/repositories">Repository scope</a><a href="{{ root }}/scans" aria-current="page">Scans</a><a href="{{ root }}/findings">Findings</a><a href="{{ root }}/reports">Reports</a></nav>
+<div class="scan-metrics" aria-label="Scan overview">
+  <div class="activity-metric"><strong>{{ jobs.selected_repositories }}</strong><span>Repositories in scope</span></div>
+  <div class="activity-metric"><strong>{{ jobs.repositories.completed }} / {{ jobs.repositories.total }}</strong><span>Latest repository scans completed</span></div>
+  <div class="activity-metric"><strong>{{ running + queued }}</strong><span>Running or queued</span></div>
+  <div class="activity-metric"><strong>{{ pending }}</strong><span>Pending publication</span></div>
+  <div class="activity-metric"><strong>{{ failed }}</strong><span>Failed runs</span></div>
+</div>
+<section class="panel scan-operations" aria-labelledby="scan-operations-title">
+  <div><p class="eyebrow">Execution state</p><h2 id="scan-operations-title">Scan jobs</h2>
+    {% if jobs.total %}<p>{{ jobs.total }} durable scan {{ 'run' if jobs.total == 1 else 'runs' }}. {% if pending %}{{ pending }} {{ 'schedule is' if pending == 1 else 'schedules are' }} saved but not yet published to a worker queue.{% elif queued %}Queued jobs are available for a worker to claim.{% elif running %}A worker is processing scan jobs.{% else %}No scan jobs are waiting for publication.{% endif %}</p>
+    {% else %}<p>No repository scans have been launched for this assessment.</p>{% endif %}
+    <p class="muted">Database queues can execute the selected jobs from this browser. Redis queues require a deployment worker. Refresh this page to inspect saved job state.</p>
+  </div>
+  {% if auth and auth.allows_role('analyst') %}<div class="scan-queue-actions">
+    {% if pending %}<form method="post" action="{{ root }}/scans/publish">{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<button type="submit">Publish pending jobs</button></form>{% endif %}
+    {% if db_execution and (pending or queued) %}<form method="post" action="{{ root }}/scans/execute">{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<button class="button" type="submit">{{ 'Publish and execute jobs' if pending else 'Execute queued jobs' }}</button></form>{% endif %}
+  </div>{% endif %}
+</section>
+<section class="panel" id="scan-configuration" aria-labelledby="scan-config-title">
+  <div class="section-heading"><div><p class="eyebrow">Prepare a scan</p><h2 id="scan-config-title">Profile and scanner readiness</h2></div><a href="{{ root }}/repositories">Review included repositories →</a></div>
+  {% if jobs.selected_repositories == 0 %}<div class="empty-state"><strong>No repositories selected</strong><p>Include repositories in scope before reviewing a scan launch.</p><a href="{{ root }}/repositories">Select repositories</a></div>{% else %}
+  <p class="muted">Profile defaults apply when no scanners are checked. Explicit selections replace the profile scanner list. Unavailable scanners cannot be selected.</p>
+  {% if auth and auth.allows_role('analyst') %}<form method="post" action="{{ root }}/launch/scan" class="scan-form">
+    {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+    <div class="scan-form-grid"><label>Scan profile<select name="profile">{% for name in profiles %}<option value="{{ name }}" {% if name == assessment.scan_profile.get('profile', 'standard') %}selected{% endif %}>{{ name|replace('-', ' ')|title }}</option>{% endfor %}</select></label>
+      <label>Branch policy<select name="branch_policy"><option value="default-only">Default branch</option><option value="selected">Selected refs</option><option value="all">All branches</option><option value="tracked">Tracked branches</option></select></label>
+      <label>Selected refs <input name="refs" placeholder="main, release" aria-describedby="scan-refs-help"><small id="scan-refs-help">Comma separated; required for Selected refs.</small></label>
+      <label>Execution mode<select name="mode"><option value="">Profile default</option><option value="full">Full</option><option value="incremental">Incremental</option><option value="history">History</option></select></label></div>
+    <fieldset class="scan-scanners"><legend>Scanner override</legend><div class="scan-scanner-grid">{% for scanner in inventory %}<label class="scan-scanner-choice"><span><input type="checkbox" name="scanners" value="{{ scanner.name }}" {% if not scanner.readiness.ready %}disabled{% endif %}> <strong>{{ scanner.name }}</strong></span><small>{{ 'Ready' if scanner.readiness.ready else 'Unavailable' }} · {{ scanner.readiness.status }}</small></label>{% endfor %}</div></fieldset>
+    <div class="scan-form-actions"><button class="button" type="submit">Review scan launch</button><span class="muted">Review creates no jobs.</span></div>
+  </form>{% else %}<p class="muted">An analyst can review and launch scans. Your access is read only.</p>{% endif %}
+  {% endif %}
+</section>
+<section class="panel" id="scan-history" aria-labelledby="scan-history-title"><div class="section-heading"><div><p class="eyebrow">Durable history</p><h2 id="scan-history-title">Recent scan runs</h2></div><a href="{{ root }}/scans#scan-history">Refresh status ↻</a></div>
+  {% if jobs['items'] %}<div class="scan-run-list">{% for run in jobs['items'] %}<article class="scan-run"><div class="scan-run-head"><div><strong>{{ run.target or ('Repository run #' ~ run.id) }}</strong><small>Run #{{ run.id }} · {{ run.profile or 'Custom profile' }} · {{ run.scanners|join(', ') if run.scanners else 'Scanner plan unavailable' }}</small></div><span class="activity-state" data-state="{{ run.status }}">{{ 'Pending enqueue' if run.status == 'pending' else run.status|replace('_',' ')|title }}</span></div>
+    <div class="scan-run-meta"><span>Created {{ run.created_at or '—' }}</span><span>Queued {{ run.queued_at or '—' }}</span><span>Started {{ run.started_at or '—' }}</span><span>Finished {{ run.completed_at or '—' }}</span><span>Attempts {{ run.attempts }}</span></div>
+    {% if run.status == 'pending' %}<p class="muted">The schedule is durable; publish it before a worker can claim it.</p>{% elif run.status == 'queued' %}<p class="muted">Waiting for a worker{% if run.next_attempt_at %}; next eligible attempt {{ run.next_attempt_at }}{% endif %}.</p>{% elif run.status == 'failed' %}<p class="scan-safe-error">This run failed ({{ run.failure_code|replace('_',' ') if run.failure_code else 'unclassified failure' }}). Review the job details and retry after resolving the cause.</p>{% elif run.status == 'cancelled' %}<p class="muted">Stopped by an operator. Earlier completed findings remain available.</p>{% endif %}
+    <div class="target-actions">{% if run.scan_job_id %}<a href="/dashboard/scan-jobs/{{ run.scan_job_id }}">Open job details</a>{% endif %}
+      {% if auth and auth.allows_role('analyst') %}{% if run.status == 'failed' %}<form method="post" action="{{ root }}/runs/{{ run.id }}/retry">{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<button type="submit">Retry run</button></form>{% elif run.status in ('pending','queued','running') %}<form method="post" action="{{ root }}/runs/{{ run.id }}/cancel">{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<button type="submit">Stop run</button></form>{% endif %}{% endif %}
+    </div></article>{% endfor %}</div>{% else %}<div class="empty-state"><strong>No scan runs yet</strong><p>Choose repository scope and review a scan profile to create durable jobs.</p></div>{% endif %}
+  <nav class="pagination" aria-label="Scan run pages">{% if jobs.offset %}<a href="?offset={{ [0, jobs.offset - jobs.limit]|max }}#scan-history">Previous</a>{% endif %}<span>{{ jobs.offset + 1 if jobs.total else 0 }}–{{ [jobs.offset + jobs.limit, jobs.total]|min }} of {{ jobs.total }}</span>{% if jobs.offset + jobs.limit < jobs.total %}<a href="?offset={{ jobs.offset + jobs.limit }}#scan-history">Next</a>{% endif %}</nav>
+</section>
+{% endblock %}

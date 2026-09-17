@@ -776,7 +776,7 @@ tenant visibility through the authoritative policy. Dashboard trends reuse repor
 context; operator context remains scoped to its own session. The full source inventory
 and A/B/C classification are in [projection safety](projection-safety.md).
 
-`ORGSCAN_PROJECTION_CONTEXT_MAX_ROWS` defaults to 2,000 rows per family (configurable
+`ORGSCAN_PROJECTION_CONTEXT_MAX_ROWS` defaults to 10,000 rows per family (configurable
 up to 100,000). Existing report/page and sanitizer work limits remain active. Oversized
 or incomplete context fails closed before derived output is emitted; no first-N
 partial context is accepted. Large scopes may therefore require budget configuration.

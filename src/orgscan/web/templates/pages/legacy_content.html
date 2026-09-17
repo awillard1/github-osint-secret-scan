@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">Operator console</p><h1>{{ heading }}</h1></div></div>
+{% if assessment %}{% include "components/assessment_nav.html" %}{% endif %}
+<section class="panel">{{ body }}</section>
+{% endblock %}

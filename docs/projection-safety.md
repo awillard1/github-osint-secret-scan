@@ -43,14 +43,16 @@ ranked rows or graph endpoints. Tenant ID subqueries intersect request and inher
 scope. No per-row metadata query is performed. A tenant's metadata must not influence
 another tenant's coincidentally equal label.
 
-`ORGSCAN_PROJECTION_CONTEXT_MAX_ROWS` defaults to **2,000**, configurable from 1 to
+`ORGSCAN_PROJECTION_CONTEXT_MAX_ROWS` defaults to **10,000**, configurable from 1 to
 100,000. Each family applies this limit independently. The query reads at most limit
 plus one; overflow raises a fixed safety error and emits no partial projection.
-Character, node, depth, known-secret and replacement-work budgets still apply.
-Increasing the row limit does not disable those budgets. Limits are checked before
+Sources are sanitized in batches of 128 rows with shared credential knowledge;
+an aggregate 500,000-node and 8-million-character bound also applies. Per-batch
+depth, known-secret and replacement-work budgets still apply. Increasing the row
+limit does not disable those budgets. Limits are checked before
 loading derived populations. No persistent context cache is introduced.
 
-Existing report (default 1,000 rows) and finding-page limits remain in force. Dashboard
+Existing report (default 10,000 rows) and finding-page limits remain in force. Dashboard
 requests must satisfy both their report and operator context limits. Dashboard trends
 reuse the complete report context, which covers the finding/evidence trend family;
 operator context is built independently in its authorized session. Graph edges remain

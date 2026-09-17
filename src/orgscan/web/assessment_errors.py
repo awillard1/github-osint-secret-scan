@@ -3,7 +3,7 @@ from fastapi.routing import APIRoute
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException
 from starlette.responses import HTMLResponse
-from orgscan.web.assessments import page,esc
+from orgscan.web.render import render
 
 
 class AssessmentRoute(APIRoute):
@@ -19,5 +19,6 @@ class AssessmentRoute(APIRoute):
                     code=error.status_code
                     # Deliberately avoid exception/input text at the presentation boundary.
                     message={404:'This assessment resource was not found.',403:'Your role or tenant does not permit this action.',413:'This upload exceeds the allowed size.',422:'These options could not be saved. Check the selected scope, dates, profile and tool readiness.'}.get(code,'The action could not be completed. Review configuration and retry.')
-                return HTMLResponse(page('Action needs attention','<p role="alert">'+esc(message)+'</p><p>Your existing assessment data is retained. Use your browser’s Back button to review the form.</p>'),status_code=code,headers={'Cache-Control':'no-store'})
+                return HTMLResponse(render('pages/action_error.html',title='Action needs attention',
+                    active_section='assessments',message=message),status_code=code,headers={'Cache-Control':'no-store'})
         return wrapped

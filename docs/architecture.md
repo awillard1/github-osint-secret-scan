@@ -37,7 +37,7 @@ Responsibilities:
 
 Not responsible for core workflow decisions.
 
-The live [operator dashboard](operator-dashboard.md) consumes `DashboardService` queues over authorized storage; templates do not classify risk or lifecycle states. The browser layer now has `web/render.py`, autoescaped Jinja templates and shared static design tokens. The live dashboard, queue, assessment-index, assessment overview/discovery and finding-detail pages use those templates; legacy pages migrate incrementally. FastAPI mounts packaged static assets at `/static`. Browser POST actions continue through the existing auth, CSRF and service boundaries; exported report HTML does not depend on browser assets.
+The live [operator dashboard](operator-dashboard.md) consumes `DashboardService` queues over authorized storage; templates do not classify risk or lifecycle states. The browser layer has `web/render.py`, autoescaped Jinja templates and shared static design tokens. Live dashboard, assessment, discovery-results, recon-settings, finding/job-detail, login and user-administration pages use those templates. FastAPI mounts packaged static assets at `/static`. Browser POST actions continue through the existing auth, CSRF and service boundaries; exported report HTML does not depend on browser assets.
 
 `services/assessments/activity.py` projects the latest discovery launch from
 AssessmentRun, ScheduledScan, QueueTask and persisted ScanJob stages. The browser
@@ -52,6 +52,20 @@ that authorized assessment's due schedules through the existing queue outbox. A
 database-backed deployment can request a bounded background worker batch scoped to
 those schedule IDs. Redis/RQ workers remain deployment managed. Provider execution
 still goes through durable claims and worker services.
+
+Assessment scan pages consume the existing AssessmentJobs projection, filtered to
+scan runs. Browser publish and execute actions call that service and the existing
+bounded DB queue runner; scan policy and worker state stay outside Jinja and
+JavaScript. Credential context collection processes authorized source rows in
+bounded batches, retaining shared knowledge and aggregate structural/text limits
+before any derived projection is rendered.
+
+The Domains follow-up action creates assessment-scoped `http_probe` schedules through
+`AssessmentJobs`. It requires explicit active authorization and a saved valid domain
+target whose scope contains each linked domain. The worker revalidates that target
+and uses the existing HTTPX adapter, recon pipeline, observation store, queue claim
+and cancellation context. Browser templates only render readiness and durable state;
+no network subprocess runs in a route handler.
 
 An analyst-scoped stop action addresses an AssessmentRun rather than a process ID.
 The assessment service records cancellation on its durable QueueTask; DB/RQ workers

@@ -21,9 +21,9 @@ class Settings(BaseSettings):
     app_env: str = "development"
     auto_migrate: bool = True  # Development bootstrap only; never honored in production.
     preserve_secrets: bool = False
-    report_context_max_rows: int = Field(default=1000, ge=1, le=100000)
+    report_context_max_rows: int = Field(default=10000, ge=1, le=100000)
     finding_context_max_rows: int = Field(default=2000, ge=1, le=100000)
-    projection_context_max_rows: int = Field(default=2000, ge=1, le=100000)
+    projection_context_max_rows: int = Field(default=10000, ge=1, le=100000)
     github_connection_credentials_json: str = '{}'
     assessment_import_max_bytes: int = Field(default=1_000_000, ge=1024, le=10_000_000)
     assessment_import_max_rows: int = Field(default=5000, ge=1, le=100000)

@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">Platform administration</p><h1>Session issued</h1></div><a href="/dashboard/users">Back to users</a></div>
+<section class="panel"><h2>Copy this token now</h2><p>It expires in 24 hours and is shown only in this response.</p><pre>{{ token }}</pre></section>
+{% endblock %}

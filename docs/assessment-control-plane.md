@@ -29,9 +29,20 @@ Excluding an asset from scanning does not delete its relationships or findings.
 6. Review the selected repository/scanner counts and history mode, then confirm
    launch. Review creates no jobs. Both review and launch use ScanPlan. Monitor
    latest repository completion, queue states and severity counts; open job details.
+   The Scans tab shows durable pending, queued, running and failed runs with safe
+   diagnostics. Analysts can publish pending scan jobs and, with the DB backend,
+   execute an assessment-scoped batch from the browser. Redis/RQ still needs a
+   supervised worker.
 7. Open an assessment finding, review observations and association provenance,
    explicitly reveal if authorized, and record analyst triage.
 8. Export JSON, CSV, HTML, PDF or SARIF, or generate optional local AI advice.
+
+After passive discovery, open **Discovery Results → Domains** to launch HTTPX on
+assessment-linked names beneath saved valid domain targets. This requires an
+analyst's explicit active-scope confirmation. The browser creates at most 100
+durable jobs per launch, publishes them, and starts ten queued jobs in DB queue
+mode. Use the results page to execute further DB batches, inspect progress, retry
+failed jobs or stop pending/running jobs. Redis/RQ still uses its supervised worker.
 
 ### Discovery activity and local operation
 

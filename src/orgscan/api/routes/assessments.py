@@ -139,7 +139,42 @@ def create_assessment_router(settings):
 
     @router.get('/dashboard/assessments/{identity}/recon-results',response_class=HTMLResponse)
     def recon_results_web(identity:int,tab:str='overview',offset:int=0):
-        return recon_ui.results(call(service.detail,identity),call(work.recon_results,identity,tab=tab,offset=offset),tab,offset)
+        probe=call(jobs.progress,identity,kind='http_probe',limit=20) if tab in ('domains','web') else None
+        return recon_ui.results(call(service.detail,identity),call(work.recon_results,identity,tab=tab,offset=offset),tab,offset,
+            probe=probe,httpx_ready=provider_readiness(settings) if tab=='domains' else None,
+            probe_scope=call(jobs.http_probe_scope,identity) if tab=='domains' else None,
+            db_execution=settings.scan_queue_backend=='db')
+
+    @router.post('/dashboard/assessments/{identity}/recon-results/http-probe')
+    def http_probe_launch(identity:int,background:BackgroundTasks,domain_ids:str=Form(''),active_authorized:bool=Form(False)):
+        values=None
+        if domain_ids.strip():
+            parts=[part.strip() for part in domain_ids.split(',')]
+            if len(parts)>100 or any(not part.isdigit() or len(part)>18 for part in parts):
+                raise HTTPException(422,'Select up to 100 domain IDs')
+            values=list(dict.fromkeys(int(part) for part in parts))
+        call(jobs.launch_http_probe,identity,domain_ids=values,active_authorized=active_authorized)
+        call(jobs.publish,identity,kind='http_probe')
+        if settings.scan_queue_backend=='db':
+            ids=call(jobs.queued_schedule_ids,identity,kind='http_probe',limit=10)
+            if ids:
+                from orgscan.queueing import run_db_schedule_batch
+                background.add_task(run_db_schedule_batch,settings,ids)
+        return RedirectResponse(f'/dashboard/assessments/{identity}/recon-results?tab=domains',303)
+
+    @router.post('/dashboard/assessments/{identity}/recon-results/http-probe/execute')
+    def http_probe_execute(identity:int,background:BackgroundTasks):
+        call(jobs.publish,identity,kind='http_probe')
+        ids=call(jobs.queued_schedule_ids,identity,kind='http_probe',limit=10)
+        if ids:
+            from orgscan.queueing import run_db_schedule_batch
+            background.add_task(run_db_schedule_batch,settings,ids)
+        return RedirectResponse(f'/dashboard/assessments/{identity}/recon-results?tab=domains',303)
+
+    @router.post('/dashboard/assessments/{identity}/recon-results/http-probe/publish')
+    def http_probe_publish(identity:int):
+        call(jobs.publish,identity,kind='http_probe')
+        return RedirectResponse(f'/dashboard/assessments/{identity}/recon-results?tab=domains',303)
 
     from orgscan.services.local_ai import AIService
     ai=AIService(settings)
@@ -277,6 +312,20 @@ def create_assessment_router(settings):
             background.add_task(run_db_schedule_batch,settings,ids)
         return RedirectResponse(f'/dashboard/assessments/{identity}/discovery',303)
 
+    @router.post('/dashboard/assessments/{identity}/scans/publish')
+    def publish_scans(identity:int):
+        call(jobs.publish,identity,kind='scan')
+        return RedirectResponse(f'/dashboard/assessments/{identity}/scans',303)
+
+    @router.post('/dashboard/assessments/{identity}/scans/execute')
+    def execute_scans(identity:int,background:BackgroundTasks):
+        call(jobs.publish,identity,kind='scan')
+        ids=call(jobs.queued_schedule_ids,identity,kind='scan')
+        if ids:
+            from orgscan.queueing import run_db_schedule_batch
+            background.add_task(run_db_schedule_batch,settings,ids)
+        return RedirectResponse(f'/dashboard/assessments/{identity}/scans',303)
+
     @router.get('/assessments/{identity}/findings')
     def findings(identity:int,limit:int=50,offset:int=0,severity:str|None=None,confidence:str|None=None,status:str|None=None,source_tool:str|None=None,category:str|None=None,repository_id:int|None=None,lifecycle_state:str|None=None):
         return call(work.findings,identity,limit=limit,offset=offset,severity=severity,confidence=confidence,status=status,source_tool=source_tool,category=category,repository_id=repository_id,lifecycle_state=lifecycle_state)
@@ -290,15 +339,8 @@ def create_assessment_router(settings):
         from orgscan.web.secret_reveal import render_secret_controls
         payload=jsonable_encoder(call(work.finding_detail,identity,finding_id))
         assessment=call(service.detail,identity)
-        page=render_finding_detail_html(payload)
         controls=render_secret_controls(settings,finding_id)
-        context='<section><p><a href="/dashboard/assessments/'+str(identity)+'/findings">Back to '+ui.esc(assessment['name'])+'</a></p><h2>Deterministic association provenance</h2>'+ui.table(payload['association'],['confidence','source','metadata_json'])+'</section>'
-        controls+=ui.form(f'/dashboard/findings/{finding_id}/workflow','<input type="hidden" name="action" value="triage">'+ui.input_field('owner','Owner')+ui.input_field('note','Analyst note'),'Confirm triage')
-        controls+=ui.form(f'/dashboard/assessments/{identity}/launch/ai',f'<input type="hidden" name="purpose" value="finding"><input type="hidden" name="entity_id" value="{finding_id}">','Explain finding with Local AI')
-        from orgscan.security_context import current_csrf
-        csrf=current_csrf.get()
-        if csrf:controls=controls.replace('<button type="submit">','<input type="hidden" name="csrf_token" value="'+ui.esc(csrf)+'"><button type="submit">')
-        return page.replace('</main>',context+controls+'</main>')
+        return render_finding_detail_html(payload,assessment=assessment,secret_controls=controls)
 
     @router.get('/assessments/{identity}/relationships')
     def relationships(identity:int,limit:int=100,offset:int=0,entity_type:str|None=None,entity_id:int|None=None,relation_type:str|None=None,confidence:str|None=None):return call(work.graph,identity,limit=limit,offset=offset,entity_type=entity_type,entity_id=entity_id,relation_type=relation_type,confidence=confidence)
@@ -359,7 +401,7 @@ def create_assessment_router(settings):
         assessment=call(service.detail,identity)
         if tab=='targets':return ui.targets(assessment,call(service.targets,identity,offset=offset),offset)
         if tab=='discovery':return ui.discovery(assessment,call(activity.view,identity),provider_readiness(settings),PROFILES,call(service.profiles,assessment['tenant_key'])['saved'])
-        if tab=='scans':return ui.scans(assessment,call(jobs.progress,identity,offset=offset),scanner_inventory(settings),SCAN_PROFILES)
+        if tab=='scans':return ui.scans(assessment,call(jobs.progress,identity,offset=offset,kind='scan'),scanner_inventory(settings),SCAN_PROFILES,db_execution=settings.scan_queue_backend=='db')
         if tab in ('repositories','accounts','domains'):
             kind={'repositories':'repository','accounts':'account','domains':'domain'}[tab]
             filters=dict(search=search,confidence=confidence or None,source=source or None,visibility=visibility or None,archived=archived,fork=fork,scanned=scanned,updated_after=updated_after or None,updated_before=updated_before or None)
@@ -373,7 +415,7 @@ def create_assessment_router(settings):
             return ui.findings(assessment,call(work.findings,identity,offset=offset,**filters),filters)
         if tab=='ai':return ui.advice(assessment,call(ai.advice,identity,offset=offset))
         if tab=='reports':
-            return ui.page(assessment['name']+' — Reports',''.join(f'<p><a href="/assessments/{identity}/reports/{fmt}">Export {fmt.upper()}</a> · <a href="/assessments/{identity}/reports/{fmt}?include_ai_summary=true">Include available AI Suggested summary</a></p>' for fmt in ('json','csv','html','pdf','sarif')),assessment=assessment)
+            return ui.reports(assessment)
         if tab=='overview':
             return ui.overview(assessment,call(activity.view,identity))
         raise HTTPException(404,'Unknown assessment page')
@@ -455,11 +497,11 @@ def create_assessment_router(settings):
     @router.post('/dashboard/assessments/{identity}/runs/{run_id}/retry')
     def retry_post(identity:int,run_id:int):
         result=call(jobs.retry,identity,run_id)
-        return RedirectResponse(f'/dashboard/assessments/{identity}/'+('discovery' if result['kind']=='discovery' else 'scans'),303)
+        return RedirectResponse(f'/dashboard/assessments/{identity}/'+('discovery' if result['kind']=='discovery' else 'recon-results?tab=domains' if result['kind']=='http_probe' else 'scans'),303)
 
     @router.post('/dashboard/assessments/{identity}/runs/{run_id}/cancel')
     def cancel_run_post(identity:int,run_id:int):
         result=call(jobs.cancel_run,identity,run_id)
-        section='discovery' if result['kind']=='discovery' else 'ai' if result['kind']=='ai' else 'scans'
+        section='discovery' if result['kind']=='discovery' else 'ai' if result['kind']=='ai' else 'recon-results?tab=domains' if result['kind']=='http_probe' else 'scans'
         return RedirectResponse(f'/dashboard/assessments/{identity}/{section}',303)
     return router

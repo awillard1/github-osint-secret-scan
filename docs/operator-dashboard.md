@@ -22,10 +22,11 @@ the normal redirect. Exported HTML remains
 self-contained and omits browser session controls. Jinja2 is a runtime dependency;
 installed wheels must include the templates and static assets.
 
-This is an incremental migration. Other assessment detail tabs and scan-job detail,
-settings, login and the standalone HTML report still assemble escaped HTML in
-Python. Their routes and forms remain supported. Deployment-specific visual and
-accessibility review remains needed.
+Live browser pages for assessment tabs, discovery results, recon settings, scan-job
+detail, login and user administration now use autoescaped Jinja templates and the
+shared console shell. Standalone exported HTML remains self-contained. Some
+compatibility rendering helpers remain for non-browser consumers. Deployment-specific
+visual and accessibility review remains needed.
 
 Assessment overview and Discovery now use the shared Jinja shell. The overview
 summarizes latest discovery state, linked assets, failures, queue backend
@@ -34,8 +35,22 @@ before configuration, with a separate review and explicit durable-job confirmati
 An authenticated fragment refreshes active status without navigation; hidden pages
 pause requests, failures back off, and terminal states stop polling. Service code
 owns state aggregation and safe diagnostic classifications. The browser never
-interprets raw queue errors or secret evidence. Other assessment tabs remain on
-the incremental migration path.
+interprets raw queue errors or secret evidence. The Scans tab now uses the same
+shell, with selected scope, scanner readiness, profile review, saved scan-run state,
+safe failure codes and browser publication/execution controls for the DB queue.
+The remaining assessment tabs use the same shell and semantic tables/forms.
+
+Discovery Results now leads from scoped domain names to an optional HTTPX follow-up.
+An analyst authorizes active contact, then durable jobs run through the existing
+queue and recon pipeline. The UI shows queued/running/completed/failed status,
+links to job details and provides retry/cancel controls. Only names beneath a
+saved valid domain target are eligible, and the worker rechecks target scope.
+
+Large discovery populations are read through bounded source batches that share
+credential knowledge. Report and projection context row defaults are 10,000 each;
+the complete authorized context must still fit the aggregate structural and text
+budgets. This keeps the dashboard and discovery results usable after ordinary
+multi-tool discovery while retaining fail-closed redaction.
 
 Global and assessment Relationships now share the console shell. Assessment links
 retain filters and connected entity navigation, with source and confidence beside

@@ -11,8 +11,9 @@
 <span>{{ finding.source_tool }}</span>
 </div>
 </div>
-<a class="button secondary" href="/dashboard">Back to overview</a>
+{% if assessment %}<a class="button secondary" href="/dashboard/assessments/{{ assessment.id }}/findings">Back to {{ assessment.name }}</a>{% else %}<a class="button secondary" href="/dashboard">Back to overview</a>{% endif %}
 </div>
+{% if assessment %}{% set current_tab='findings' %}{% include "components/assessment_nav.html" %}{% endif %}
 <div class="detail-grid">
 <section class="panel">
 <p class="eyebrow">Priority</p>
@@ -145,4 +146,7 @@
 </div>
 </div>
 </details>
+{% if assessment %}<section class="panel"><h2>Deterministic association provenance</h2>{% if association %}<div class="stage-scroll"><table class="stage-table"><thead><tr><th scope="col">Confidence</th><th scope="col">Source</th><th scope="col">Metadata</th></tr></thead><tbody>{% for item in association %}<tr><td>{{ item.confidence }}</td><td>{{ item.source }}</td><td><pre>{{ item.metadata_json|tojson(indent=2) }}</pre></td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="muted">No repository association recorded.</p>{% endif %}</section>
+{% if not auth or auth.allows_role('analyst') %}<section class="panel"><h2>Local AI</h2><form method="post" action="/dashboard/assessments/{{ assessment.id }}/launch/ai">{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<input type="hidden" name="purpose" value="finding"><input type="hidden" name="entity_id" value="{{ finding.id }}"><button type="submit">Explain finding with Local AI</button></form></section>{% endif %}{% endif %}
+{{ secret_controls }}
 {% endblock %}

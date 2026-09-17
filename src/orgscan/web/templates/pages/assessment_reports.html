@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block content %}
+{% set root='/dashboard/assessments/' ~ assessment.id %}
+<div class="page-heading"><div><p class="eyebrow">Assessment / Reporting</p><h1>Reports</h1><p class="muted">{{ assessment.name }} · Evidence-backed exports use authorized assessment scope and redacted presentation.</p></div><a href="{{ root }}/findings">Review findings</a></div>
+{% set current_tab='reports' %}{% include "components/assessment_nav.html" %}
+<section class="panel"><h2>Export assessment</h2><div class="report-grid">{% for format in formats %}<article class="scan-run"><h3>{{ format|upper }}</h3><p class="muted">Complete assessment scope within configured report safety budgets.</p><div class="target-actions"><a class="button" href="/assessments/{{ assessment.id }}/reports/{{ format }}">Download {{ format|upper }}</a><a href="/assessments/{{ assessment.id }}/reports/{{ format }}?include_ai_summary=true">Include available AI summary</a></div></article>{% endfor %}</div></section>
+{% endblock %}

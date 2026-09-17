@@ -1,7 +1,5 @@
 """Thin login, session and administrator adapters."""
-import html
 import secrets
-from urllib.parse import quote
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -9,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from orgscan.api.authentication import SESSION_COOKIE, CSRF_COOKIE, LOGIN_COOKIE, same_origin
 from orgscan.auth import serialize_auth_context
-from orgscan.reporting import _render_html_page
+from orgscan.web.render import render
 from orgscan.security_context import AuthorizationError, current_auth, current_csrf, LOCAL_CONTEXT
 
 
@@ -48,10 +46,8 @@ def create_auth_router(service):
     @router.get("/login",response_class=HTMLResponse)
     def login_page():
         challenge = secrets.token_urlsafe(32)
-        body = f'''<section><h1>Sign in</h1><p>Use a token issued by your orgscan administrator.</p>
-        <form method="post" action="/login"><label>Session token <input type="password" name="token" required autocomplete="off"></label>
-        <input type="hidden" name="csrf_token" value="{challenge}"><button>Sign in</button></form></section>'''
-        response = HTMLResponse(_render_html_page("Sign in",body),headers={"Cache-Control":"no-store","X-Frame-Options":"DENY"})
+        response = HTMLResponse(render('pages/login.html',title='Sign in',active_section='auth',
+            challenge=challenge),headers={"Cache-Control":"no-store","X-Frame-Options":"DENY"})
         response.set_cookie(LOGIN_COOKIE,challenge,max_age=300,path="/login",httponly=True,secure=settings.browser_cookie_secure,samesite="strict")
         return response
 
@@ -106,17 +102,8 @@ def create_auth_router(service):
 
     @router.get("/dashboard/users",response_class=HTMLResponse)
     def browser_users():
-        rows = []
-        for user in service.users(actor()):
-            name = html.escape(user["username"])
-            path = quote(user["username"],safe="")
-            memberships = ", ".join(f"{m['tenant']}: {m['role']}" for m in user["memberships"])
-            rows.append(f'''<section><h2>{name}</h2><p>{html.escape(memberships)} · active: {user['is_active']}</p>
-            <form method="post" action="/dashboard/users/{path}/membership"><label>Tenant <input name="tenant" required></label><label>Role <select name="role"><option>reader</option><option>analyst</option><option>admin</option></select></label><button>Assign role</button></form>
-            <form method="post" action="/dashboard/users/{path}/active"><input type="hidden" name="active" value="{'false' if user['is_active'] else 'true'}"><button>{'Disable' if user['is_active'] else 'Enable'} user</button></form>
-            <form method="post" action="/dashboard/users/{path}/session"><button>Issue 24-hour token</button></form></section>''')
-        body = '<h1>User administration</h1><form method="post" action="/dashboard/users"><label>Username <input name="username" required></label><label>Email <input name="email" type="email"></label><button>Create user</button></form>'+"".join(rows)
-        return HTMLResponse(_render_html_page("Users",body))
+        return HTMLResponse(render('pages/users.html',title='Users',active_section='users',
+            users=service.users(actor())))
 
     @router.post("/dashboard/users")
     def browser_create(username: str = Form(...),email: str = Form("")):
@@ -136,5 +123,6 @@ def create_auth_router(service):
     @router.post("/dashboard/users/{username}/session",response_class=HTMLResponse)
     def browser_session(username: str):
         issued = call(service.issue_session,actor(),username)
-        return HTMLResponse(_render_html_page("Session issued",f"<h1>Copy this token now</h1><p>It expires in 24 hours and is shown only in this response.</p><pre>{html.escape(issued['token'])}</pre><a href='/dashboard/users'>Back to users</a>"))
+        return HTMLResponse(render('pages/session_issued.html',title='Session issued',
+            active_section='users',token=issued['token']),headers={'Cache-Control':'no-store'})
     return router

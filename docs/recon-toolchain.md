@@ -49,6 +49,20 @@ query strings and fragments; different providers contribute observations to one
 endpoint identity. Provider timestamps, confidence and source badges are retained.
 The relationship table remains the supported graph interface.
 
+The Domains tab offers a follow-up **Probe unprobed domains with HTTPX** action.
+An analyst must explicitly authorize active contact. Only assessment-linked names
+under a saved, valid domain target are eligible; names linked solely through
+repository metadata or third-party URLs are not active scope. The worker rechecks
+the saved target before execution. Each selected name gets a durable `http_probe`
+job using the existing HTTPX adapter, canonical observations, queue and cancellation
+path. A launch creates at most 100 jobs. Previously attempted names are skipped;
+failed jobs use the existing Retry action. Pending queue publication can be retried
+from the results page. On the DB queue, the browser starts a
+bounded batch of ten and can start additional queued batches from the results page.
+Redis/RQ deployments still need a supervised worker. A completed probe with no
+HTTP response records a completed job and no web asset; it does not claim a server
+exists. HTTPX does not follow redirects.
+
 ## Registry and execution
 
 `recon/registry.py` owns tool definitions, mode, executable/configuration discovery,

@@ -1229,9 +1229,8 @@ def create_app(database_url: str, settings: Settings | None = None) -> FastAPI:
         if payload is None:
             raise HTTPException(status_code=404, detail="Finding not found")
         from orgscan.web.secret_reveal import render_secret_controls
-        page = render_finding_detail_html(payload)
         controls = render_secret_controls(service.settings, finding_id)
-        return HTMLResponse(page.replace('</main>', controls + '</main>'))
+        return HTMLResponse(render_finding_detail_html(payload, secret_controls=controls))
 
     @app.get("/scan-jobs/{scan_job_id}")
     def scan_job_detail(scan_job_id: int) -> dict[str, object]:
@@ -1245,7 +1244,12 @@ def create_app(database_url: str, settings: Settings | None = None) -> FastAPI:
         payload = service._scan_job_payload(scan_job_id)
         if payload is None:
             raise HTTPException(status_code=404, detail="Scan job not found")
-        return HTMLResponse(render_scan_job_detail_html(payload))
+        import json
+        from orgscan.web.render import render
+        return HTMLResponse(render('pages/scan_job_detail.html',title=f'Scan job {scan_job_id}',
+            active_section='queues',payload=payload,
+            parameters_text=json.dumps(payload['scan_job'].get('parameters_json') or {},indent=2,sort_keys=True),
+            scope_text=json.dumps(payload['scan_job'].get('scope_json') or {},indent=2,sort_keys=True)))
 
     @app.get("/dashboard/graph", response_class=HTMLResponse)
     def dashboard_graph(limit: int = Query(200, ge=1, le=1000)) -> HTMLResponse:

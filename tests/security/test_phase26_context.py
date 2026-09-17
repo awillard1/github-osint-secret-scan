@@ -159,7 +159,10 @@ def test_complete_context_overflow_is_safe(legacy,monkeypatch,kind):
     _,factory,ids,_=legacy
     with factory.kw['bind'].begin() as c:
         c.execute(Evidence.__table__.insert(),[{'finding_id':ids[1],'source':'fixture','metadata_json':{'password':SECRET}} for _ in range(1000)])
-    if kind=='finding':monkeypatch.setenv('ORGSCAN_FINDING_CONTEXT_MAX_ROWS','1000')
+    if kind=='finding':
+        monkeypatch.setenv('ORGSCAN_FINDING_CONTEXT_MAX_ROWS','1000')
+    else:
+        monkeypatch.setattr('orgscan.reports.projection.MAX_CONTEXT_ROWS',1000)
     with factory() as session:
         with pytest.raises(SanitizationLimitError,match='context row limit') as exc:
             if kind=='report':query_report(Storage(session),tenant_keys=['a'],limit=1)

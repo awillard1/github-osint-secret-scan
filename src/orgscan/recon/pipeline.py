@@ -28,16 +28,16 @@ def pipeline_slot(settings):
     finally:fcntl.flock(held,fcntl.LOCK_UN);held.close()
 
 
-def run_pipeline(storage,assessment,parent,options,settings,progress):
+def run_pipeline(storage,assessment,parent,options,settings,progress,*,include_linked_domains=True):
     from orgscan.storage.assessments import AssessmentStorage
     control = AssessmentStorage(storage.session)
     control.tenant(assessment.tenant_key, 'analyst')
     control.entity(assessment, 'domain', parent.id)
     with pipeline_slot(settings):
-        return _run(storage,assessment,parent,options,settings,progress)
+        return _run(storage,assessment,parent,options,settings,progress,include_linked_domains=include_linked_domains)
 
 
-def _run(storage,assessment,parent,options,settings,progress):
+def _run(storage,assessment,parent,options,settings,progress,*,include_linked_domains=True):
     from orgscan.services.assessments.recon import correlate_domains
     from orgscan.services.scan_plan import resolve_scan_plan
     from orgscan.services.scan_service import execute_domain_plan
@@ -57,10 +57,11 @@ def _run(storage,assessment,parent,options,settings,progress):
     query=select(m.Domain).join(m.AssessmentEntity,m.AssessmentEntity.entity_id==m.Domain.id).where(
         m.AssessmentEntity.assessment_id==assessment.id,m.AssessmentEntity.entity_type=='domain',
         m.Domain.id.in_(visibility_ids([assessment.tenant_key])[m.Domain]))
-    for candidate in storage.session.scalars(query.execution_options(yield_per=100)):
-        if scoped_host(candidate.name,root):
-            domains.add(candidate.name);domain_entities[candidate.name]=('domain',candidate)
-            if len(domains)>settings.recon_max_domains:raise ReconError('LIMIT REACHED: scoped domains','limit_reached')
+    if include_linked_domains:
+        for candidate in storage.session.scalars(query.execution_options(yield_per=100)):
+            if scoped_host(candidate.name,root):
+                domains.add(candidate.name);domain_entities[candidate.name]=('domain',candidate)
+                if len(domains)>settings.recon_max_domains:raise ReconError('LIMIT REACHED: scoped domains','limit_reached')
     counts['domain']=set(domains)
     storage.session.commit()
     for tool in ordered:

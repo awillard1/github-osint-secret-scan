@@ -107,11 +107,13 @@ Only ordinary string/JSON columns are loaded, excluding identity/fingerprint ref
 no source ORM graph or protected evidence is loaded. Descriptions and raw payloads must
 participate because credentials can be identified there. SQL bounds each value before
 fetching, and shared character/node/depth/replacement budgets still apply. The default
-`ORGSCAN_REPORT_CONTEXT_MAX_ROWS=1000` counts source rows across these populations
+`ORGSCAN_REPORT_CONTEXT_MAX_ROWS=10000` counts source rows across these populations
 (a finding and its evidence count separately). Configure this environment setting
 before starting the process; its maximum is 100,000. Overflow or uninspectable context
 raises an input-free safety error: no partially sanitized report is returned. Increasing
-the row limit does not bypass the sanitizer's other work limits.
+the row limit does not bypass the sanitizer's other work limits. Context sources
+are processed in 128-row batches with shared credential knowledge, an aggregate
+500,000-node bound and the existing 8-million-character bound.
 
 The same private credential knowledge sanitizes the summary and complete report after
 projection. It is never reconstructed from the displayed subset. Large tenant datasets

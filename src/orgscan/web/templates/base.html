@@ -20,13 +20,13 @@
         <span class="brand-mark">O</span>
         <span>orgscan<small>EXPOSURE CONSOLE</small></span>
       </a>
-      <nav class="main-nav" aria-label="Primary">
+      {% if auth %}<nav class="main-nav" aria-label="Primary">
         <a href="/dashboard" {% if active_section == 'dashboard' %}aria-current="page"{% endif %}>Overview</a>
         <a href="/dashboard/assessments" {% if active_section == 'assessments' %}aria-current="page"{% endif %}>Assessments</a>
         <a href="/dashboard?high_signal_only=true" {% if active_section == 'findings' %}aria-current="page"{% endif %}>Findings</a>
         <a href="/dashboard/graph" {% if active_section == 'relationships' %}aria-current="page"{% endif %}>Relationships</a>
         <a href="/dashboard/queues/active-scans" {% if active_section == 'queues' %}aria-current="page"{% endif %}>Scan jobs</a>
-      </nav>
+      </nav>{% endif %}
       {% if auth %}
       <div class="identity">
         <span>{{ auth.name }}</span>

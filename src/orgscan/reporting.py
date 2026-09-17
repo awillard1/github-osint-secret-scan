@@ -795,8 +795,12 @@ def _render_html_page(title: str, body: str) -> str:
 
 
 @safe_presentation
-def render_finding_detail_html(payload: dict[str, Any]) -> str:
+def render_finding_detail_html(
+    payload: dict[str, Any], *, assessment: dict[str, Any] | None = None,
+    secret_controls: str = "",
+) -> str:
     from orgscan.web.render import render
+    from markupsafe import Markup
 
     finding = payload["finding"]
     return render(
@@ -809,6 +813,9 @@ def render_finding_detail_html(payload: dict[str, Any]) -> str:
         risk_scores=payload.get("risk_scores", []),
         metadata=json.dumps(finding.get("metadata") or {}, indent=2, sort_keys=True),
         raw_payload=json.dumps(finding.get("raw_payload") or {}, indent=2, sort_keys=True),
+        assessment=assessment,
+        association=payload.get("association", []),
+        secret_controls=Markup(secret_controls),
     )
 
 
