@@ -321,7 +321,7 @@ def create_assessment_router(settings):
         return RedirectResponse('/dashboard/settings/github',303)
 
     @router.get('/dashboard/assessments/{identity}/{tab}',response_class=HTMLResponse)
-    def assessment_page(identity:int,tab:str,offset:int=0,search:str='',confidence:str|None=None,source:str|None=None,visibility:str|None=None,archived:str|None=None,fork:str|None=None,scanned:str|None=None,severity:str|None=None,status:str|None=None,source_tool:str|None=None,category:str|None=None,repository_id:str|None=None,lifecycle_state:str|None=None,updated_after:str|None=None,updated_before:str|None=None,entity_type:str|None=None,entity_id:str|None=None,relation_type:str|None=None,domain_id:str|None=None,account_id:str|None=None,organization_id:str|None=None,credential_type:str|None=None,first_seen_after:str|None=None,last_seen_after:str|None=None):
+    def assessment_page(identity:int,tab:str,offset:int=0,search:str='',confidence:str|None=None,source:str|None=None,visibility:str|None=None,archived:str|None=None,fork:str|None=None,scanned:str|None=None,severity:str|None=None,status:str|None=None,source_tool:str|None=None,category:str|None=None,repository_id:str|None=None,lifecycle_state:str|None=None,updated_after:str|None=None,updated_before:str|None=None,entity_type:str|None=None,entity_id:str|None=None,relation_type:str|None=None,domain_id:str|None=None,account_id:str|None=None,organization_id:str|None=None,credential_type:str|None=None,first_seen_after:str|None=None,last_seen_after:str|None=None,launch_state:str|None=None,scheduled:int=0):
         def optional_id(value):
             if not value:return None
             if not value.isdigit() or len(value)>18:raise HTTPException(422,'Entity ID must be a positive integer')
@@ -334,7 +334,8 @@ def create_assessment_router(settings):
         archived,fork,scanned=map(optional_bool,(archived,fork,scanned))
         assessment=call(service.detail,identity)
         if tab=='targets':return ui.targets(assessment,call(service.targets,identity,offset=offset),offset)
-        if tab=='discovery':return ui.discovery(assessment,call(jobs.progress,identity,offset=offset),provider_readiness(settings),PROFILES,call(service.profiles,assessment['tenant_key'])['saved'])
+        if tab=='discovery':
+            return ui.discovery_panel(assessment,call(jobs.progress,identity,offset=offset),provider_readiness(settings),PROFILES,call(service.profiles,assessment['tenant_key'])['saved'],{'state':launch_state,'scheduled':scheduled} if launch_state else None)
         if tab=='scans':return ui.scans(assessment,call(jobs.progress,identity,offset=offset),scanner_inventory(settings),SCAN_PROFILES)
         if tab in ('repositories','accounts','domains'):
             kind={'repositories':'repository','accounts':'account','domains':'domain'}[tab]
@@ -351,13 +352,12 @@ def create_assessment_router(settings):
         if tab=='reports':
             return ui.page(assessment['name']+' — Reports',''.join(f'<p><a href="/assessments/{identity}/reports/{fmt}">Export {fmt.upper()}</a> · <a href="/assessments/{identity}/reports/{fmt}?include_ai_summary=true">Include available AI Suggested summary</a></p>' for fmt in ('json','csv','html','pdf','sarif')),assessment=assessment)
         if tab=='overview':
-            body='<p>'+ui.esc(assessment['description'])+'</p><p>Status: '+ui.esc(assessment['status'])+'</p>'+ui.table([assessment['counts']],list(assessment['counts']))
-            body+=ui.edit_assessment(assessment)
-            body+=ui.job_table(f'/dashboard/assessments/{identity}',call(jobs.progress,identity))
-            body+=f'<p><a href="/dashboard/assessments/{identity}/ai">Local AI advice</a></p>'
-            body+=ui.form(f'/dashboard/assessments/{identity}/launch/ai','<input type="hidden" name="purpose" value="summary">','Generate AI Summary')
-            return ui.page(assessment['name'],body,assessment=assessment)
+            return ui.overview_panel(assessment,call(jobs.progress,identity))
         raise HTTPException(404,'Unknown assessment page')
+
+    @router.get('/dashboard/assessments/{identity}/fragments/activity',response_class=HTMLResponse)
+    def assessment_activity(identity:int,tab:str='discovery',offset:int=0):
+        return ui.activity_fragment(call(service.detail,identity),call(jobs.progress,identity,offset=offset),tab=tab,offset=offset)
 
     @router.post('/dashboard/assessments/{identity}/targets',response_class=HTMLResponse)
     def targets_post(identity:int,text:str=Form(...),format:str=Form('lines')):
@@ -423,8 +423,10 @@ def create_assessment_router(settings):
                 return HTMLResponse(ui.discovery_review(call(service.detail,identity),review))
         if kind=='scan' and data.get('action')!='confirmed':
             return HTMLResponse(ui.scan_review(call(service.detail,identity),call(jobs.preview,identity,options=options)))
-        call(jobs.launch,identity,kind,options=options)
-        return RedirectResponse(f'/dashboard/assessments/{identity}/'+('discovery' if kind=='discovery' else 'ai' if kind=='ai' else 'scans'),303)
+        result=call(jobs.launch,identity,kind,options=options)
+        if kind=='discovery':
+            return RedirectResponse(f'/dashboard/assessments/{identity}/discovery?'+ui.urlencode({'launch_state':result['state'],'scheduled':result['scheduled']}),303)
+        return RedirectResponse(f'/dashboard/assessments/{identity}/'+('ai' if kind=='ai' else 'scans'),303)
 
     @router.post('/dashboard/assessments/{identity}/pause')
     def pause_post(identity:int):

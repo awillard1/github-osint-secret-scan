@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <p class="eyebrow">Assessment overview</p>
+    <h1>{{ assessment.name }}</h1>
+    <p class="muted">{{ assessment.description or 'No assessment description yet.' }}</p>
+  </div>
+  <div class="assessment-actions">
+    <a class="button" href="/dashboard/assessments/{{ assessment.id }}/discovery">Discovery</a>
+    <a class="button secondary" href="/dashboard/assessments/{{ assessment.id }}/targets">Targets</a>
+  </div>
+</div>
+{% include 'components/assessment_activity.html' %}
+<section class="panel">
+  <div class="section-header">
+    <div>
+      <p class="eyebrow">Scope and results</p>
+      <h2>Assessment scope</h2>
+    </div>
+    <a href="/dashboard/assessments/{{ assessment.id }}/findings">Findings</a>
+  </div>
+  <div class="assessment-summary-grid">
+    {% for name, value in assessment.counts.items() %}
+    <article class="summary-card">
+      <span class="summary-label">{{ name.replace('_', ' ') }}</span>
+      <strong>{{ value }}</strong>
+    </article>
+    {% endfor %}
+  </div>
+  <details class="panel nested-panel">
+    <summary>Edit assessment</summary>
+    <form method="post" action="/dashboard/assessments/{{ assessment.id }}/edit" class="filter-grid">
+      {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+      <label>Assessment name<input name="name" value="{{ assessment.name }}"></label>
+      <label>Status
+        <select name="status">
+          <option value="">Keep current: {{ assessment.status }}</option>
+          {% for value in ['draft','ready','paused','completed','archived'] %}
+          <option value="{{ value }}" {% if assessment.status == value %}selected{% endif %}>{{ value }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Description<textarea name="description" rows="4">{{ assessment.description }}</textarea></label>
+      <button type="submit">Save assessment</button>
+    </form>
+  </details>
+</section>
+{% endblock %}

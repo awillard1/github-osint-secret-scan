@@ -1,0 +1,207 @@
+{% set summary = activity.summary %}
+<section id="discovery-activity" class="assessment-activity panel" data-assessment-activity data-poll-url="/dashboard/assessments/{{ assessment.id }}/fragments/activity?tab={{ tab }}&amp;offset={{ offset|default(0) }}" data-terminal="{{ 'true' if activity.terminal else 'false' }}" data-overall-state="{{ activity.overall_state }}">
+  <div class="section-header">
+    <div>
+      <p class="eyebrow">Assessment operations</p>
+      <h2>Discovery activity</h2>
+      <p class="muted">{{ summary.status_summary }}</p>
+    </div>
+    <div class="assessment-actions">
+      <span class="state-chip" data-state="{{ activity.overall_state }}">{{ activity.overall_label }}</span>
+      <a class="button secondary" href="/dashboard/assessments/{{ assessment.id }}/targets">Targets</a>
+      <a class="button secondary" href="/dashboard/assessments/{{ assessment.id }}/recon-results">Results</a>
+      <a class="button secondary" href="/dashboard/assessments/{{ assessment.id }}/repositories">Repository scope</a>
+      <a class="button secondary" href="/dashboard/assessments/{{ assessment.id }}/scans">Scan launch</a>
+      <a class="button secondary" href="/dashboard/assessments/{{ assessment.id }}/reports">Reports</a>
+    </div>
+  </div>
+  <div class="refresh-meta" aria-live="polite">
+    <strong data-refresh-state>{% if activity.terminal %}Auto refresh stopped{% else %}Auto refresh active{% endif %}</strong>
+    <span data-refresh-time>{% if activity.terminal %}This state is terminal; refresh manually after any retry or relaunch.{% else %}This page refreshes from saved server state while discovery is active.{% endif %}</span>
+  </div>
+  <div class="assessment-summary-grid">
+    <article class="summary-card">
+      <span class="summary-label">Assessment</span>
+      <strong>{{ assessment.name }}</strong>
+      <small>#{{ assessment.id }} · {{ assessment.status }}</small>
+    </article>
+    <article class="summary-card">
+      <span class="summary-label">Targets</span>
+      <strong>{{ activity.jobs_total }} / {{ activity.targets_total }}</strong>
+      <small>scheduled / valid</small>
+    </article>
+    <article class="summary-card">
+      <span class="summary-label">Current work</span>
+      <strong>{{ activity.targets_by_state.running + activity.targets_by_state.queued + activity.targets_by_state.pending_enqueue + activity.targets_by_state.stale }}</strong>
+      <small>running, queued, pending or stale</small>
+    </article>
+    <article class="summary-card">
+      <span class="summary-label">Needs attention</span>
+      <strong>{{ activity.needs_attention|length }}</strong>
+      <small>failed, blocked, unavailable or stale items</small>
+    </article>
+    <article class="summary-card">
+      <span class="summary-label">Discovered assets</span>
+      <strong>{{ activity.assets_total }}</strong>
+      <small>{{ activity.discoveries_total }} discovery-linked · {{ activity.observations_total }} observations</small>
+    </article>
+    <article class="summary-card">
+      <span class="summary-label">Queue health</span>
+      <strong>{{ activity.queue.status }}</strong>
+      <small>{{ activity.queue.summary }}</small>
+    </article>
+  </div>
+  <div class="detail-grid">
+    <section class="panel">
+      <h3>Lifecycle timeline</h3>
+      <dl class="facts">
+        <div><dt>Created</dt><dd>{{ summary.created_at or 'Not created yet' }}</dd></div>
+        <div><dt>Queued</dt><dd>{{ summary.queued_at or 'Not queued yet' }}</dd></div>
+        <div><dt>Started</dt><dd>{{ summary.started_at or 'Not started yet' }}</dd></div>
+        <div><dt>Last heartbeat</dt><dd>{{ summary.heartbeat_at or 'No worker heartbeat yet' }}</dd></div>
+        <div><dt>Completed</dt><dd>{{ summary.completed_at or 'In progress' }}</dd></div>
+        <div><dt>Elapsed</dt><dd>{% if summary.elapsed_seconds is not none %}{{ summary.elapsed_seconds }} seconds{% else %}Not started{% endif %}</dd></div>
+      </dl>
+    </section>
+    <section class="panel">
+      <h3>Operational summary</h3>
+      <dl class="facts">
+        <div><dt>Pending enqueue</dt><dd>{{ activity.targets_by_state.pending_enqueue }} — durable jobs created, but queue publication has not been recorded yet.</dd></div>
+        <div><dt>Queued</dt><dd>{{ activity.targets_by_state.queued }} — queue tasks exist and are available to workers.</dd></div>
+        <div><dt>Running</dt><dd>{{ activity.targets_by_state.running }} — a worker has started and recent durable updates are present.</dd></div>
+        <div><dt>Stale</dt><dd>{{ activity.targets_by_state.stale }} — a worker or stage missed the expected heartbeat window.</dd></div>
+        <div><dt>Completed</dt><dd>{{ activity.targets_by_state.completed }} successful · {{ activity.targets_by_state.completed_with_warnings }} with warnings</dd></div>
+        <div><dt>Failures</dt><dd>{{ activity.targets_by_state.failed + activity.targets_by_state.partially_failed }} failed or partially failed</dd></div>
+      </dl>
+      <p><strong>Next action:</strong> <a href="{{ activity.next_action.href }}">{{ activity.next_action.label }}</a></p>
+    </section>
+  </div>
+  {% if activity.needs_attention %}
+  <section id="needs-attention" class="panel">
+    <div class="section-header">
+      <div>
+        <p class="eyebrow">Needs attention</p>
+        <h3>Review incomplete or risky discovery work</h3>
+      </div>
+      <span class="state-chip" data-state="failed">{{ activity.needs_attention|length }} items</span>
+    </div>
+    <div class="attention-list">
+      {% for item in activity.needs_attention %}
+      <article class="attention-card">
+        <div class="attention-header">
+          <strong>{{ item.title }}</strong>
+          {% if item.timestamp %}<small>{{ item.timestamp }}</small>{% endif %}
+        </div>
+        <p>{{ item.message }}</p>
+        <p class="muted">{% if item.target %}Target: {{ item.target }}{% endif %}{% if item.stage %}{% if item.target %} · {% endif %}Stage: {{ item.stage }}{% endif %}</p>
+        <div class="assessment-actions">
+          {% if item.retry_supported and item.retry_path %}
+          <form method="post" action="{{ item.retry_path }}">
+            {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+            <button type="submit">Retry run</button>
+          </form>
+          {% endif %}
+          {% if item.job_href %}<a href="{{ item.job_href }}">Job details</a>{% endif %}
+          {% if activity.queue.status == 'attention' and not item.job_href %}<a href="/dashboard/queues/active-scans">Queue status</a>{% endif %}
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+  <section class="panel">
+    <div class="section-header">
+      <div>
+        <p class="eyebrow">Per-target progress</p>
+        <h3>Discovery runs</h3>
+        <p class="muted">Each target reuses the durable queue, worker and stage state already recorded by the backend.</p>
+      </div>
+      <a href="/dashboard/assessments/{{ assessment.id }}/recon-results">Open discovery results</a>
+    </div>
+    {% if activity.runs %}
+    <div class="run-list">
+      {% for run in activity.runs %}
+      <article class="run-card">
+        <div class="run-card-header">
+          <div>
+            <h4>{{ run.target.label if run.target else run.kind }}</h4>
+            <p class="muted">{{ run.status_summary }}</p>
+          </div>
+          <div class="status-stack">
+            <span class="state-chip" data-state="{{ run.lifecycle_state }}">{{ run.status_label }}</span>
+            <small>{{ run.stage_total }} stages · {{ run.result_total }} outputs</small>
+          </div>
+        </div>
+        <dl class="facts">
+          <div><dt>Created</dt><dd>{{ run.created_at }}</dd></div>
+          <div><dt>Queued</dt><dd>{{ run.queued_at or 'Not queued yet' }}</dd></div>
+          <div><dt>Started</dt><dd>{{ run.started_at or 'Not started yet' }}</dd></div>
+          <div><dt>Last heartbeat</dt><dd>{{ run.heartbeat_at or 'No worker heartbeat yet' }}</dd></div>
+          <div><dt>Completed</dt><dd>{{ run.completed_at or 'In progress' }}</dd></div>
+          <div><dt>Retry count</dt><dd>{{ run.retry_count }}</dd></div>
+        </dl>
+        {% if run.unavailable_providers %}
+        <p class="banner info"><strong>Unavailable at launch:</strong> {{ run.unavailable_providers|join(', ') }}</p>
+        {% endif %}
+        {% if run.stage_details %}
+        <div class="table-scroll">
+          <table class="stage-table">
+            <thead>
+              <tr>
+                <th>Stage</th>
+                <th>Mode</th>
+                <th>Readiness</th>
+                <th>Status</th>
+                <th>Queued</th>
+                <th>Started</th>
+                <th>Heartbeat</th>
+                <th>Completed</th>
+                <th>Input</th>
+                <th>Output</th>
+                <th>Duration</th>
+                <th>Failure</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for stage in run.stage_details %}
+              <tr>
+                <td><strong>{{ stage.provider }}</strong><br><small class="muted">{{ stage.name }}</small></td>
+                <td>{{ stage.mode }}</td>
+                <td>{{ stage.readiness }}</td>
+                <td><span class="state-chip" data-state="{{ stage.lifecycle_state }}">{{ stage.status_label }}</span><br><small class="muted">{{ stage.status_summary }}</small></td>
+                <td>{{ stage.queued_at or '—' }}</td>
+                <td>{{ stage.started_at or '—' }}</td>
+                <td>{{ stage.heartbeat_at or '—' }}</td>
+                <td>{{ stage.completed_at or '—' }}</td>
+                <td>{{ stage.input_count }}</td>
+                <td>{{ stage.output_count }}</td>
+                <td>{% if stage.duration_seconds is not none %}{{ stage.duration_seconds }}s{% else %}—{% endif %}</td>
+                <td>{{ stage.safe_failure_classification or stage.blocked_explanation or '—' }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="muted">No stage detail has been recorded for this run yet.</p>
+        {% endif %}
+        <div class="assessment-actions">
+          {% if run.retry_supported and run.retry_path %}
+          <form method="post" action="{{ run.retry_path }}">
+            {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+            <button type="submit">Retry failed run</button>
+          </form>
+          {% endif %}
+          {% if run.scan_job_id %}<a href="/dashboard/scan-jobs/{{ run.scan_job_id }}">Failed job details</a>{% endif %}
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <strong>No discovery runs yet</strong>
+      <p>Configure targets and launch discovery to start durable job tracking.</p>
+    </div>
+    {% endif %}
+  </section>
+</section>

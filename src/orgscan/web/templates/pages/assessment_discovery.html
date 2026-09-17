@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <p class="eyebrow">Assessment discovery</p>
+    <h1>{{ assessment.name }}</h1>
+    <p class="muted">Configure targets, review provider readiness, confirm launch, and keep live durable progress visible after launch.</p>
+  </div>
+  <div class="assessment-actions">
+    <a class="button secondary" href="/dashboard/settings/recon-tools">Recon tools</a>
+    <a class="button secondary" href="/dashboard/assessments/{{ assessment.id }}/recon-results">Discovery results</a>
+  </div>
+</div>
+{% if launch_result %}
+<div class="banner info">
+  <strong>Discovery launch recorded.</strong> {{ launch_result.scheduled }} durable job(s) were created. Current state: {{ launch_result.state_label }} — {{ launch_result.message }}
+</div>
+{% endif %}
+{% include 'components/assessment_activity.html' %}
+<section class="panel">
+  <div class="section-header">
+    <div>
+      <p class="eyebrow">Launch flow</p>
+      <h2>1. Configure targets → 2. Review readiness → 3. Confirm launch → 4. Watch durable progress</h2>
+      <p class="muted">Launching records durable jobs immediately. Queue publication and worker execution can happen later without losing the launch request.</p>
+    </div>
+  </div>
+  <div class="assessment-summary-grid">
+    <article class="summary-card"><span class="summary-label">Step 1</span><strong>Targets</strong><small><a href="/dashboard/assessments/{{ assessment.id }}/targets">Review configured targets</a></small></article>
+    <article class="summary-card"><span class="summary-label">Step 2</span><strong>Readiness</strong><small>Missing selected tools block launch unless you choose run available tools only.</small></article>
+    <article class="summary-card"><span class="summary-label">Step 3</span><strong>Confirm</strong><small>Active recon requires the explicit authorization checkbox and review page.</small></article>
+    <article class="summary-card"><span class="summary-label">Step 4</span><strong>Recovery</strong><small>Pending enqueue means run the enqueuer; stale means inspect workers and consider retry.</small></article>
+  </div>
+  <form method="post" action="/dashboard/assessments/{{ assessment.id }}/launch/discovery">
+    {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+    <div class="filter-grid">
+      <label>Saved profile
+        <select name="saved_profile">
+          <option value="">Use the options below</option>
+          {% for row in saved_profiles %}<option value="{{ row.name }}">{{ row.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Built-in profile
+        <select name="profile">
+          {% for profile in profiles %}<option value="{{ profile }}">{{ profile.replace('-', ' ').title() }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="checkbox"><input type="checkbox" name="active_authorized" value="true">Authorize active interaction with in-scope assessment domains only</label>
+      <label class="checkbox"><input type="checkbox" name="run_available_only" value="true">Run available tools only and record unavailable selections</label>
+      <label class="checkbox"><input type="checkbox" name="expand" value="true">Contributor, fork and commit expansion</label>
+      <label class="checkbox"><input type="checkbox" name="members" value="true">Visible organization members</label>
+      <label class="checkbox"><input type="checkbox" name="contributor_repositories" value="true">Contributor-owned public repositories</label>
+      <label class="checkbox"><input type="checkbox" name="public_search" value="true">Public GitHub search intelligence</label>
+      <label class="checkbox"><input type="checkbox" name="include_private" value="true">Include authorized private/internal repositories</label>
+      <label>Save as profile<input name="profile_name"></label>
+    </div>
+    <div class="provider-grid">
+      {% for provider in providers if provider.name not in ['all','all-enriched','github-search','projectdiscovery'] %}
+      <label class="provider-card">
+        <span><input type="checkbox" name="providers" value="{{ provider.name }}"> {{ provider.display_name|default(provider.name) }}</span>
+        <span class="state-chip" data-state="{{ 'completed' if provider.status == 'ok' else 'failed' }}">{{ 'Ready' if provider.status == 'ok' else 'Needs attention' }}</span>
+        <small>{{ provider.mode|default('Passive') }} · {{ provider.description|default('') }}</small>
+      </label>
+      {% endfor %}
+    </div>
+    <div class="assessment-actions">
+      <button type="submit" name="action" value="save_profile">Save profile</button>
+      <button type="submit" name="action" value="install_missing">Install missing tools</button>
+      <button type="submit">Review and launch discovery</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

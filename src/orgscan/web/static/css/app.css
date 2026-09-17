@@ -194,6 +194,22 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   color:var(--critical);
   border-color:currentColor
 }
+.state-chip[data-state=pending_enqueue],.state-chip[data-state=queued],.state-chip[data-state=paused]{
+  color:var(--accent);
+  border-color:currentColor
+}
+.state-chip[data-state=running]{
+  color:var(--low);
+  border-color:currentColor
+}
+.state-chip[data-state=completed],.state-chip[data-state=resolved]{
+  color:var(--low);
+  border-color:currentColor
+}
+.state-chip[data-state=completed_with_warnings],.state-chip[data-state=blocked],.state-chip[data-state=stale],.state-chip[data-state=unavailable],.state-chip[data-state=partially_failed],.state-chip[data-state=skipped]{
+  color:var(--high);
+  border-color:currentColor
+}
 .severity-chip[data-severity=medium],.state-chip[data-state=NEW]{
   color:var(--high);
   border-color:currentColor

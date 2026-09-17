@@ -44,7 +44,18 @@ def _run(storage,assessment,parent,options,settings,progress):
     root=parent.name
     selected=options['providers']
     ordered=[p for p in ORDER if p in selected]+[p for p in selected if p not in ORDER]
-    progress.queued(ordered+['Relationship Correlation'])
+    progress.queued(
+        [
+            {
+                'name': tool,
+                'tool': tool,
+                'provider': registry.get(tool).display_name,
+                'mode': registry.get(tool).mode,
+                'readiness': 'pending',
+            }
+            for tool in ordered
+        ] + [{'name': 'Relationship Correlation', 'provider': 'Relationship Correlation', 'mode': 'Passive', 'readiness': 'ready'}]
+    )
     domains={root};resolved=set();http=set();counts={'domain':{root}};failures=[]
     deadline=time.monotonic()+settings.recon_pipeline_timeout_seconds
     domain_entities={root:('domain',parent)};ip_entities={};http_entities={}
@@ -70,8 +81,8 @@ def _run(storage,assessment,parent,options,settings,progress):
         elif tool in ('dnsx','httpx','naabu'):inputs=sorted(domains)
         else:inputs=[root]
         if not inputs:
-            progress.states[tool]={'status':'blocked','error':'No validated upstream targets','input_count':0,'result_count':0}
-            progress.save();failures.append(tool);continue
+            progress.mark(tool,'blocked',error='No validated upstream targets',blocked_explanation='An upstream stage did not produce any in-scope inputs for this tool.',input_count=0,result_count=0,output_count=0,error_classification='blocked_upstream',retryable=False)
+            failures.append(tool);continue
         saved=(set(domains),set(resolved),set(http),dict(domain_entities),dict(ip_entities),dict(http_entities))
         try:
             with progress.stage(tool) as stage:
@@ -79,6 +90,7 @@ def _run(storage,assessment,parent,options,settings,progress):
                 if tool in TOOLS and not state['ready']:
                     raise ReconError('Selected tool is no longer ready','missing_tool')
                 stage.update(tool=tool,version=state['version'],input_count=len(inputs),mode=definition.mode,
+                    provider=definition.display_name,readiness='ready' if state['ready'] else state['status'],
                     upstream_providers=[p for p in ordered[:ordered.index(tool)] if progress.states.get(p,{}).get('status')=='completed'],
                     input_digest=sha256('\n'.join(inputs).encode()).hexdigest(),
                     input_entities=[{'type':entity[0],'id':entity[1].id} for value in inputs
