@@ -47,6 +47,34 @@ def index(payload,tenant,offset):
     return render('pages/assessment_home.html', title='Assessments', active_section='assessments', payload=payload, tenant=tenant, offset=offset)
 
 
+def _launch_result(payload):
+    if not payload:
+        return None
+    state=payload.get('state','pending_enqueue')
+    return {
+        'scheduled':payload.get('scheduled',0),
+        'state':state,
+        'state_label':_status_label(state),
+        'message':{
+            'pending_enqueue':'durable jobs are recorded, but queue publication has not been observed yet. Start or inspect the enqueuer and workers to continue.',
+            'queued':'queue tasks were created and are available to workers.',
+            'running':'a worker has already started processing the durable jobs.',
+        }.get(state,'review live progress for the latest saved state.'),
+    }
+
+
+def _status_label(value):
+    return str(value or '').replace('-',' ').replace('_',' ').title()
+
+
+def activity_fragment(assessment,jobs,*,tab='discovery',offset=0):
+    return render('components/assessment_activity.html', assessment=assessment, activity=jobs['discovery'], tab=tab, offset=offset)
+
+
+def overview_panel(assessment,jobs):
+    return render('pages/assessment_overview.html', title=assessment['name'], active_section='assessments', assessment=assessment, activity=jobs['discovery'], jobs=jobs, tab='overview', offset=jobs.get('offset',0))
+
+
 def new(tenant):
     body='<p>Step 1 of 4: assessment information. Save now, add any number of target batches next.</p>'
     body+=form('/dashboard/assessments/new',input_field('tenant','Tenant',tenant)+input_field('name','Name')+
@@ -76,26 +104,11 @@ def targets(assessment,payload,offset,result=None):
 
 
 def discovery(assessment,jobs,providers,profiles,saved=()):
-    root=f'/dashboard/assessments/{assessment["id"]}'
-    body='<p>Step 3/4: configure discovery, review saved targets, then launch. Jobs run in the configured background processing service.</p>'
-    from orgscan.web.recon import STYLE,badge
-    body=STYLE+body+'<p>Passive profiles use public data sources. Standard adds DNS resolution and HTTP probing. Comprehensive allows explicit crawler, port and template selection. Active components require authorization below.</p><p><a href="/dashboard/settings/recon-tools">Manage and install recon tools</a> · <a href="'+root+'/recon-results">View discovery results</a></p>'
-    body+=form(root+'/launch/discovery','<label>Saved profile<select name="saved_profile"><option value="">Use options below</option>'+''.join('<option>'+esc(row['name'])+'</option>' for row in saved)+'</select></label><select name="profile">'+''.join(f'<option value="{esc(p)}">{esc(p.replace("-"," " ).title())}</option>' for p in profiles)+'</select>'+
-        '<div class="recon-grid">'+''.join('<div class="recon-choice"><label><input type="checkbox" name="providers" value="'+esc(r['name'])+'"> '+esc(r.get('display_name',r['name']))+'</label>'+badge(r.get('mode','Passive'),'recon-passive' if r.get('mode','Passive')=='Passive' else 'recon-active')+' '+badge('Ready' if r['status']=='ok' else 'Needs attention','recon-ready' if r['status']=='ok' else 'recon-missing')+'</div>' for r in providers if r['name'] not in ('all','all-enriched','github-search','projectdiscovery'))+'</div>'+
-        '<label><input type="checkbox" name="active_authorized" value="true">I authorize active interaction with scoped assessment domains and their subdomains</label><label><input type="checkbox" name="run_available_only" value="true">Run available tools only; record unavailable selections</label>'+
-        '<label><input type="checkbox" name="expand" value="true">Contributors, forks, commit identities</label>'+
-        '<label><input type="checkbox" name="members" value="true">Visible organization members</label>'+
-        '<label><input type="checkbox" name="contributor_repositories" value="true">Contributor-owned public repositories</label>'+
-        '<label><input type="checkbox" name="public_search" value="true">Public GitHub search intelligence</label>'+
-        '<label><input type="checkbox" name="include_private" value="true">Include private/internal repositories (connection must permit)</label>'+input_field('profile_name','Save these options as')+'<button name="action" value="save_profile">Save recon profile</button><button name="action" value="install_missing">Install Missing</button>','Start discovery')
-    unavailable=assessment.get('discovery_profile',{}).get('unavailable_providers',[])
-    if unavailable:body+='<div class="recon-notice">Unavailable tools explicitly excluded: '+esc(', '.join(unavailable))+'</div>'
-    selected=set(assessment.get('discovery_profile',{}).get('providers',[]))
-    latest={}
-    for run in reversed(jobs['items']):latest.update(run.get('stages',{}))
-    body+=table([{'Provider':r['name'],'Mode':r.get('mode','Passive'),'Ready':r['status']=='ok','Selected':r['name'] in selected,'Status':latest.get(r['name'],{}).get('status','Not run'),'Result Count':latest.get(r['name'],{}).get('result_count','')} for r in providers if r['name'] not in ('all','all-enriched','github-search')],['Provider','Mode','Ready','Selected','Status','Result Count'])
-    body+=job_table(root,jobs)
-    return page(assessment['name']+' — Discovery',body,assessment=assessment)
+    return render('pages/assessment_discovery.html', title=assessment['name']+' — Discovery', active_section='assessments', assessment=assessment, activity=jobs['discovery'], jobs=jobs, providers=providers, profiles=profiles, saved_profiles=saved, launch_result=None, tab='discovery', offset=jobs.get('offset',0))
+
+
+def discovery_panel(assessment,jobs,providers,profiles,saved=(),launch_result=None):
+    return render('pages/assessment_discovery.html', title=assessment['name']+' — Discovery', active_section='assessments', assessment=assessment, activity=jobs['discovery'], jobs=jobs, providers=providers, profiles=profiles, saved_profiles=saved, launch_result=_launch_result(launch_result), tab='discovery', offset=jobs.get('offset',0))
 
 
 def job_table(root,jobs):
@@ -151,15 +164,7 @@ def assets(assessment,payload,kind,offset,filters=None):
 
 
 def scans(assessment,jobs,inventory,profiles):
-    root=f'/dashboard/assessments/{assessment["id"]}'
-    controls='<label>Profile<select name="profile">'+''.join(f'<option>{esc(p)}</option>' for p in profiles if p not in ('osint-only','domain-only'))+'</select></label>'
-    for row in inventory:
-        controls+=f'<label><input type="checkbox" name="scanners" value="{esc(row["name"])}" '+('' if row['readiness']['ready'] else 'disabled')+f'>{esc(row["name"])} — {esc(row["readiness"]["status"])}</label> '
-    controls+='<label>Branches<select name="branch_policy"><option>default-only</option><option>selected</option><option>all</option><option>tracked</option></select></label>'
-    controls+=input_field('refs','Selected refs (comma separated)')+'<label>Mode<select name="mode"><option value="">Profile default</option><option>full</option><option>incremental</option><option>history</option></select></label>'
-    body='<p>Explicit scanner selections override profile scanners. Unavailable tools fail validation; they are never silently run. Review included repositories before launch.</p>'
-    body+=form(root+'/launch/scan',controls,'Review scan')+job_table(root,jobs)
-    return page(assessment['name']+' — Scans',body,assessment=assessment)
+    return render('pages/assessment_scans.html', title=assessment['name']+' — Scans', active_section='assessments', assessment=assessment, activity=jobs['discovery'], jobs=jobs, inventory=inventory, profiles=profiles, tab='scans', offset=jobs.get('offset',0))
 
 
 def findings(assessment,payload,filters=None):

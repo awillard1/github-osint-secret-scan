@@ -350,8 +350,18 @@ def discover_target(storage,assessment,target,settings,*,configuration=None,prog
                 if (record.get('owner') or {}).get('login','').lower()==target.normalized_value.lower())
             records=chain(records,private_records)
     failures=[]
-    progress.queued(['GitHub Organization Discovery','Relationship Correlation']+(['Contributor Expansion'] if options.get('expand') else [])+(['Public GitHub Search'] if options.get('public_search') else []))
-    with progress.stage('GitHub Organization Discovery') as stage:
+    progress.queued(
+        [
+            {'name':'GitHub Organization Discovery','provider':'GitHub API','tool':'github-api','mode':'Passive','readiness':'ready'},
+            *([{'name':'Contributor Expansion','provider':'GitHub API','tool':'github-api','mode':'Passive','readiness':'ready'}] if options.get('expand') else []),
+            *([{'name':'Public GitHub Search','provider':'GitHub Search','tool':'github-search','mode':'Passive','readiness':'ready'}] if options.get('public_search') else []),
+            *([{'name':'Repository Metadata','provider':'Repository Metadata','tool':'github-api','mode':'Passive','readiness':'ready'}] if options.get('repository_metadata') else []),
+            *([{'name':'Organization Metadata','provider':'GitHub API','tool':'github-api','mode':'Passive','readiness':'ready'}] if kind=='github-org' and options.get('repository_metadata') else []),
+            *([{'name':'Organization Members','provider':'GitHub API','tool':'github-api','mode':'Passive','readiness':'ready'}] if kind=='github-org' and options.get('members') else []),
+            {'name':'Relationship Correlation','provider':'Relationship Correlation','tool':'relationship-correlation','mode':'Passive','readiness':'ready'},
+        ]
+    )
+    with progress.stage('GitHub Organization Discovery',provider='GitHub API',tool='github-api',mode='Passive',readiness='ready') as stage:
         count=0
         for data in records:
             private=data.get('private') is True or data.get('visibility') in ('private','internal')
@@ -367,18 +377,18 @@ def discover_target(storage,assessment,target,settings,*,configuration=None,prog
                 count+=1
                 storage.session.commit() # Each page/item is durable; rediscovery is idempotent.
                 if options.get('repository_metadata'):
-                    with progress.stage('Repository Metadata') as detail_stage:
+                    with progress.stage('Repository Metadata',provider='Repository Metadata',tool='github-api',mode='Passive',readiness='ready') as detail_stage:
                         ingest.repository_metadata(repo,data,options)
                         detail_stage['result_count']+=1
                 if options.get('expand'):
                     try:
-                        with progress.stage('Contributor Expansion') as expanded:
+                        with progress.stage('Contributor Expansion',provider='GitHub API',tool='github-api',mode='Passive',readiness='ready') as expanded:
                             ingest.expand(repo,data,options)
                             expanded['result_count']+=1
                     except Exception:failures.append('Contributor Expansion')
             stage['result_count']=count
     if kind=='github-org' and options.get('repository_metadata'):
-        with progress.stage('Organization Metadata') as stage:
+        with progress.stage('Organization Metadata',provider='GitHub API',tool='github-api',mode='Passive',readiness='ready') as stage:
             data=client._request_json('/orgs/'+name)
             if not isinstance(data,dict) or str(data.get('login','')).lower()!=target.normalized_value.lower():raise ValueError('Organization metadata identity mismatch')
             organization=ingest.organization(target.normalized_value,{'official_owner':True})
@@ -389,13 +399,13 @@ def discover_target(storage,assessment,target,settings,*,configuration=None,prog
             ingest.domain(urlsplit(str(safe.get('blog') or '')).hostname,'organization-metadata',('organization',organization.id))
             stage['result_count']=1
     if kind=='github-org' and options.get('members'):
-        with progress.stage('Organization Members') as stage:
+        with progress.stage('Organization Members',provider='GitHub API',tool='github-api',mode='Passive',readiness='ready') as stage:
             for member in client.pages('/orgs/'+name+'/members',max_pages=settings.assessment_discovery_max_pages):
                 if member.get('login'):
                     ingest.account(member['login'],source='membership',signals={'membership':True})
                     stage['result_count']+=1
     if options.get('public_search'):
-        with progress.stage('Public GitHub Search') as stage:
+        with progress.stage('Public GitHub Search',provider='GitHub Search',tool='github-search',mode='Passive',readiness='ready') as stage:
             from orgscan.services.github_search import GitHubSearchService
             def request(path,expected=dict):
                 value=client._request_json(path)
@@ -406,7 +416,7 @@ def discover_target(storage,assessment,target,settings,*,configuration=None,prog
                 pages=min(3,options['max_pages']),per_page=100,tenant_key=assessment.tenant_key,target_context=storage.session.get(m.Organization,assessment.organization_id))
             if result.failure:raise ValueError('Public search was incomplete; inspect the search job and retry')
             stage['result_count']=len(result.exposures)
-    with progress.stage('Relationship Correlation') as stage:
+    with progress.stage('Relationship Correlation',provider='Relationship Correlation',tool='relationship-correlation',mode='Passive',readiness='ready') as stage:
         ingest.correlate_forks()
         stage['result_count']=storage.session.scalar(select(func.count()).select_from(m.AssessmentEntity).where(m.AssessmentEntity.assessment_id==assessment.id,m.AssessmentEntity.entity_type=='relationship'))
     if failures:raise ValueError('Some contributor expansion stages failed; retry this target')

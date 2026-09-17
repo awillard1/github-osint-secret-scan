@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <p class="eyebrow">Assessment scans</p>
+    <h1>{{ assessment.name }}</h1>
+    <p class="muted">Launch repository scanning from the current discovery scope without hiding queue or worker state.</p>
+  </div>
+  <a class="button secondary" href="/dashboard/assessments/{{ assessment.id }}/repositories">Review repository scope</a>
+</div>
+{% include 'components/assessment_activity.html' %}
+<section class="panel">
+  <div class="section-header">
+    <div>
+      <p class="eyebrow">Scan review</p>
+      <h2>Review scan plan inputs before creating durable jobs</h2>
+      <p class="muted">Explicit scanner selections override profile defaults. Readiness remains enforced before queueing.</p>
+    </div>
+  </div>
+  <form method="post" action="/dashboard/assessments/{{ assessment.id }}/launch/scan" class="filter-grid">
+    {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+    <label>Profile
+      <select name="profile">{% for profile in profiles if profile not in ['osint-only','domain-only'] %}<option value="{{ profile }}">{{ profile }}</option>{% endfor %}</select>
+    </label>
+    <label>Branch policy
+      <select name="branch_policy">
+        {% for value in ['default-only','selected','all','tracked'] %}<option value="{{ value }}">{{ value }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Selected refs<input name="refs" placeholder="trunk, release"></label>
+    <label>Mode
+      <select name="mode">
+        <option value="">Profile default</option>
+        {% for value in ['full','incremental','history'] %}<option value="{{ value }}">{{ value }}</option>{% endfor %}
+      </select>
+    </label>
+    <div class="provider-grid">
+      {% for row in inventory %}
+      <label class="provider-card">
+        <span><input type="checkbox" name="scanners" value="{{ row.name }}" {% if not row.readiness.ready %}disabled{% endif %}> {{ row.name }}</span>
+        <span class="state-chip" data-state="{{ 'completed' if row.readiness.ready else 'failed' }}">{{ row.readiness.status }}</span>
+      </label>
+      {% endfor %}
+    </div>
+    <button type="submit">Review scan</button>
+  </form>
+</section>
+{% endblock %}
