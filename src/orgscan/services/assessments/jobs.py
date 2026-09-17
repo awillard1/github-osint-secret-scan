@@ -28,7 +28,8 @@ def _parse_time(value):
     if not value:
         return None
     try:
-        return datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
     except ValueError:
         return None
 
@@ -57,7 +58,7 @@ def _status_label(value):
         'blocked': 'Blocked',
         'skipped': 'Skipped',
         'unavailable': 'Unavailable',
-    }.get(value, str(value or '').replace('_', ' ').title())
+    }.get(value, str(value or '').replace('-', ' ').replace('_', ' ').title())
 
 
 def _stage_lifecycle(stage, *, stale_after_seconds):
@@ -336,7 +337,7 @@ class AssessmentJobs(AssessmentService):
             s.commit()
         # Queue publication is an independent durable step; pending schedules survive
         # unavailable Redis and can be picked up by the existing enqueuer.
-        return {'scheduled':len(created),'assessment_id':identity,'state':'pending-enqueue'}
+        return {'scheduled':len(created),'assessment_id':identity,'state':'pending_enqueue'}
 
     def discovery_review(self,identity,*,options=None):
         from orgscan.recon.registry import get_registry,PASSIVE
@@ -422,7 +423,7 @@ class AssessmentJobs(AssessmentService):
                     stage_counts[key]=stage_counts.get(key,0)+value
                 if row['lifecycle_state'] in {'pending_enqueue','stale','failed','partially_failed','paused'}:
                     attention.append({'title':row['status_label'],'message':row['status_summary'],'target':(row.get('target') or {}).get('label'),'stage':None,'timestamp':row.get('heartbeat_at') or row.get('queued_at') or row.get('created_at'),'retry_supported':row.get('retry_supported',False),'retry_path':row.get('retry_path'),'job_href':f'/dashboard/scan-jobs/{row["scan_job_id"]}' if row.get('scan_job_id') else None})
-                for stage in row['stages']:
+                for stage in row['stage_details']:
                     if stage['lifecycle_state'] in _ATTENTION_STAGE_STATES:
                         attention.append({'title':stage['status_label'],'message':stage['status_summary'],'target':(row.get('target') or {}).get('label'),'stage':stage['name'],'timestamp':stage.get('completed_at') or stage.get('heartbeat_at') or stage.get('started_at') or stage.get('queued_at'),'retry_supported':row.get('retry_supported',False),'retry_path':row.get('retry_path'),'job_href':f'/dashboard/scan-jobs/{row["scan_job_id"]}' if row.get('scan_job_id') else None})
                 for name in row.get('unavailable_providers',[]):
@@ -446,7 +447,9 @@ class AssessmentJobs(AssessmentService):
                 overall='queued'
             elif lifecycle_counts.get('pending_enqueue'):
                 overall='pending_enqueue'
-            elif lifecycle_counts.get('failed') and (lifecycle_counts.get('completed') or lifecycle_counts.get('completed_with_warnings') or lifecycle_counts.get('partially_failed')):
+            elif lifecycle_counts.get('partially_failed'):
+                overall='partially_failed'
+            elif lifecycle_counts.get('failed') and (lifecycle_counts.get('completed') or lifecycle_counts.get('completed_with_warnings')):
                 overall='partially_failed'
             elif lifecycle_counts.get('failed') or lifecycle_counts.get('partially_failed'):
                 overall='failed'

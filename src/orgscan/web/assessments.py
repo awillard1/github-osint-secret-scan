@@ -64,7 +64,7 @@ def _launch_result(payload):
 
 
 def _status_label(value):
-    return str(value or '').replace('_',' ').title()
+    return str(value or '').replace('-',' ').replace('_',' ').title()
 
 
 def activity_fragment(assessment,jobs,*,tab='discovery',offset=0):
