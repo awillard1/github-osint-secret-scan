@@ -36,6 +36,30 @@ Follow [development-plan.md](development-plan.md) in order, extending existing c
 - **Phase 11 (implemented):** HTTP/browser authentication and tenant boundaries. **Phase 12 (implemented):** lifecycle history and regression detection. **Phase 13 (implemented):** operator queues and drill-downs. **Phase 14 (implemented):** bounded retry policy, rate-limit deferral and conservative recovery.
 - **Phase 15 (implemented):** SARIF and PDF variants over shared report queries. **Phase 16 (implemented):** doctor, wheel packaging/installation smoke tests and a release-readiness checklist with explicit deployment gaps.
 
+## Assessment discovery activity UI follow-up
+
+The assessment operator console now renders discovery state from the shared durable
+run/queue/stage model instead of a browser-only interpretation. Assessment overview,
+discovery and scan pages expose explicit lifecycle labels (`not started`, `ready`,
+`pending enqueue`, `queued`, `running`, `completed`, `completed with warnings`,
+`partially failed`, `failed`, `paused`, `stale`), queue/heartbeat timestamps,
+target/stage/job counters, totals, direct recovery links and a Needs attention
+section for safe redacted failures, unavailable tools, blocked stages and stale
+work. Per-stage metadata extends the persisted discovery progress record so browser
+and JSON routes share the same operator-safe status logic. A lightweight fragment
+poller refreshes only the activity panel, pauses on hidden tabs, backs off after
+failures and stops on terminal states. Existing CLI/API/worker compatibility,
+tenant authorization and secret redaction remain unchanged.
+
+Validation for this slice: the pre-edit focused assessment/recon baseline passed.
+Post-change focused assessment/discovery UI checks passed **18 tests** in the
+sandbox, with the same two existing FastAPI/Starlette dependency deprecation
+warnings. `python -m compileall src tests` and `git diff --check` passed. The full
+suite in this sandbox still reports two unrelated environment-sensitive failures:
+`tests/packaging/test_installed_wheel.py` requires `typer` in an isolated no-deps
+wheel smoke environment, and `tests/services/test_repository_cache.py` hits local
+Git `safe.bareRepository=explicit` policy when mutating a bare test remote.
+
 ## Post-Phase-16 release recovery
 
 Recovery on 2026-09-14 found a clean `codex/architecture-foundation` tree at `03cc9fa`.

@@ -39,6 +39,43 @@ Supported typed prefixes are `org:`, `user:`, `repo:`, `domain:` and `path:`.
 GitHub URLs require an enabled connection matching their host. CSV columns are
 `type,location,connection,notes`; connection accepts an ID or configured name.
 
+## Discovery activity and recovery
+
+Discovery progress is rendered from the existing durable assessment run, scheduled
+scan, queue task and per-stage progress records. The browser does not maintain a
+separate job model. The activity view distinguishes these states:
+
+- `not started`: no discovery run exists for the assessment yet.
+- `ready`: targets and profile are configured, but no new launch is pending.
+- `pending enqueue`: durable jobs were created and linked to the assessment, but
+  queue publication has not been observed yet.
+- `queued`: the queue task exists and is available for a worker claim.
+- `running`: a worker has started execution and recent stage or task heartbeat is
+  present.
+- `completed`: every scheduled stage completed without warnings or failed work.
+- `completed with warnings`: discovery finished, but the result is intentionally
+  incomplete or downgraded, for example due to provider warnings or page budgets.
+- `partially failed`: some stages completed, but at least one stage failed,
+  blocked downstream work or remained unavailable.
+- `failed`: no useful stage result completed and recovery is required.
+- `paused`: the assessment was paused before future work could continue.
+- `stale`: a claimed task or running stage stopped heartbeating within the bounded
+  freshness window and should be inspected or retried.
+
+The activity page shows created, queued, started, last heartbeat/update and
+completed timestamps, elapsed duration, target/stage/job counters, and totals for
+discoveries, assets and observations. Per-target stage cards expose provider/tool,
+passive versus active mode, readiness, counts, retry attempts and safe failure
+classification. Missing tools, blocked upstream inputs, rate-limit deferrals and
+queue publication problems appear in a dedicated Needs attention section using
+redacted operator-safe explanations only.
+
+Automatic refresh uses the existing server-rendered page plus a small HTML fragment
+endpoint. Polling pauses when the browser tab is hidden, resumes on visibility,
+shows the last refresh time, backs off after failures and stops after terminal
+states. Responses never include raw exception strings, response bodies, repository
+content or secret material.
+
 There is no small fixed assessment target count. Imports are bounded per batch
 (default 1 MB / 5,000 rows); subsequent batches are supported. Pages contain
 50 rows by default, with a maximum API page size of 500. Imports/queries also
@@ -154,6 +191,66 @@ reports and AI advice; `/github-connections` list/create/edit/disable/test; `/re
 list/save; `/local-ai` read/update/test. Consult generated OpenAPI for methods and
 parameters. No new CLI command family is added; existing scan/queue/report/doctor
 commands are reused.
+
+## Local operator commands
+
+Prepare a local development environment:
+
+```sh
+python -m pip install -e '.[dev]'
+export ORGSCAN_DATABASE_URL='sqlite:///./orgscan.db'
+```
+
+Start the server-rendered UI and JSON API:
+
+```sh
+orgscan serve-api --host 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000/dashboard/assessments`, create or open an assessment,
+configure targets and discovery providers, then launch discovery from the
+Discovery tab. The launch flow records durable jobs first and immediately links to
+live progress.
+
+Run the enqueuer and inspect queue state:
+
+```sh
+orgscan enqueue-scheduled --limit 10
+orgscan queue-status --json
+orgscan jobs --json
+```
+
+Run a worker against queued discovery or scan jobs:
+
+```sh
+orgscan run-worker --burst --max-jobs 10
+```
+
+Inspect application and database readiness:
+
+```sh
+orgscan status
+```
+
+Run standalone discovery outside the assessment UI when you need to validate
+provider configuration in isolation:
+
+```sh
+orgscan discover organization example-org --limit 10 --json
+orgscan discover domain example.com --provider local-metadata --json
+```
+
+Recovery and retry:
+
+```sh
+curl -X POST http://127.0.0.1:8000/assessments/ASSESSMENT_ID/pause
+curl -X POST http://127.0.0.1:8000/assessments/ASSESSMENT_ID/runs/RUN_ID/retry
+```
+
+The browser UI exposes the same pause and retry actions with tenant authorization,
+CSRF protection and the richer activity view. If launch reports `pending enqueue`,
+run the enqueuer, confirm queue publication with `queue-status` or `jobs`, and
+then start a worker.
 
 ## Migration and deployment
 
