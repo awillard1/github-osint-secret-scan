@@ -260,6 +260,9 @@ def create_assessment_router(settings):
     @router.post('/assessments/{identity}/runs/{run_id}/retry')
     def retry(identity:int,run_id:int):return call(jobs.retry,identity,run_id)
 
+    @router.post('/assessments/{identity}/runs/{run_id}/cancel')
+    def cancel_run(identity:int,run_id:int):return call(jobs.cancel_run,identity,run_id)
+
     @router.post('/dashboard/assessments/{identity}/discovery/publish')
     def publish_discovery(identity:int):
         call(jobs.publish,identity)
@@ -453,4 +456,10 @@ def create_assessment_router(settings):
     def retry_post(identity:int,run_id:int):
         result=call(jobs.retry,identity,run_id)
         return RedirectResponse(f'/dashboard/assessments/{identity}/'+('discovery' if result['kind']=='discovery' else 'scans'),303)
+
+    @router.post('/dashboard/assessments/{identity}/runs/{run_id}/cancel')
+    def cancel_run_post(identity:int,run_id:int):
+        result=call(jobs.cancel_run,identity,run_id)
+        section='discovery' if result['kind']=='discovery' else 'ai' if result['kind']=='ai' else 'scans'
+        return RedirectResponse(f'/dashboard/assessments/{identity}/{section}',303)
     return router

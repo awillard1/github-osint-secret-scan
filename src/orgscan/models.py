@@ -46,6 +46,7 @@ class ScanJobStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+    CANCELLED = "cancelled"
 
 
 class QueueTaskStatus(StrEnum):
@@ -53,6 +54,7 @@ class QueueTaskStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class VerificationStatus(StrEnum):

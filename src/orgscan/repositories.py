@@ -838,6 +838,16 @@ class Storage:
         self.session.flush()
         return task
 
+    def mark_queue_task_cancelled(self, task: QueueTask) -> QueueTask:
+        self.release_queue_execution(task)
+        task.status = 'cancelled'
+        task.completed_at = datetime.now(UTC)
+        task.lease_owner = None
+        task.lease_expires_at = None
+        task.last_error = 'Operation cancelled by operator'
+        self.session.flush()
+        return task
+
     def get_rate_limit_state(self, scope: str) -> RateLimitState | None:
         return self.session.scalar(select(RateLimitState).where(RateLimitState.scope == scope))
 

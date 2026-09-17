@@ -37,8 +37,9 @@ Excluding an asset from scanning does not delete its relationships or findings.
 
 The Discovery page now leads with the latest durable launch. It distinguishes
 **Pending enqueue** (schedules committed, no QueueTask), **Queued** (published),
-**Running** (claimed), **Stale** (no persisted update for five minutes), and
-terminal completion/failure/paused states. Stale is a warning about missing
+**Running** (claimed), **Stale** (no persisted update for five minutes),
+**Cancelling** (durable stop request), **Cancelled** (worker confirmed or queued work
+was withdrawn), and terminal completion/failure/paused states. Stale is a warning about missing
 persisted progress, not proof that a worker stopped. Stage rows show selected
 providers before execution and persisted stage counts/times once a worker begins.
 The overview links directly to activity, results, repository scope and scan launch.
@@ -114,7 +115,12 @@ The tenant-scoped status endpoint is `GET /assessments/{id}/discovery/activity`;
 the browser polls an authenticated HTML fragment for active operations, pauses while
 hidden, and stops after a terminal state. For a failed target, use its **Retry
 target** action after fixing the configuration or transient condition. For an
-expired DB lease, first verify the worker has stopped, then inspect and quarantine:
+active or queued target, **Stop this run** records a durable cancellation request.
+Queued jobs stop immediately; a running worker terminates its current subprocess
+group and records the stopped state. A bounded network request can delay stopping.
+The same action is `POST /assessments/{id}/runs/{run_id}/cancel` for an authorized
+analyst API token. For an expired DB lease, first verify the worker has stopped,
+then inspect and quarantine:
 
 ```sh
 orgscan recover-stale-jobs
@@ -284,8 +290,9 @@ source staging does not use or decrypt Protected SecretEvidence.
 - An existing foreign-tenant domain cannot be reassigned under the legacy globally
   unique domain schema. Such conflicting discovery fails closed. Tenant-specific
   duplicate domain identities require a separately reviewed ownership migration.
-- No interactive visualization framework or process-killing cancellation was added.
-  The supported graph is paginated, filtered relationship traversal with provenance.
+- The supported graph is paginated, filtered relationship traversal with provenance.
+  Stop controls address authorized assessment runs and worker-owned subprocess
+  groups; they do not accept arbitrary operating-system PIDs.
 - Reports are generated downloads; report artifact/history scheduling remains the
   established reporting subsystem. Detail limits and truncation are explicit.
 - Live GHES, Windows/WSL Ollama and PostgreSQL/Redis deployment certification require

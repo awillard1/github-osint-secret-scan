@@ -1,5 +1,6 @@
 """Execute resolved plans using existing scanner, mirror and provider engines."""
 from pathlib import Path
+from datetime import UTC, datetime
 
 from orgscan.config import Settings
 from orgscan.repositories import Storage
@@ -67,6 +68,13 @@ def execute_domain_plan(storage, plan, *, settings=None):
     except Exception as exc:
         failure = classify_failure(exc)
         storage.session.rollback()
+        if failure.code == 'cancelled':
+            job.status = 'cancelled'
+            job.error_message = failure.message
+            job.completed_at = datetime.now(UTC)
+            storage.mark_tool_run_failed(run, stderr_log=failure.message)
+            storage.session.commit()
+            raise
         storage.mark_scan_job_failed(job, 'Domain discovery failed')
         storage.mark_tool_run_failed(run, stderr_log='Domain discovery failed')
         storage.session.commit()

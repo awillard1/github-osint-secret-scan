@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from orgscan.redaction import redact, safe_error
+from orgscan.cancellation import CancellationRequested
 
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -129,6 +131,14 @@ def execute_scan(
         storage.mark_tool_run_completed(tool_run, stdout_log=f"findings={len(matches)}")
         storage.session.commit()
     except Exception as exc:
+        if isinstance(exc, CancellationRequested):
+            storage.session.rollback()
+            scan_job.status = 'cancelled'
+            scan_job.error_message = 'Operation cancelled by operator'
+            scan_job.completed_at = datetime.now(UTC)
+            storage.mark_tool_run_failed(tool_run, stderr_log='Operation cancelled by operator')
+            storage.session.commit()
+            raise
         message = safe_error(exc)
         storage.session.rollback()
         storage.mark_scan_job_failed(scan_job, message)

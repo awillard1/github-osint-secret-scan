@@ -1,5 +1,7 @@
 """Durable discovery activity is a safe projection of schedules, tasks and stages."""
 import json
+import sys
+from threading import Event, Thread
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -59,6 +61,87 @@ def test_initial_ready_pending_and_queued(service):
     queued = activity.view(identity)
     assert queued['status'] == 'queued' and queued['queued_at']
     assert queued['runs'][0]['stages'][0]['status'] == 'queued'
+
+
+def test_stop_pending_and_queued_runs(service):
+    from orgscan.services.assessments.jobs import AssessmentJobs
+    jobs = AssessmentJobs(service.settings)
+    identity = _launch(service)
+    run_id = DiscoveryActivity(service.settings).view(identity)['runs'][0]['id']
+    assert jobs.cancel_run(identity, run_id)['state'] == 'cancelled'
+    pending = DiscoveryActivity(service.settings).view(identity)
+    assert pending['status'] == 'cancelled' and pending['terminal']
+    with service.factory() as session:
+        run = session.get(m.AssessmentRun, run_id)
+        assert session.get(m.ScheduledScan, run.scheduled_scan_id).enabled is False
+
+    queued_identity = _launch(service)
+    _task(service, queued_identity)
+    queued_run = DiscoveryActivity(service.settings).view(queued_identity)['runs'][0]['id']
+    assert jobs.cancel_run(queued_identity, queued_run)['state'] == 'cancelled'
+    stopped = DiscoveryActivity(service.settings).view(queued_identity)
+    assert stopped['status'] == 'cancelled' and stopped['counts']['cancelled'] == 1
+    with service.factory() as session:
+        task = session.scalar(select(m.QueueTask).join(m.AssessmentRun,
+            m.AssessmentRun.scheduled_scan_id == m.QueueTask.scheduled_scan_id).where(m.AssessmentRun.id == queued_run))
+        assert task.status == 'cancelled'
+
+
+def test_stop_running_is_durable_and_visible(service):
+    from orgscan.services.assessments.jobs import AssessmentJobs
+    identity = _launch(service)
+    _task(service, identity, status='running')
+    run_id = DiscoveryActivity(service.settings).view(identity)['runs'][0]['id']
+    assert AssessmentJobs(service.settings).cancel_run(identity, run_id)['state'] == 'cancelling'
+    view = DiscoveryActivity(service.settings).view(identity)
+    assert view['status'] == 'cancelling' and not view['terminal']
+    assert 'Stop requested' in view['description']
+
+
+def test_db_worker_stops_owned_process_and_records_cancelled(service, monkeypatch):
+    from orgscan.services.assessments.jobs import AssessmentJobs
+    from orgscan.queueing import _process_one_db_task
+    from orgscan import processes
+    jobs = AssessmentJobs(service.settings)
+    service.settings.scan_queue_backend = 'db'
+    identity = _launch(service)
+    run_id = DiscoveryActivity(service.settings).view(identity)['runs'][0]['id']
+    assert jobs.publish(identity)['state'] == 'queued'
+    started = Event()
+
+    def external_tool(*args, **kwargs):
+        started.set()
+        processes.run([sys.executable, '-c', 'import time; time.sleep(20)'], timeout=30)
+
+    monkeypatch.setattr('orgscan.queueing.execute_scheduled_scan', external_tool)
+    worker = Thread(target=_process_one_db_task, args=(service.settings,), kwargs={'worker_id': 'test-worker'})
+    worker.start()
+    assert started.wait(5)
+    assert jobs.cancel_run(identity, run_id)['state'] == 'cancelling'
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    result = DiscoveryActivity(service.settings).view(identity)
+    assert result['status'] == 'cancelled' and result['terminal']
+    assert result['runs'][0]['failure_code'] is None
+
+
+def test_stop_endpoint_authorizes_tenant_and_role(service):
+    identity = _launch(service)
+    run_id = DiscoveryActivity(service.settings).view(identity)['runs'][0]['id']
+    service.settings.api_tokens_json = json.dumps([
+        {'name': 'reader', 'token': 'reader-a', 'role': 'reader', 'tenants': ['a']},
+        {'name': 'foreign', 'token': 'analyst-b', 'role': 'analyst', 'tenants': ['b']},
+        {'name': 'analyst', 'token': 'analyst-a', 'role': 'analyst', 'tenants': ['a']},
+    ])
+    app = create_app(service.settings.database_url, settings=service.settings)
+    path = f'/assessments/{identity}/runs/{run_id}/cancel'
+    assert TestClient(app).post(path).status_code in (401, 403)
+    assert TestClient(app, headers={'X-Orgscan-Token': 'reader-a'}).post(path).status_code == 403
+    assert TestClient(app, headers={'X-Orgscan-Token': 'analyst-b'}).post(path).status_code in (403, 404)
+    client = TestClient(app, headers={'X-Orgscan-Token': 'analyst-a'})
+    assert 'Stop this run' in client.get(f'/dashboard/assessments/{identity}/discovery').text
+    assert client.post(path).json()['state'] == 'cancelled'
+    assert client.get(f'/assessments/{identity}/discovery/activity').json()['terminal'] is True
 
 
 @pytest.mark.parametrize(('job_status', 'stage_status', 'expected'), [

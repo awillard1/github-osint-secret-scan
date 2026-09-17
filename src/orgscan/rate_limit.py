@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from orgscan.cancellation import check_cancelled
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -96,7 +97,7 @@ def _wait_for_rate_limit_memory(scope: str, window_seconds: float) -> None:
         now = time.monotonic()
         sleep_for = 0.0 if previous is None else max(0.0, window_seconds - (now - previous))
         if sleep_for > 0:
-            time.sleep(sleep_for)
+            _interruptible_sleep(sleep_for)
             now = time.monotonic()
         _LAST_REQUEST_AT[scope] = now
 
@@ -152,7 +153,15 @@ def _wait_for_rate_limit_db(settings: Settings | None, policy: RateLimitPolicy) 
             session.commit()
         sleep_for = min(max((current_next - datetime.now(UTC)).total_seconds(), 0.0), sleep_cap)
         if sleep_for > 0:
-            time.sleep(sleep_for)
+            _interruptible_sleep(sleep_for)
+
+
+def _interruptible_sleep(seconds: float) -> None:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        check_cancelled()
+        time.sleep(min(0.2, max(0, deadline - time.monotonic())))
+    check_cancelled()
 
 
 def _ensure_rate_limit_state(session_factory, policy: RateLimitPolicy) -> None:

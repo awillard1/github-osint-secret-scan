@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 import fcntl
 import time
+from orgscan.cancellation import CancellationRequested, check_cancelled
 from urllib.parse import urlsplit
 from orgscan.recon.adapters import Adapter,ReconError,TOOLS
 from orgscan.recon.observations import Observation,ObservationStore,scoped_host
@@ -63,6 +64,7 @@ def _run(storage,assessment,parent,options,settings,progress):
     counts['domain']=set(domains)
     storage.session.commit()
     for tool in ordered:
+        check_cancelled()
         definition=registry.get(tool)
         if definition.mode!=PASSIVE and not options.get('active_authorized'):
             raise ReconError('Active recon requires explicit operator authorization','scope_required')
@@ -153,6 +155,8 @@ def _run(storage,assessment,parent,options,settings,progress):
                 if time.monotonic()>deadline:raise ReconError('LIMIT REACHED: pipeline timeout','limit_reached')
             storage.session.commit()
         except Exception as exc:
+            if isinstance(exc,CancellationRequested):
+                raise
             failures.append(tool)
             progress.states[tool]['error_classification']=getattr(exc,'code',getattr(getattr(exc,'failure',None),'code','provider_failed'))
             if getattr(exc,'code',None)=='limit_reached' or getattr(getattr(exc,'failure',None),'code',None)=='limit_reached':

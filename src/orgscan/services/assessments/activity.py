@@ -21,7 +21,7 @@ FAILURE_TEXT = {
     'upstream_rejected': 'The upstream service rejected this request. Review permissions and configuration.',
     'permanent': 'This job cannot retry automatically. Review target and provider configuration.',
 }
-TERMINAL = {'completed', 'completed_with_warnings', 'partially_failed', 'failed', 'paused'}
+TERMINAL = {'completed', 'completed_with_warnings', 'partially_failed', 'failed', 'paused', 'cancelled', 'partially_cancelled'}
 FIXED_STAGES = {'GitHub Organization Discovery', 'Relationship Correlation', 'Contributor Expansion',
                 'Public GitHub Search', 'Repository Metadata', 'Organization Metadata', 'Organization Members'}
 
@@ -96,6 +96,10 @@ class DiscoveryActivity(AssessmentJobs):
                 job = jobs.get(schedule.id)
                 target = targets.get(run.target_id)
                 state = task.status if task else 'pending_enqueue'
+                if not task and not schedule.enabled and (schedule.metadata_json or {}).get('cancel_requested_at'):
+                    state = 'cancelled'
+                if task and task.status == 'running' and (task.metadata_json or {}).get('cancel_requested_at'):
+                    state = 'cancelling'
                 last = (job.updated_at if job else None) or (task.updated_at if task else None) or schedule.updated_at
                 if state == 'running' and _age(last, now) is not None and _age(last, now) >= STALE_SECONDS:
                     state = 'stale'
@@ -120,7 +124,7 @@ class DiscoveryActivity(AssessmentJobs):
                     raw_status = stage.get('status')
                     if raw_status == 'completed' and stage.get('warnings'):
                         raw_status = 'completed_with_warnings'
-                    status = raw_status if raw_status in {'queued','running','completed','failed','blocked','skipped','unavailable','limit_reached','completed_with_warnings'} else 'unavailable'
+                    status = raw_status if raw_status in {'queued','running','completed','failed','blocked','skipped','unavailable','limit_reached','completed_with_warnings','cancelled'} else 'unavailable'
                     stage_updated = stage.get('updated_at') or stage.get('completed_at') or stage.get('started_at') or (job.updated_at if status == 'running' else None)
                     if status == 'running' and _age(stage_updated, now) is not None and _age(stage_updated, now) >= STALE_SECONDS:
                         status = 'stale'
@@ -146,7 +150,7 @@ class DiscoveryActivity(AssessmentJobs):
                                           'retry_run_id': run.id if state == 'failed' else None})
                 if not stage_rows:
                     planned = (schedule.metadata_json or {}).get('discovery_options', {}).get('providers', [])
-                    planned_state = 'pending_enqueue' if not task else 'queued' if task.status in {'queued','running'} else 'skipped'
+                    planned_state = 'cancelled' if state == 'cancelled' else 'pending_enqueue' if not task else 'queued' if task.status in {'queued','running'} else 'skipped'
                     for name in planned:
                         if name not in definitions:
                             continue
@@ -188,6 +192,8 @@ class DiscoveryActivity(AssessmentJobs):
                 status = 'ready' if valid else 'not_started'
             elif counts['stale']:
                 status = 'stale'
+            elif counts['cancelling']:
+                status = 'cancelling'
             elif counts['running']:
                 status = 'running'
             elif counts['pending_enqueue']:
@@ -196,6 +202,8 @@ class DiscoveryActivity(AssessmentJobs):
                 status = 'queued'
             elif counts['failed']:
                 status = 'failed' if counts['failed'] == len(rows) else 'partially_failed'
+            elif counts['cancelled']:
+                status = 'cancelled' if counts['cancelled'] == len(rows) else 'partially_cancelled'
             elif any(stage['status'] in {'blocked','failed','limit_reached','unavailable'} for row in rows for stage in row['stages']):
                 status = 'partially_failed'
             elif any(stage['status'] in {'completed_with_warnings','skipped'} for row in rows for stage in row['stages']) or unavailable:
@@ -223,6 +231,9 @@ class DiscoveryActivity(AssessmentJobs):
                 'completed_with_warnings': 'Discovery finished with warnings. Review stage details before relying on coverage.',
                 'completed': 'All scheduled discovery jobs finished. Review the discovered assets and scan scope.',
                 'paused': 'Assessment is paused. Running work may finish; resume before retrying failed jobs.',
+                'cancelling': 'Stop requested. The worker is ending its current operation and will mark this run cancelled.',
+                'cancelled': 'All jobs in this launch were stopped. Completed work from earlier stages remains available.',
+                'partially_cancelled': 'Some targets were stopped. Review completed results and remaining target states.',
             }
             entities = dict(session.execute(select(m.AssessmentEntity.entity_type, func.count()).where(m.AssessmentEntity.assessment_id == identity).group_by(m.AssessmentEntity.entity_type)).all())
             selected_repositories = session.scalar(select(func.count()).select_from(m.AssessmentEntity).where(
@@ -253,6 +264,7 @@ class DiscoveryActivity(AssessmentJobs):
                           'updated_at': _iso(updated), 'completed_at': _iso(completed) if status in TERMINAL else None,
                           'elapsed_seconds': _age(started or created, completed if status in TERMINAL and completed else now) if (started or created) else None,
                           'counts': {'scheduled': len(rows), 'completed': counts['completed'], 'running': counts['running'],
+                                     'cancelling': counts['cancelling'], 'cancelled': counts['cancelled'],
                                      'queued': counts['queued'], 'pending_enqueue': counts['pending_enqueue'],
                                      'deferred': counts['deferred'],
                                      'failed': counts['failed'], 'blocked': sum(stage['status'] == 'blocked' for row in rows for stage in row['stages']),

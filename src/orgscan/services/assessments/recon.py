@@ -378,7 +378,11 @@ def discover_target(storage,assessment,target,settings,*,configuration=None,prog
                             expanded['input_count']+=1
                             ingest.expand(repo,data,options)
                             expanded['result_count']+=1
-                    except Exception:failures.append('Contributor Expansion')
+                    except Exception as exc:
+                        from orgscan.cancellation import CancellationRequested
+                        if isinstance(exc, CancellationRequested):
+                            raise
+                        failures.append('Contributor Expansion')
             stage['result_count']=count
     if kind=='github-org' and options.get('repository_metadata'):
         with progress.stage('Organization Metadata') as stage:

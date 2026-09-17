@@ -79,4 +79,7 @@ existing queries. Counts and pages are separate reads, so concurrent writes can 
 the result between reads or page requests. Large offsets and exact counts may still
 be expensive; production-scale and PostgreSQL query performance remain unverified.
 Active scans reflect recorded state, not an independent worker heartbeat; queue-task
-recovery is a separate concern.
+recovery is a separate concern. The assessment Discovery view adds an analyst-scoped
+**Stop this run** action for pending, queued and running target operations. It shows
+**Cancelling** until a worker confirms a running stop, then **Cancelled**; already
+completed observations remain available for review.

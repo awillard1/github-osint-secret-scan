@@ -22,6 +22,15 @@ the schedule so enqueue polling cannot restart the same failed work indefinitely
 Review the cause and create a replacement schedule after fixing it. RQ workers now
 start the retry scheduler; burst mode processes currently available work only.
 
+Assessment run cancellation is a separate terminal outcome, never a retryable
+failure. The analyst-scoped API and browser action stop pending/queued schedules
+immediately and persist a stop request for running QueueTasks. DB and RQ workers
+check that request during bounded subprocess execution and between supported
+network reads, terminate the worker-owned process group, and record a safe
+`cancelled` result. They never act on a caller-supplied PID. A blocked network
+request can delay the stop until its configured timeout. Abrupt worker loss still
+requires normal stale-job inspection and recovery.
+
 DB task claims use conditional SQL updates. Completed tasks return saved results on
 replay; RQ completion records the execution ID and result in the schedule transaction.
 Incremental repository retries reuse successful per-scanner/ref checkpoints and

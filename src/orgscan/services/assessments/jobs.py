@@ -1,7 +1,8 @@
 """Assessment jobs use existing ScheduledScan/QueueTask claims, replay and workers."""
 from datetime import UTC,datetime
 from uuid import uuid4
-from sqlalchemy import select,func,case,or_,and_
+from sqlalchemy import select,func,case,or_,and_,update
+from orgscan.cancellation import CancellationRequested, check_cancelled
 from orgscan import models as m
 from orgscan.repositories import Storage
 from orgscan.storage.assessments import AssessmentStorage,fields
@@ -185,6 +186,46 @@ class AssessmentJobs(AssessmentService):
         # Cooperative stop: no process is killed. Already-running operations finish.
         return self.update(identity,status='paused')
 
+    def cancel_run(self, identity, run_id):
+        """Request cancellation only for an authorized assessment operation."""
+        with self.factory() as s:
+            st = AssessmentStorage(s)
+            st.assessment(identity, 'analyst')
+            run = s.scalar(select(m.AssessmentRun).where(
+                m.AssessmentRun.id == run_id, m.AssessmentRun.assessment_id == identity))
+            if run is None:
+                raise LookupError('Run not found')
+            scheduled = s.get(m.ScheduledScan, run.scheduled_scan_id)
+            task = s.scalar(select(m.QueueTask).where(
+                m.QueueTask.scheduled_scan_id == scheduled.id).order_by(m.QueueTask.id.desc()))
+            if task and task.status in ('completed', 'failed', 'cancelled'):
+                raise ValueError('Only pending or active runs can be stopped')
+            if not task and not scheduled.enabled:
+                raise ValueError('This run is no longer pending')
+            now = datetime.now(UTC).isoformat()
+            scheduled.enabled = False
+            metadata = dict(scheduled.metadata_json or {})
+            metadata.update(cancel_requested_at=now, queue_status='cancelling' if task and task.status == 'running' else 'cancelled')
+            scheduled.metadata_json = metadata
+            state = 'cancelled'
+            if task and task.status == 'queued':
+                claimed = s.execute(update(m.QueueTask).where(m.QueueTask.id == task.id,
+                    m.QueueTask.status == 'queued').values(status='cancelled', completed_at=datetime.now(UTC),
+                    last_error='Operation cancelled by operator', lease_owner=None, lease_expires_at=None),
+                    execution_options={'synchronize_session': False})
+                if claimed.rowcount == 1:
+                    s.refresh(task)
+                    Storage(s).release_queue_execution(task)
+                else:
+                    s.refresh(task)
+            if task and task.status == 'running':
+                task.metadata_json = {**(task.metadata_json or {}), 'cancel_requested_at': now}
+                state = 'cancelling'
+                metadata['queue_status'] = state
+                scheduled.metadata_json = metadata
+            s.commit()
+            return {'run_id': run_id, 'kind': run.kind, 'state': state}
+
     def retry(self,identity,run_id):
         with self.factory() as s:
             st=AssessmentStorage(s);a=st.assessment(identity,'analyst')
@@ -258,6 +299,7 @@ def execute_assessment_task(storage,scheduled,settings):
             parameters_json={'assessment_id':assessment.id,'tenant_key':assessment.tenant_key,'scheduled_scan_id':scheduled.id})
         storage.mark_scan_job_running(job);storage.session.commit()
         try:
+            check_cancelled()
             if action=='discovery':
                 target=storage.session.get(m.AssessmentTarget,metadata.get('assessment_target_id'))
                 if target is None or target.assessment_id!=assessment.id or target.validation_status!='valid':raise ValueError('Assessment target is unavailable')
@@ -267,7 +309,16 @@ def execute_assessment_task(storage,scheduled,settings):
                 from orgscan.services.local_ai import AIService
                 AIService(settings).analyze(assessment.id,**metadata.get('ai_options',{}))
             else:raise ValueError('Unsupported assessment job')
+            check_cancelled()
             storage.mark_scan_job_completed(job);assessment.updated_at=datetime.now(UTC);storage.session.commit()
+        except CancellationRequested:
+            storage.session.rollback()
+            storage.session.refresh(job)
+            job.status = 'cancelled'
+            job.error_message = 'Operation cancelled by operator'
+            job.completed_at = datetime.now(UTC)
+            storage.session.commit()
+            raise
         except Exception:
             storage.session.rollback();storage.mark_scan_job_failed(job,'Assessment operation failed; review configuration and retry')
             storage.session.commit();raise

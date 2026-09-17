@@ -1,6 +1,7 @@
 """Durable discovery stages within the existing queue operation."""
 from contextlib import contextmanager
 from datetime import UTC,datetime
+from orgscan.cancellation import CancellationRequested
 
 
 class DiscoveryProgress:
@@ -26,9 +27,9 @@ class DiscoveryProgress:
                'started_at':now,'updated_at':now}
         self.states[name]=value;self.save()
         try:yield value
-        except Exception:
+        except Exception as exc:
             self.storage.session.rollback()
-            value['status']='failed';value['completed_at']=datetime.now(UTC).isoformat();value['updated_at']=value['completed_at'];value['error']='Discovery stage failed; inspect connection/provider readiness and retry the target'
+            value['status']='cancelled' if isinstance(exc,CancellationRequested) else 'failed';value['completed_at']=datetime.now(UTC).isoformat();value['updated_at']=value['completed_at'];value['error']='Operation cancelled by operator' if isinstance(exc,CancellationRequested) else 'Discovery stage failed; inspect connection/provider readiness and retry the target'
             self.states[name]=value;self.save();raise
         else:
             value['status']='failed' if previous.get('status')=='failed' else 'completed';value['completed_at']=datetime.now(UTC).isoformat();value['updated_at']=value['completed_at']

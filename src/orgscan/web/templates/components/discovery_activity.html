@@ -11,6 +11,8 @@
       {% if activity.status == 'pending_enqueue' %}<p>Publish the durable jobs below. If the queue is unavailable, retry after an administrator restores it.</p>
       {% elif activity.status in ('queued', 'running') %}<p>{{ 'Use Execute queued jobs to start the configured database worker.' if activity.browser_execution_available and activity.status == 'queued' else 'A worker claims queued jobs. This view refreshes while discovery is active.' }}</p>
       {% elif activity.status == 'stale' %}<p>Inspect the worker and queue lease before attempting recovery.</p>
+      {% elif activity.status == 'cancelling' %}<p>The worker is stopping its current external operation. This view will show when cancellation finishes.</p>
+      {% elif activity.status in ('cancelled', 'partially_cancelled') %}<p>Review retained results or launch discovery again after adjusting the profile.</p>
       {% elif activity.status in ('failed', 'partially_failed') %}<p>Resolve the items below and retry failed targets. Results may be partial.</p>
       {% elif activity.status == 'paused' %}<p>Resume the assessment, then retry failed targets.</p>
       {% elif activity.status in ('completed', 'completed_with_warnings') %}<p>Review results and choose repositories to scan.</p>
@@ -22,7 +24,7 @@
     </div>
   </div>
   <div class="activity-metrics" aria-label="Discovery counts">
-    {% for key, label in [('scheduled','Targets scheduled'),('completed','Completed'),('running','Running'),('queued','Queued'),('deferred','Deferred'),('pending_enqueue','Pending enqueue'),('failed','Failed'),('blocked','Blocked stages'),('skipped','Skipped stages'),('outputs','Stage outputs'),('assets','Linked assets')] %}
+    {% for key, label in [('scheduled','Targets scheduled'),('completed','Completed'),('running','Running'),('cancelling','Stopping'),('cancelled','Stopped'),('queued','Queued'),('deferred','Deferred'),('pending_enqueue','Pending enqueue'),('failed','Failed'),('blocked','Blocked stages'),('skipped','Skipped stages'),('outputs','Stage outputs'),('assets','Linked assets')] %}
       <div class="activity-metric"><strong>{{ activity.counts[key] }}</strong><span>{{ label }}</span></div>
     {% endfor %}
   </div>
@@ -59,6 +61,7 @@
           {% for stage in run.stages %}<tr><th scope="row">{{ stage.name }}<small>{{ stage.mode }}</small></th><td><span class="activity-state" data-state="{{ stage.status }}">{{ stage.status|replace('_',' ')|title }}</span>{% if stage.explanation %}<small>{{ stage.explanation }}</small>{% endif %}{% if stage.blocked_upstream %}<small>Blocked by empty upstream input</small>{% endif %}</td><td>{{ stage.input_count }} → {{ stage.output_count }}</td><td>Queued {{ stage.queued_at or '—' }}<small>Started {{ stage.started_at or '—' }}</small><small>Updated {{ stage.updated_at or '—' }}</small><small>Finished {{ stage.completed_at or '—' }}</small></td><td>{{ stage.duration_seconds if stage.duration_seconds is not none else '—' }} s</td><td>{{ stage.readiness }}<small>{{ stage.retry_count }} retries</small>{% if stage.failure_code %}<small>{{ stage.failure_code|replace('_',' ')|title }}</small>{% endif %}</td></tr>{% endfor %}
         </tbody></table></div>{% else %}<p class="muted">No stage has started. {% if run.status == 'pending_enqueue' %}The enqueuer has not published this durable job yet.{% elif run.status == 'queued' %}A worker has not claimed this job yet.{% endif %}</p>{% endif %}
         <div class="target-actions">{% if run.scan_job_id %}<a href="/dashboard/scan-jobs/{{ run.scan_job_id }}">Open job details</a>{% endif %}
+          {% if auth and auth.allows_role('analyst') and run.status in ('pending_enqueue', 'queued', 'running', 'stale') %}<form method="post" action="/dashboard/assessments/{{ activity.assessment.id }}/runs/{{ run.id }}/cancel">{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<button type="submit">Stop this run</button></form>{% endif %}
           {% if run.status == 'failed' %}<form method="post" action="/dashboard/assessments/{{ activity.assessment.id }}/runs/{{ run.id }}/retry">{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<button type="submit">Retry target</button></form>{% endif %}</div>
       </article>{% endfor %}
     {% else %}<div class="empty-state"><strong>No discovery operation yet</strong><p>Valid targets and a confirmed launch create durable jobs here.</p></div>{% endif %}

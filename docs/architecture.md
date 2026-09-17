@@ -53,6 +53,12 @@ database-backed deployment can request a bounded background worker batch scoped 
 those schedule IDs. Redis/RQ workers remain deployment managed. Provider execution
 still goes through durable claims and worker services.
 
+An analyst-scoped stop action addresses an AssessmentRun rather than a process ID.
+The assessment service records cancellation on its durable QueueTask; DB/RQ workers
+check it through a scoped cancellation context. The common subprocess runner kills
+only its own process group. The activity service projects stopping/stopped states
+for the browser, which contains no process-control policy.
+
 ### 2. Application services
 
 Services model use cases.

@@ -4,6 +4,7 @@ import selectors
 import signal
 import subprocess
 import time
+from orgscan.cancellation import check_cancelled
 
 CompletedProcess = subprocess.CompletedProcess
 TimeoutExpired = subprocess.TimeoutExpired
@@ -18,6 +19,7 @@ def run(command, *, timeout=300, max_output_bytes=OUTPUT_LIMIT, capture_output=T
         text=True, check=False, cwd=None, env=None, output_files=()):
     if not capture_output or check:
         raise ValueError('Bounded execution requires captured output and explicit exit handling')
+    check_cancelled()
     with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           cwd=cwd, env=env, start_new_session=True) as process:
         chunks = {process.stdout: bytearray(), process.stderr: bytearray()}
@@ -37,6 +39,7 @@ def run(command, *, timeout=300, max_output_bytes=OUTPUT_LIMIT, capture_output=T
                     os.set_blocking(pipe.fileno(), False)
                     selector.register(pipe, selectors.EVENT_READ)
                 while selector.get_map() or process.poll() is None:
+                    check_cancelled()
                     check_report_sizes()
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:

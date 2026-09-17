@@ -103,6 +103,8 @@ def job_table(root,jobs):
     body+=form(root+'/pause','','Pause future operations')+form(root+'/resume','','Resume')
     for r in jobs['items']:
         if r['status']=='failed':body+=form(root+f'/runs/{r["id"]}/retry','',f'Retry run {r["id"]}')
+        if (current_auth.get() is None or current_auth.get().allows_role('analyst')) and r['status'] in ('pending','queued','running'):
+            body+=form(root+f'/runs/{r["id"]}/cancel','',f'Stop run {r["id"]}')
     for row in jobs['items']:
         if row.get('scan_job_id'):body+=f'<p><a href="/dashboard/scan-jobs/{row["scan_job_id"]}">Job {row["scan_job_id"]} details</a></p>'
     return body+paging(root+'/scans',jobs['total'],jobs.get('offset',0),jobs.get('limit',50))+'<p><a href="">Refresh status</a></p>'

@@ -1,5 +1,6 @@
 """Bounded upstream reads with an absolute deadline and controlled size failures."""
 import time
+from orgscan.cancellation import check_cancelled
 
 
 class ResponseTooLarge(ValueError):
@@ -27,6 +28,7 @@ def read_response(response, *, settings=None, deadline=None):
     # peer drips bytes. Its socket timeout is reduced to the remaining deadline.
     reader = getattr(response, 'read1', response.read)
     while True:
+        check_cancelled()
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError('HTTP response deadline exceeded')

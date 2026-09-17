@@ -39,6 +39,8 @@ class ConnectionClient(GitHubDiscoveryClient):
         self.opener=build_opener(NoRedirect())
 
     def _request_json(self,path):
+        from orgscan.cancellation import CancellationRequested, check_cancelled
+        check_cancelled()
         if not path.startswith('/') or path.startswith('//') or any(c in path for c in ('\r','\n')):
             raise ValueError('Invalid GitHub endpoint')
         wait_for_rate_limit(self.settings,self.scope)
@@ -47,6 +49,8 @@ class ConnectionClient(GitHubDiscoveryClient):
         try:
             with self.opener.open(Request(self.base_url+path,headers=headers),timeout=self.timeout) as response:
                 return json.loads(read_response(response,settings=self.settings,deadline=response_deadline(self.timeout)))
+        except CancellationRequested:
+            raise
         except (HTTPError,OSError) as exc:
             from orgscan.services.job_policy import ClassifiedJobError,classify_failure
             raise ClassifiedJobError(classify_failure(exc)) from None

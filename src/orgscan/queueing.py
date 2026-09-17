@@ -19,6 +19,7 @@ from orgscan.db import prepare_database, create_session_factory
 from orgscan.repositories import Storage
 from orgscan.scheduler import execute_scheduled_scan, next_run_from_cadence
 from orgscan.services.job_policy import (classify_failure, retry_delay, retry_limit, Failure, JobExecutionError, logical_job_type)
+from orgscan.cancellation import cancellation_scope, CancellationRequested
 
 
 class QueueBackendError(RuntimeError):
@@ -195,6 +196,8 @@ def execute_scheduled_scan_job(scheduled_scan_id: int, settings_payload: dict[st
             raise JobExecutionError('Missing durable queue execution; review legacy job before rescheduling')
         if task.status == 'completed':
             return (task.metadata_json or {})['result']
+        if task.status == 'cancelled':
+            return {'scheduled_scan_id': scheduled_scan_id, 'status': 'cancelled'}
         claimed = session.execute(update(QueueTask).where(QueueTask.id == task.id, QueueTask.status == 'queued',
             QueueTask.available_at <= datetime.now(UTC)).values(status='running', lease_owner=execution_id,
             lease_expires_at=datetime.now(UTC)+timedelta(seconds=600),started_at=datetime.now(UTC),
@@ -209,7 +212,8 @@ def execute_scheduled_scan_job(scheduled_scan_id: int, settings_payload: dict[st
         session.commit()
 
         try:
-            results = execute_scheduled_scan(storage, scheduled, settings=settings)
+            with cancellation_scope(settings.database_url, task.id):
+                results = execute_scheduled_scan(storage, scheduled, settings=settings)
             if not results:
                 raise QueueBackendError("Scheduled scan did not produce a result")
             result = results[0]
@@ -232,6 +236,9 @@ def execute_scheduled_scan_job(scheduled_scan_id: int, settings_payload: dict[st
                     "next_retry_at": None,
                 }
             )
+            session.refresh(task)
+            if (task.metadata_json or {}).get('cancel_requested_at'):
+                raise CancellationRequested()
             task.metadata_json = {'result':payload}
             storage.mark_queue_task_completed(task, scan_job_id=result.scan_job_id, tool_run_id=result.tool_run_id)
             metadata["completed_execution_id"] = execution_id
@@ -243,6 +250,15 @@ def execute_scheduled_scan_job(scheduled_scan_id: int, settings_payload: dict[st
             session.rollback()
             scheduled = storage.get_scheduled_scan(scheduled_scan_id)
             metadata = dict(scheduled.metadata_json or {})
+            if failure.code == 'cancelled':
+                session.refresh(task)
+                storage.mark_queue_task_cancelled(task)
+                scheduled.enabled = False
+                scheduled.metadata_json = {**metadata, 'queue_status': 'cancelled',
+                    'completed_at': datetime.now(UTC).isoformat(), 'last_error': failure.message,
+                    'failure_code': 'cancelled'}
+                session.commit()
+                return {'scheduled_scan_id': scheduled_scan_id, 'status': 'cancelled'}
             retrying = bool(rq_job and failure.retryable and rq_job.retries_left)
             delay = retry_delay(settings, max(1, retry_limit(settings) - (rq_job.retries_left or 0) + 1), failure) if rq_job else 0
             if rq_job:
@@ -403,7 +419,8 @@ def _execute_db_queue_task(settings: Settings, queue_task_id: int, *, worker_id:
             raise QueueBackendError(f"Scheduled scan {task.scheduled_scan_id} does not exist")
         metadata = dict(scheduled.metadata_json or {})
         try:
-            results = execute_scheduled_scan(storage, scheduled, settings=settings)
+            with cancellation_scope(settings.database_url, task.id):
+                results = execute_scheduled_scan(storage, scheduled, settings=settings)
             if not results:
                 raise QueueBackendError("Scheduled scan did not produce a result")
             result = results[0]
@@ -417,6 +434,8 @@ def _execute_db_queue_task(settings: Settings, queue_task_id: int, *, worker_id:
             session.refresh(task)
             if task.status != "running" or task.lease_owner != worker_id:
                 raise JobExecutionError("Queue task ownership changed during execution")
+            if (task.metadata_json or {}).get('cancel_requested_at'):
+                raise CancellationRequested()
             task.metadata_json = {**(task.metadata_json or {}), "result": payload}
             storage.mark_queue_task_completed(task, scan_job_id=result.scan_job_id, tool_run_id=result.tool_run_id)
             metadata.update(
@@ -440,6 +459,14 @@ def _execute_db_queue_task(settings: Settings, queue_task_id: int, *, worker_id:
             if task.status != "running" or task.lease_owner != worker_id:
                 raise JobExecutionError("Queue task no longer owned by this worker") from None
             metadata = dict(scheduled.metadata_json or {})
+            if failure.code == 'cancelled':
+                storage.mark_queue_task_cancelled(task)
+                scheduled.enabled = False
+                scheduled.metadata_json = {**metadata, 'queue_backend': 'db', 'queue_status': 'cancelled',
+                    'completed_at': datetime.now(UTC).isoformat(), 'last_error': failure.message,
+                    'failure_code': 'cancelled'}
+                session.commit()
+                return {'queue_task_id': task.id, 'status': 'cancelled'}
             metadata["failure_code"] = failure.code
             task.metadata_json = {**(task.metadata_json or {}), "failure_code": failure.code, "retryable": failure.retryable}
             if failure.retryable and task.attempt_count < task.max_attempts:
