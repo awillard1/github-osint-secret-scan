@@ -399,7 +399,8 @@ def create_assessment_router(settings):
         entity_id,domain_id,account_id,organization_id=map(optional_id,(entity_id,domain_id,account_id,organization_id))
         archived,fork,scanned=map(optional_bool,(archived,fork,scanned))
         assessment=call(service.detail,identity)
-        if tab=='targets':return ui.targets(assessment,call(service.targets,identity,offset=offset),offset)
+        if tab=='targets':return ui.targets(assessment,call(service.targets,identity,offset=offset),offset,
+            connections=call(service.connections,assessment['tenant_key']))
         if tab=='discovery':return ui.discovery(assessment,call(activity.view,identity),provider_readiness(settings),PROFILES,call(service.profiles,assessment['tenant_key'])['saved'])
         if tab=='scans':return ui.scans(assessment,call(jobs.progress,identity,offset=offset,kind='scan'),scanner_inventory(settings),SCAN_PROFILES,db_execution=settings.scan_queue_backend=='db')
         if tab in ('repositories','accounts','domains'):
@@ -423,7 +424,16 @@ def create_assessment_router(settings):
     @router.post('/dashboard/assessments/{identity}/targets',response_class=HTMLResponse)
     def targets_post(identity:int,text:str=Form(...),format:str=Form('lines')):
         result=call(service.import_targets,identity,text,format=format)
-        return ui.targets(call(service.detail,identity),call(service.targets,identity),0,result)
+        assessment=call(service.detail,identity)
+        return ui.targets(assessment,call(service.targets,identity),0,result,
+            connections=call(service.connections,assessment['tenant_key']))
+
+    @router.post('/dashboard/assessments/{identity}/targets/github-connection')
+    def targets_github_connection(identity:int):
+        assessment=call(service.detail,identity)
+        call(service.create_connection,assessment['tenant_key'],name='GitHub.com public',
+            web_base_url='https://github.com',api_base_url='https://api.github.com')
+        return RedirectResponse(f'/dashboard/assessments/{identity}/targets',303)
 
     @router.post('/dashboard/assessments/{identity}/targets/upload',response_class=HTMLResponse)
     async def targets_upload(identity:int,upload:UploadFile=File(...),format:str=Form('lines')):

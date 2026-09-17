@@ -39,6 +39,11 @@ Not responsible for core workflow decisions.
 
 The live [operator dashboard](operator-dashboard.md) consumes `DashboardService` queues over authorized storage; templates do not classify risk or lifecycle states. The browser layer has `web/render.py`, autoescaped Jinja templates and shared static design tokens. Live dashboard, assessment, discovery-results, recon-settings, finding/job-detail, login and user-administration pages use those templates. FastAPI mounts packaged static assets at `/static`. Browser POST actions continue through the existing auth, CSRF and service boundaries; exported report HTML does not depend on browser assets.
 
+Operator asset detail routes for domains, organizations, repositories and accounts
+render the existing authorized asset projections through one autoescaped template.
+The HTML adapter adds no queries or alternate visibility rules; queue links point
+to these routes, while the original JSON endpoints retain their API contracts.
+
 `services/assessments/activity.py` projects the latest discovery launch from
 AssessmentRun, ScheduledScan, QueueTask and persisted ScanJob stages. The browser
 overview/discovery templates consume this tenant-authorized, sanitized DTO. The
@@ -66,6 +71,12 @@ target whose scope contains each linked domain. The worker revalidates that targ
 and uses the existing HTTPX adapter, recon pipeline, observation store, queue claim
 and cancellation context. Browser templates only render readiness and durable state;
 no network subprocess runs in a route handler.
+
+Target import may add validated targets while an assessment is active. Existing
+scheduled discovery and scan jobs retain their captured scope; a new discovery
+launch resolves newly saved GitHub repository URLs into assessment-linked assets.
+The browser's public GitHub.com setup action calls the existing tenant-scoped
+connection service and grants no private credentials or scan authorization.
 
 An analyst-scoped stop action addresses an AssessmentRun rather than a process ID.
 The assessment service records cancellation on its durable QueueTask; DB/RQ workers

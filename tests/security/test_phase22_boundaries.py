@@ -64,7 +64,7 @@ def test_all_presentations_and_persistence(tmp_path, slashes, legacy):
     assert VALUE not in service._dashboard_html()
     assert VALUE not in str(DashboardService(factory).overview())
     with TestClient(create_app(url, settings=settings)) as client:
-        for endpoint in (f'/findings/{fid}', f'/domains/{did}', '/dashboard', f'/dashboard/findings/{fid}', '/summary'):
+        for endpoint in (f'/findings/{fid}', f'/domains/{did}', f'/dashboard/domains/{did}', '/dashboard', f'/dashboard/findings/{fid}', '/summary'):
             response = client.get(endpoint)
             assert response.status_code == 200, endpoint
             assert VALUE not in response.text, endpoint

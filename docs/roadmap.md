@@ -458,6 +458,20 @@ revalidation. The existing queue, adapter, observation store, retry and cancella
 paths remain authoritative. The browser can start bounded DB queue batches; Redis/RQ
 needs a supervised worker. The live browser pages now share the console templates.
 
+The repository scan entry path now starts on Targets: tenant admins can enable a
+public GitHub.com connection in place, paste repository URLs, review per-line save
+results, and follow direct Discovery and Repository scans links. Active assessments
+accept added targets without changing already queued scope. Scanner readiness is
+visible before repository selection, so operators can find TruffleHog and other
+repository tools without a CLI. Removing targets and changing visibility still
+requires pausing the assessment.
+
+The dashboard's newly discovered asset queue now has working HTML detail routes
+for domains, organizations, repositories and accounts. They share authorized
+redacted service projections with the existing JSON endpoints and show relevant
+observations, relationships, risk and findings. Cross-tenant and missing assets
+remain 404.
+
 The assessment Scans tab now uses the console shell for scope, scanner readiness,
 launch review and durable scan-run status. Analysts can publish pending jobs and
 request a bounded DB queue execution batch from the browser. Discovery-generated

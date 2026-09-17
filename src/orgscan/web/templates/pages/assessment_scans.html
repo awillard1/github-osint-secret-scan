@@ -27,7 +27,8 @@
 </section>
 <section class="panel" id="scan-configuration" aria-labelledby="scan-config-title">
   <div class="section-heading"><div><p class="eyebrow">Prepare a scan</p><h2 id="scan-config-title">Profile and scanner readiness</h2></div><a href="{{ root }}/repositories">Review included repositories →</a></div>
-  {% if jobs.selected_repositories == 0 %}<div class="empty-state"><strong>No repositories selected</strong><p>Include repositories in scope before reviewing a scan launch.</p><a href="{{ root }}/repositories">Select repositories</a></div>{% else %}
+  {% if jobs.selected_repositories == 0 %}<div class="empty-state"><strong>No repositories selected</strong><p>Save GitHub repository URLs under Targets, run Discovery to resolve them, then include the repositories in scan scope.</p><div class="scan-form-actions"><a href="{{ root }}/targets">Save repository URLs →</a><a href="{{ root }}/discovery">Run discovery →</a><a href="{{ root }}/repositories">Select repositories →</a></div></div>
+  <h3>Repository scanners</h3><p class="muted">Scanner readiness is shown here before you launch. TruffleHog and other tools run only when selected in a scan plan.</p><div class="scan-scanner-grid">{% for scanner in inventory %}<div class="scan-scanner-choice"><strong>{{ scanner.name }}</strong><small>{{ 'Ready' if scanner.readiness.ready else 'Unavailable' }} · {{ scanner.readiness.status }}</small></div>{% endfor %}</div>{% else %}
   <p class="muted">Profile defaults apply when no scanners are checked. Explicit selections replace the profile scanner list. Unavailable scanners cannot be selected.</p>
   {% if auth and auth.allows_role('analyst') %}<form method="post" action="{{ root }}/launch/scan" class="scan-form">
     {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}

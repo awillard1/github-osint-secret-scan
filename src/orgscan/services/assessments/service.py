@@ -149,7 +149,10 @@ class AssessmentService:
         outcomes=[];counts={'added':0,'duplicates':0,'invalid':0}
         with self.factory() as s:
             st=AssessmentStorage(s);a=st.assessment(identity,'analyst')
-            if a.status not in ('draft','ready','paused'):raise ValueError('Pause the assessment before editing targets')
+            # Adding targets does not change the scope of already scheduled jobs.
+            # A later discovery launch resolves the new targets into scan assets.
+            if a.status not in ('draft','ready','paused','active'):
+                raise ValueError('Reopen the assessment before adding targets')
             connections=st.connections(a.tenant_key)
             if len(connections)>500:raise SanitizationLimitError('Connection context limit exceeded')
             for number,item in enumerate(entries,1):
@@ -172,7 +175,14 @@ class AssessmentService:
                     outcomes.append({'line':number,'status':status,'location':target.normalized_value,'type':target.target_type})
                 except (ValueError,TypeError) as exc:
                     counts['invalid']+=1
-                    outcomes.append({'line':number,'status':'invalid','error':redact(str(exc)),'input':redact(str(item.get('location') or ''))})
+                    message=str(exc)
+                    reason_code=('github_connection_required' if message in (
+                        'Unknown GitHub connection; configure this host first',
+                        'Choose a GitHub connection for this identifier') else
+                        'github_connection_unavailable' if message=='Unknown or disabled GitHub connection' else
+                        'invalid_target')
+                    outcomes.append({'line':number,'status':'invalid','reason_code':reason_code,
+                                     'error':redact(message),'input':redact(str(item.get('location') or ''))})
             result=st.safe({'counts':counts,'rows':outcomes},a.tenant_key);s.commit();return result
 
     def remove_target(self,identity,target_id):

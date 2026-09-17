@@ -40,6 +40,38 @@ def test_dashboard_queues_escape_and_scope(tmp_path):
     assert client.post('/dashboard/findings/1/workflow',data={'action':'triage'}).status_code == 403
 
 
+def test_new_asset_queue_links_open_authorized_html_details(tmp_path):
+    url=f"sqlite:///{tmp_path / 'assets.db'}"
+    init_db(url)
+    ids={}
+    with create_session_factory(url)() as session:
+        storage=Storage(session)
+        for tenant in ('a','b'):
+            org=storage.create_organization(tenant,tenant_key=tenant)
+            domain=storage.create_domain(f'{tenant}.example.com',organization_id=org.id)
+            account=storage.create_account(f'{tenant}-operator',organization_id=org.id)
+            repository=storage.create_repository(f'{tenant}/repository',organization_id=org.id)
+            ids[tenant]={'organizations':org.id,'domains':domain.id,
+                         'accounts':account.id,'repositories':repository.id}
+        session.commit()
+    settings=Settings(database_url=url,api_tokens_json=json.dumps([
+        {'name':'reader','token':'reader-token','role':'reader','tenants':['a']}]))
+    client=TestClient(create_app(url,settings=settings),headers={'X-Orgscan-Token':'reader-token'})
+    queue=client.get('/operator/overview').json()['queues']['new-assets']
+    expected={f'/dashboard/{kind}/{identity}' for kind,identity in ids['a'].items()}
+    assert {item['href'] for item in queue['items']}==expected
+    for path in expected:
+        page=client.get(path)
+        assert page.status_code==200,(path,page.text)
+        assert 'class="app-shell"' in page.text and 'Asset detail' in page.text
+    domain_page=client.get(f"/dashboard/domains/{ids['a']['domains']}")
+    assert 'Domain observations' in domain_page.text
+    assert client.get(f"/domains/{ids['a']['domains']}").headers['content-type'].startswith('application/json')
+    for kind,identity in ids['b'].items():
+        assert client.get(f'/dashboard/{kind}/{identity}').status_code==404
+    assert client.get('/dashboard/domains/999999').status_code==404
+
+
 def test_finding_decision_returns_to_detail(tmp_path):
     url = f"sqlite:///{tmp_path / 'decision.db'}"
     init_db(url)

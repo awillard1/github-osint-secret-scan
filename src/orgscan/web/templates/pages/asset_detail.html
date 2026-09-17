@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+{% set name=asset.name or asset.full_name or asset.username or (kind|title ~ ' #' ~ asset.id) %}
+<div class="page-heading">
+  <div><p class="eyebrow">{{ kind|title }} / Asset detail</p><h1>{{ name }}</h1>
+    <p class="muted">Authorized observations, relationships and findings for this asset.</p></div>
+  <a class="button secondary" href="/dashboard/queues/new-assets">Back to new assets</a>
+</div>
+
+<div class="detail-grid">
+  <section class="panel"><h2>Identity</h2><dl class="facts">
+    <div><dt>Asset ID</dt><dd>{{ asset.id }}</dd></div>
+    {% if kind=='domain' %}<div><dt>Ownership confidence</dt><dd>{{ asset.ownership_confidence or 'Unknown' }}</dd></div><div><dt>Verification</dt><dd>{{ asset.verification_status or 'Unknown' }}</dd></div><div><dt>Sources</dt><dd>{{ (asset.discovery_sources or [])|join(', ') or 'Not recorded' }}</dd></div>{% endif %}
+    {% if kind=='organization' %}<div><dt>Display name</dt><dd>{{ asset.display_name or '—' }}</dd></div><div><dt>GitHub handle</dt><dd>{{ asset.github_handle or '—' }}</dd></div>{% endif %}
+    {% if kind=='repository' %}<div><dt>Provider</dt><dd>{{ asset.provider or '—' }}</dd></div><div><dt>Default branch</dt><dd>{{ asset.default_branch or '—' }}</dd></div>{% if asset.url %}<div><dt>Repository URL</dt><dd>{{ asset.url }}</dd></div>{% endif %}{% endif %}
+    {% if kind=='account' %}<div><dt>Provider</dt><dd>{{ asset.provider or '—' }}</dd></div><div><dt>Account type</dt><dd>{{ asset.account_type or '—' }}</dd></div><div><dt>Display name</dt><dd>{{ asset.display_name or '—' }}</dd></div>{% endif %}
+  </dl></section>
+  <section class="panel"><h2>Risk summary</h2>{% if payload.risk_summary %}<dl class="facts"><div><dt>Maximum risk score</dt><dd>{{ payload.risk_summary.max_risk_score|default('—') }}</dd></div><div><dt>Findings</dt><dd>{{ payload.risk_summary.finding_count|default(0) }}</dd></div><div><dt>Verified</dt><dd>{{ payload.risk_summary.verified_count|default(0) }}</dd></div></dl>{% else %}<p class="muted">No risk profile recorded.</p>{% endif %}</section>
+</div>
+
+{% if kind=='domain' %}
+<section class="panel"><h2>Domain observations</h2><dl class="facts"><div><dt>Discovered subdomains</dt><dd>{{ (asset.discovered_subdomains or [])|join(', ') or 'None recorded' }}</dd></div><div><dt>Discovered email indicators</dt><dd>{{ (asset.discovered_emails or [])|join(', ') or 'None recorded' }}</dd></div></dl>
+  {% if payload.exposures %}<div class="stage-scroll"><table class="stage-table"><thead><tr><th scope="col">Source</th><th scope="col">Observation</th><th scope="col">Last seen</th></tr></thead><tbody>{% for item in payload.exposures %}<tr><td>{{ item.source_name or item.source }}</td><td>{{ item.result_summary }}</td><td>{{ item.last_seen }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="muted">No domain exposure observations recorded.</p>{% endif %}
+</section>
+<section class="panel"><h2>Identity correlations</h2>{% if payload.identity_correlations %}<div class="stage-scroll"><table class="stage-table"><thead><tr><th scope="col">Account</th><th scope="col">Email</th><th scope="col">Relationship</th><th scope="col">Confidence</th></tr></thead><tbody>{% for item in payload.identity_correlations %}<tr><td>{{ item.username or '—' }}</td><td>{{ item.email or '—' }}</td><td>{{ item.relation_type }}</td><td>{{ item.confidence }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="muted">No identity correlations recorded.</p>{% endif %}</section>
+{% endif %}
+
+{% if kind in ('organization','account') %}<section class="panel"><h2>Connected assets</h2>
+  {% if payload.domains %}<h3>Domains</h3><ul>{% for item in payload.domains %}<li><a href="/dashboard/domains/{{ item.id }}">{{ item.name }}</a></li>{% endfor %}</ul>{% endif %}
+  {% if payload.repositories %}<h3>Repositories</h3><ul>{% for item in payload.repositories %}<li><a href="/dashboard/repositories/{{ item.id }}">{{ item.full_name }}</a></li>{% endfor %}</ul>{% endif %}
+  {% if payload.accounts %}<h3>Accounts</h3><ul>{% for item in payload.accounts %}<li><a href="/dashboard/accounts/{{ item.id }}">{{ item.username }}</a></li>{% endfor %}</ul>{% endif %}
+  {% if not payload.domains and not payload.repositories and not payload.accounts %}<p class="muted">No connected assets recorded.</p>{% endif %}
+</section>{% endif %}
+
+<section class="panel"><div class="section-heading"><h2>Relationships</h2><a href="/dashboard/graph">Explore relationship map →</a></div>
+  {% if payload.relationships %}<div class="stage-scroll"><table class="stage-table"><thead><tr><th scope="col">From</th><th scope="col">Relation</th><th scope="col">To</th><th scope="col">Confidence</th><th scope="col">Evidence</th></tr></thead><tbody>{% for item in payload.relationships %}<tr><td>{{ item.from_entity_type }} #{{ item.from_entity_id }}</td><td>{{ item.relation_type }}</td><td>{{ item.to_entity_type }} #{{ item.to_entity_id }}</td><td>{{ item.confidence }}</td><td>{{ item.evidence_summary or '—' }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="muted">No relationships recorded.</p>{% endif %}
+</section>
+<section class="panel"><h2>High signal findings</h2>{% if payload.top_findings %}<div class="stage-scroll"><table class="stage-table"><thead><tr><th scope="col">Finding</th><th scope="col">Severity</th><th scope="col">Confidence</th><th scope="col">Status</th></tr></thead><tbody>{% for item in payload.top_findings %}<tr><th scope="row"><a href="/dashboard/findings/{{ item.id }}">{{ item.title }}</a></th><td>{{ item.severity }}</td><td>{{ item.confidence }}</td><td>{{ item.status }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="muted">No high signal findings in this view.</p>{% endif %}</section>
+{% endblock %}

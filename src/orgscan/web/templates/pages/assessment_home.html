@@ -13,6 +13,7 @@
 <thead>
 <tr>
 <th>Assessment</th>
+<th>Actions</th>
 <th>Status</th>
 <th>Targets</th>
 <th>Assets</th>
@@ -28,6 +29,7 @@
 <br>
 <small class="muted">{{ item.created_by }} · #{{ item.id }}</small>
 </td>
+<td><a href="/dashboard/assessments/{{ item.id }}/targets">Targets</a> · <a href="/dashboard/assessments/{{ item.id }}/scans">Repository scans</a></td>
 <td>
 <span class="state-chip" data-state="{{ item.status }}">{{ item.status }}</span>
 </td>

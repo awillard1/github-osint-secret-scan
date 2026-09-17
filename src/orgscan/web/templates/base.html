@@ -26,6 +26,7 @@
         <a href="/dashboard?high_signal_only=true" {% if active_section == 'findings' %}aria-current="page"{% endif %}>Findings</a>
         <a href="/dashboard/graph" {% if active_section == 'relationships' %}aria-current="page"{% endif %}>Relationships</a>
         <a href="/dashboard/queues/active-scans" {% if active_section == 'queues' %}aria-current="page"{% endif %}>Scan jobs</a>
+        <a href="/dashboard/settings/github">Connections &amp; tools</a>
       </nav>{% endif %}
       {% if auth %}
       <div class="identity">

@@ -16,9 +16,14 @@ Excluding an asset from scanning does not delete its relationships or findings.
 ## Operator workflow
 
 1. Open Assessments and create an assessment with a tenant, name and description.
-2. In Settings / GitHub Connections, configure each GitHub.com or GHES host.
-3. Paste target locations one per line, or import UTF-8 text/CSV. Review valid,
-   duplicate and invalid rows. Valid rows survive individual parse errors.
+2. In Targets, an admin can enable the tenant's public GitHub.com connection with
+   one click. GHES and credentialed/private connections remain configurable under
+   Settings / GitHub Connections. A disabled connection must be enabled there.
+3. Paste GitHub repository root URLs such as `https://github.com/owner/repo`, one
+   per line, or import UTF-8 text/CSV. Review added, duplicate and invalid rows.
+   Valid rows survive individual parse errors. New targets can be added while an
+   assessment is active; already scheduled jobs keep their original scope. Removing
+   targets or changing visibility still requires pausing the assessment.
 4. Choose a discovery profile and optional expansion/provider settings. Launch
    discovery and watch provider/stage status. Deployment administrators provision
    the existing enqueuer and DB/RQ workers; ordinary operation is through the UI.
@@ -26,7 +31,12 @@ Excluding an asset from scanning does not delete its relationships or findings.
    repository scope by search, visibility, archived/fork, confidence, update dates
    and scanned state. Include/exclude checked rows, a page or all filtered rows,
    or clear scan scope. Discovery data is retained.
-6. Review the selected repository/scanner counts and history mode, then confirm
+6. The Targets page links to Discovery, repository scope and Repository scans;
+   the assessment list links directly to Targets and Repository scans. Saved URLs
+   must be resolved by a discovery launch before they appear as scan assets.
+   The Scans page shows TruffleHog and other scanner readiness even when no
+   repositories are selected. Review the selected repository/scanner counts and
+   history mode, then confirm
    launch. Review creates no jobs. Both review and launch use ScanPlan. Monitor
    latest repository completion, queue states and severity counts; open job details.
    The Scans tab shows durable pending, queued, running and failed runs with safe

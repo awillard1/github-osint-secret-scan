@@ -40,6 +40,16 @@ shell, with selected scope, scanner readiness, profile review, saved scan-run st
 safe failure codes and browser publication/execution controls for the DB queue.
 The remaining assessment tabs use the same shell and semantic tables/forms.
 
+The Targets page now explains the GitHub repository workflow in place. An admin
+can create the tenant's public GitHub.com connection there; a disabled connection
+links to Settings for repair. Imports show per-line results and a direct next step
+to Discovery. Adding a target to an active assessment is allowed because existing
+jobs retain their saved scope. Repository scanners and readiness are visible on
+the Scans page before any repository is selected, with links back to Targets and
+Discovery. The assessment list and primary navigation expose those entry points.
+Target import results use fixed, safe reason labels for missing or disabled
+connections; raw parser diagnostics stay behind the existing sanitizer.
+
 Discovery Results now leads from scoped domain names to an optional HTTPX follow-up.
 An analyst authorizes active contact, then durable jobs run through the existing
 queue and recon pipeline. The UI shows queued/running/completed/failed status,
@@ -75,6 +85,11 @@ storage session; templates only render the resulting counts and queues.
 
 Cards show total queue counts, with a bounded preview. Each links to a paginated
 `/dashboard/queues/NAME` view and individual finding/job/asset details.
+Newly discovered asset links now open shared, autoescaped HTML detail pages for
+domains, organizations, repositories and accounts. These pages reuse the same
+authorized, redacted projections as the JSON asset endpoints and show identity,
+risk, relationships and high signal findings. Domain pages also show exposure
+observations and identity correlations. Missing or out-of-tenant IDs return 404.
 `/operator/overview?days=7&limit=10&offset=0` returns the same queues as JSON.
 The main page uses its existing days filter; standalone views default to seven days.
 Triage labels, artifact upload, filtering, graph and existing detail views remain.

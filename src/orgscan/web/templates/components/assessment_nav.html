@@ -1,6 +1,6 @@
 {% set root = '/dashboard/assessments/' ~ assessment.id %}
 <nav class="assessment-links" aria-label="Assessment workspace">
-  {% for slug,label in [('overview','Overview'),('targets','Targets'),('discovery','Discovery'),('recon-results','Results'),('repositories','Repository scope'),('accounts','Accounts'),('domains','Domains'),('relationships','Relationships'),('scans','Scans'),('findings','Findings'),('reports','Reports'),('ai','Local AI')] %}
+  {% for slug,label in [('overview','Overview'),('targets','Targets'),('discovery','Discovery'),('recon-results','Results'),('repositories','Repository scope'),('accounts','Accounts'),('domains','Domains'),('relationships','Relationships'),('scans','Repository scans'),('findings','Findings'),('reports','Reports'),('ai','Local AI')] %}
   <a href="{{ root }}/{{ slug }}" {% if current_tab==slug %}aria-current="page"{% endif %}>{{ label }}</a>
   {% endfor %}
 </nav>

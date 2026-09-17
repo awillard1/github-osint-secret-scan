@@ -26,9 +26,14 @@ def new(tenant):
     return render('pages/assessment_new.html',title='New assessment',active_section='assessments',tenant=tenant)
 
 
-def targets(assessment,payload,offset,result=None):
+def targets(assessment,payload,offset,result=None,*,connections=None):
+    github_connections=[row for row in (connections or {}).get('items',[])
+                        if row['web_base_url']=='https://github.com']
+    github_connected=any(row['enabled'] for row in github_connections)
     return render('pages/assessment_targets.html',title=assessment['name']+' — Targets',
-                  active_section='assessments',assessment=assessment,payload=payload,offset=offset,result=result)
+                  active_section='assessments',assessment=assessment,payload=payload,offset=offset,
+                  result=result,github_connected=github_connected,
+                  github_connection_exists=bool(github_connections))
 
 
 def discovery(assessment,jobs,providers,profiles,saved=()):

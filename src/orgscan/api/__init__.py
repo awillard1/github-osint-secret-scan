@@ -1160,6 +1160,39 @@ def create_app(database_url: str, settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Account not found")
         return payload
 
+    def dashboard_asset_page(kind: str, asset_id: int) -> HTMLResponse:
+        from orgscan.web.render import render
+
+        projections = {
+            "organization": service._organization_payload,
+            "repository": service._repository_payload,
+            "domain": service._domain_payload,
+            "account": service._account_payload,
+        }
+        payload = projections[kind](asset_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        asset = payload[kind]
+        name = asset.get("name") or asset.get("full_name") or asset.get("username") or f"{kind.title()} #{asset_id}"
+        return HTMLResponse(render("pages/asset_detail.html", title=str(name), active_section="relationships",
+                                   kind=kind, asset=asset, payload=payload))
+
+    @app.get("/dashboard/organizations/{asset_id}", response_class=HTMLResponse)
+    def dashboard_organization(asset_id: int) -> HTMLResponse:
+        return dashboard_asset_page("organization", asset_id)
+
+    @app.get("/dashboard/repositories/{asset_id}", response_class=HTMLResponse)
+    def dashboard_repository(asset_id: int) -> HTMLResponse:
+        return dashboard_asset_page("repository", asset_id)
+
+    @app.get("/dashboard/domains/{asset_id}", response_class=HTMLResponse)
+    def dashboard_domain(asset_id: int) -> HTMLResponse:
+        return dashboard_asset_page("domain", asset_id)
+
+    @app.get("/dashboard/accounts/{asset_id}", response_class=HTMLResponse)
+    def dashboard_account(asset_id: int) -> HTMLResponse:
+        return dashboard_asset_page("account", asset_id)
+
     @app.get("/risk-summary")
     def risk_summary(
         entity_type: str | None = Query(None, pattern="^(organization|domain|repository|account)$|^$"),

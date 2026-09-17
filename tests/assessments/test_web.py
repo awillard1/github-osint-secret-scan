@@ -37,6 +37,63 @@ def test_wizard_pages_reports_and_permissions(service,client):
     assert client.post('/assessments',json={'tenant':'b','name':'Forbidden'}).status_code==403
 
 
+def test_pasted_github_repositories_can_be_saved_and_reach_scanners(service,client,monkeypatch):
+    from orgscan.queueing import enqueue_due_scheduled_scans,run_worker
+    from orgscan.services.assessments.github import ConnectionClient
+    from orgscan.services.assessments.jobs import AssessmentJobs
+    from tests.assessments.test_recon import repo
+
+    identity=service.create('a','Repository import')['id']
+    root=f'/dashboard/assessments/{identity}'
+    foreign=service.create('b','Other tenant')['id']
+    assert client.post(f'/dashboard/assessments/{foreign}/targets/github-connection').status_code==403
+    page=client.get(root+'/targets')
+    assert 'GitHub.com connection required' in page.text
+    assert 'Enable public GitHub.com targets' in page.text
+    unavailable=client.post(root+'/targets',data={'text':'https://github.com/org/repo'})
+    assert unavailable.status_code==200 and '1 invalid' in unavailable.text
+    assert 'Enable a GitHub connection for this host' in unavailable.text
+    assert service.targets(identity)['total']==0
+    client.headers['X-Orgscan-Token']='analyst-token'
+    assert client.post(root+'/targets/github-connection').status_code==403
+    client.headers['X-Orgscan-Token']='admin-token'
+    enabled=client.post(root+'/targets/github-connection',follow_redirects=False)
+    assert enabled.status_code==303
+    connection=service.connections('a')['items'][0]
+    assert connection['credential_env'] is None and connection['allow_private'] is False
+    assert 'GitHub.com connection required' not in client.get(root+'/targets').text
+
+    saved=client.post(root+'/targets',data={'text':'https://github.com/org/repo\nhttps://github.com/org/second'})
+    assert saved.status_code==200
+    assert '2 added' in saved.text and 'Resolve saved targets with discovery' in saved.text
+    assert service.targets(identity)['total']==2
+    assert {row['target_type'] for row in service.targets(identity)['items']}=={'github-repository'}
+    empty_scans=client.get(root+'/scans')
+    assert 'TruffleHog' in empty_scans.text or 'trufflehog' in empty_scans.text
+    assert 'Save repository URLs' in empty_scans.text
+
+    def request(self,path):
+        name=path.removeprefix('/repos/')
+        assert name in ('org/repo','org/second')
+        return {**repo(),'full_name':name,'html_url':'https://github.com/'+name}
+    monkeypatch.setattr(ConnectionClient,'_request_json',request)
+    jobs=AssessmentJobs(service.settings)
+    assert jobs.launch(identity,'discovery',options={'name':'quick-organization'})['scheduled']==2
+    assert len(enqueue_due_scheduled_scans(service.settings))==2
+    assert run_worker(service.settings,burst=True,max_jobs=2)
+    assert AssessmentWorkbench(service.settings).assets(identity,'repository')['total']==2
+    assert 'Review scan launch' in client.get(root+'/scans').text
+
+    # Saving another URL after discovery requires no pause and does not alter
+    # the already completed discovery jobs.
+    later=client.post(root+'/targets',data={'text':'https://github.com/org/third'})
+    assert later.status_code==200 and '1 added' in later.text
+    assert service.targets(identity)['total']==3
+    assert jobs.progress(identity,kind='discovery')['states']=={'completed':2}
+    client.headers['X-Orgscan-Token']='reader-token'
+    assert client.post(root+'/targets',data={'text':'https://github.com/org/forbidden'}).status_code==403
+
+
 def test_workbench_empty_and_invalid_filters(service):
     a=service.create('a','Empty');work=AssessmentWorkbench(service.settings)
     assert work.findings(a['id'])['items']==[]
