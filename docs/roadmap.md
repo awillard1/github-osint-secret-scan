@@ -440,6 +440,22 @@ The live dashboard, operator overview cards, queue drill-down, assessment index 
 now use autoescaped Jinja templates and a shared responsive light/dark visual system.
 Finding detail has a protected decision form that returns to the same record; the
 existing service still owns lifecycle policy. Browser static assets are packaged
-with the application. Legacy assessment tabs, scan-job detail, graph, settings,
+with the application. Legacy assessment tabs, scan-job detail, settings,
 login and standalone HTML reporting still use escaped Python HTML and need a later
 incremental migration. No schema, scanner, CLI or report-format change is involved.
+
+The assessment overview and Discovery page now include a service-backed activity
+projection and server-rendered live fragment. Durable schedule publication, worker
+claim, stage progress, stale-update warning and partial failure are distinct
+operator states; the browser polls only while activity is nonterminal and visible.
+Worker heartbeat is inferred from persisted updates, so a long-running stage can
+appear stale without proving the worker stopped. Other legacy assessment tabs and
+detailed worker liveness instrumentation remain follow-up work.
+
+Assessment discovery launch now publishes the selected assessment's jobs immediately
+where queue health permits, with browser retry for pending publication. Database
+queue deployments can execute a bounded assessment-specific batch from the browser;
+Redis/RQ deployments still require a supervised worker. Both Relationships views
+now use the shared console shell with source and confidence visible. Provider
+selection has ready-tool shortcuts. Long-running web background batches remain
+vulnerable to web process restarts; supervised workers remain recommended.

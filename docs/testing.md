@@ -275,6 +275,12 @@ mock transports. `tests/live/test_ollama.py` requires the explicit environment o
 documented in local-ai.md; no normal test requires Windows or a live Ollama model.
 Migration-head assertions advance to 0014; historical repair assertions are retained.
 
+`tests/assessments/test_activity.py` covers durable discovery state projection,
+stage warning/failure/blocked/stale classifications, safe diagnostic omission,
+read-only polling authorization and tenant isolation, terminal fragment markup,
+and the browser review-to-launch flow. The focused command is
+`pytest tests/assessments tests/recon/test_recon_web.py tests/recon/test_completion.py`.
+
 
 ## Assessment continuation validation (2026-09-15)
 

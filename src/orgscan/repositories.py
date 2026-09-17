@@ -779,10 +779,10 @@ class Storage:
         worker_id: str,
         lease_until: datetime,
         now: datetime | None = None,
+        schedule_ids: set[int] | None = None,
     ) -> QueueTask | None:
         current = now or datetime.now(UTC)
-        candidates = list(
-            self.session.scalars(
+        query = (
                 select(QueueTask)
                 .where(
                     QueueTask.backend == backend,
@@ -791,8 +791,10 @@ class Storage:
                     QueueTask.available_at <= current,
                 )
                 .order_by(QueueTask.available_at.asc(), QueueTask.id.asc())
-            )
         )
+        if schedule_ids is not None:
+            query = query.where(QueueTask.scheduled_scan_id.in_(schedule_ids))
+        candidates = list(self.session.scalars(query))
         for task in candidates:
             # Compare-and-set claim prevents two workers claiming the same queued row.
             claimed = self.session.execute(update(QueueTask).where(

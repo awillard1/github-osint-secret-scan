@@ -1249,7 +1249,8 @@ def create_app(database_url: str, settings: Settings | None = None) -> FastAPI:
 
     @app.get("/dashboard/graph", response_class=HTMLResponse)
     def dashboard_graph(limit: int = Query(200, ge=1, le=1000)) -> HTMLResponse:
-        return HTMLResponse(render_graph_html(service._relationship_graph_payload(limit=limit)))
+        from orgscan.web.relationships import page as relationship_page
+        return HTMLResponse(relationship_page(service._relationship_graph_payload(limit=limit)))
 
     @app.post("/dashboard/artifact-scans", response_class=HTMLResponse)
     async def dashboard_artifact_scans(

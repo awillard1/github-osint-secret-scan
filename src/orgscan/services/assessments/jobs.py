@@ -1,6 +1,7 @@
 """Assessment jobs use existing ScheduledScan/QueueTask claims, replay and workers."""
 from datetime import UTC,datetime
-from sqlalchemy import select,func,case
+from uuid import uuid4
+from sqlalchemy import select,func,case,or_,and_
 from orgscan import models as m
 from orgscan.repositories import Storage
 from orgscan.storage.assessments import AssessmentStorage,fields
@@ -14,6 +15,49 @@ from orgscan.security_context import current_auth,AuthContext
 
 
 class AssessmentJobs(AssessmentService):
+    def publish(self, identity, *, kind='discovery', limit=500):
+        """Publish this assessment's due jobs without touching other tenants' schedules."""
+        if kind not in ('discovery', 'scan', 'ai'):
+            raise ValueError('Unsupported assessment job kind')
+        with self.factory() as session:
+            AssessmentStorage(session).assessment(identity, 'analyst')
+            query = (select(m.AssessmentRun.scheduled_scan_id)
+                .join(m.ScheduledScan, m.ScheduledScan.id == m.AssessmentRun.scheduled_scan_id)
+                .where(m.AssessmentRun.assessment_id == identity, m.AssessmentRun.kind == kind,
+                       m.ScheduledScan.enabled.is_(True), m.ScheduledScan.next_run_at <= datetime.now(UTC)))
+            if self.settings.scan_queue_backend == 'rq':
+                query = query.outerjoin(m.QueueTask, m.QueueTask.scheduled_scan_id == m.ScheduledScan.id).where(
+                    or_(m.ScheduledScan.queue_execution_key.is_(None),
+                        and_(m.QueueTask.backend == 'rq', m.QueueTask.status == 'queued',
+                             m.QueueTask.metadata_json['published'].as_boolean().is_not(True))))
+            else:
+                query = query.where(m.ScheduledScan.queue_execution_key.is_(None))
+            ids = list(session.scalars(query.distinct().order_by(m.AssessmentRun.scheduled_scan_id).limit(limit)))
+        if not ids:
+            return {'published': 0, 'state': 'nothing-due'}
+        from orgscan.queueing import enqueue_due_scheduled_scans, QueueBackendError
+        try:
+            queued = enqueue_due_scheduled_scans(self.settings, limit=len(ids), schedule_ids=set(ids))
+        except QueueBackendError:
+            return {'published': 0, 'state': 'pending-enqueue',
+                    'message': 'Queue backend is unavailable. Jobs remain durable; retry publication after service recovery.'}
+        return {'published': len(queued), 'state': 'queued' if len(queued) == len(ids) else 'pending-enqueue'}
+
+    def launch_and_publish(self, identity, kind, *, options=None):
+        launched = self.launch(identity, kind, options=options)
+        return {**launched, **self.publish(identity, kind=kind)}
+
+    def queued_schedule_ids(self, identity, *, kind='discovery', limit=500):
+        if self.settings.scan_queue_backend != 'db':
+            raise ValueError('Browser execution requires the database queue backend')
+        with self.factory() as session:
+            AssessmentStorage(session).assessment(identity, 'analyst')
+            return set(session.scalars(select(m.AssessmentRun.scheduled_scan_id)
+                .join(m.QueueTask, m.QueueTask.scheduled_scan_id == m.AssessmentRun.scheduled_scan_id)
+                .where(m.AssessmentRun.assessment_id == identity, m.AssessmentRun.kind == kind,
+                       m.QueueTask.backend == 'db', m.QueueTask.status == 'queued')
+                .order_by(m.AssessmentRun.id).limit(limit)))
+
     def launch(self,identity,kind,*,options=None):
         if kind not in ('discovery','scan','ai'):raise ValueError('Unsupported assessment job kind')
         options=options or {}
@@ -40,7 +84,7 @@ class AssessmentJobs(AssessmentService):
                 if not AIService(self.settings).configuration(a.tenant_key)['enabled']:
                     raise ValueError('Local AI is disabled; enable it in Settings first')
                 statement=select(m.Assessment).where(m.Assessment.id==identity)
-            created=[];readiness={}
+            created=[];readiness={};launch_id=uuid4().hex
             # Stream in bounded chunks; output is IDs/counts, not an unbounded DTO.
             for row in s.scalars(statement.execution_options(yield_per=100)):
                 metadata={'assessment_id':identity,'assessment_action':kind,'organization_id':a.organization_id,'tenant_key':a.tenant_key}
@@ -55,7 +99,7 @@ class AssessmentJobs(AssessmentService):
                 else:metadata['ai_options']=options
                 schedule=Storage(s).create_scheduled_scan('assessment',str(identity),kind,datetime.now(UTC),cadence='manual',metadata_json=metadata)
                 s.add(m.AssessmentRun(assessment_id=identity,target_id=row.id if kind=='discovery' else None,
-                    scheduled_scan_id=schedule.id,kind=kind,metadata_json={'repository_id':row.entity_id} if kind=='scan' else {}))
+                    scheduled_scan_id=schedule.id,kind=kind,metadata_json={'repository_id':row.entity_id} if kind=='scan' else {'launch_id':launch_id} if kind=='discovery' else {}))
                 created.append(schedule.id)
                 if len(created)>100000:raise ValueError('Assessment launch exceeds job transaction budget')
             if not created:raise ValueError('No eligible targets or selected repositories to launch')
@@ -152,7 +196,7 @@ class AssessmentJobs(AssessmentService):
             metadata={k:v for k,v in old.metadata_json.items() if k in ('assessment_id','assessment_action','assessment_target_id','scan_plan','clone_url','connection_id','organization_id','tenant_key','ai_options','discovery_options')}
             schedule=Storage(s).create_scheduled_scan('assessment',str(identity),run.kind,datetime.now(UTC),cadence='manual',metadata_json=metadata)
             s.add(m.AssessmentRun(assessment_id=identity,target_id=run.target_id,scheduled_scan_id=schedule.id,kind=run.kind,metadata_json=run.metadata_json))
-            a.status='active';s.commit();return {'scheduled_scan_id':schedule.id}
+            a.status='active';s.commit();return {'scheduled_scan_id':schedule.id,'kind':run.kind}
 
 
 def record_scan_results(storage,assessment,results):

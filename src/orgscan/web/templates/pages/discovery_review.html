@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">Assessment / Discovery / Review</p><h1>Confirm discovery launch</h1><p class="muted">{{ assessment.name }} · {{ assessment.status|title }}</p></div><a href="/dashboard/assessments/{{ assessment.id }}/discovery#configuration">Edit configuration</a></div>
+<nav class="assessment-steps" aria-label="Assessment steps"><a href="/dashboard/assessments/{{ assessment.id }}/targets">1 · Targets</a><a href="/dashboard/assessments/{{ assessment.id }}/discovery#configuration">2 · Profile</a><a aria-current="step" href="#review">3 · Confirm</a><a href="/dashboard/assessments/{{ assessment.id }}/discovery">4 · Progress</a></nav>
+<section class="panel review-panel" id="review"><p class="eyebrow">Launch scope</p><h2>{{ review.targets }} valid targets</h2><p>{{ review.http_endpoints }} previously observed HTTP services. Counts can change as earlier stages finish.</p>
+  <h3>Selected providers</h3><div class="review-providers">{% for provider in review.options.providers %}<span class="activity-state">{{ provider }}</span>{% else %}<span class="muted">Profile defaults</span>{% endfor %}</div>
+  <h3>Active interaction</h3>{% if review.active_tools %}<p>These tools interact with scoped targets: {{ review.active_tools|join(', ') }}. Nuclei uses configured local templates. Third-party references do not authorize new targets.</p>{% else %}<p>Passive providers only.</p>{% endif %}
+  <div class="review-sequence"><div><strong>Confirm</strong><small>Create {{ review.targets }} durable schedules.</small></div><div><strong>Publish</strong><small>The browser attempts publication immediately; pending jobs can be republished here.</small></div><div><strong>Execute</strong><small>Use the browser action for database queues, or the deployment worker for Redis queues.</small></div></div>
+  <form method="post" action="/dashboard/assessments/{{ assessment.id }}/launch/discovery">
+    {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+    {% for key, value in review.options.items() %}
+      {% set form_key = 'profile' if key == 'name' else key %}
+      {% if value is sameas true or value is sameas false %}<input type="hidden" name="{{ form_key }}" value="{{ 'true' if value else 'false' }}">
+      {% elif value is sequence and value is not string %}{% for item in value %}<input type="hidden" name="{{ form_key }}" value="{{ item }}">{% endfor %}
+      {% elif value is not none %}<input type="hidden" name="{{ form_key }}" value="{{ value }}">{% endif %}
+    {% endfor %}
+    <input type="hidden" name="action" value="confirmed"><button class="button" type="submit">Confirm and create discovery jobs</button>
+  </form>
+</section>
+{% endblock %}

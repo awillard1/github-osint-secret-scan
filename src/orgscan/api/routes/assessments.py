@@ -8,6 +8,7 @@ from pydantic import BaseModel,Field,ConfigDict
 from orgscan.security_context import current_auth,LOCAL_CONTEXT
 from orgscan.services.assessments.service import AssessmentService
 from orgscan.services.assessments.jobs import AssessmentJobs
+from orgscan.services.assessments.activity import DiscoveryActivity
 from orgscan.services.assessments.workbench import AssessmentWorkbench
 from orgscan.services.assessments.recon import PROFILES
 from orgscan.services.scan_plan import PROFILES as SCAN_PROFILES
@@ -84,7 +85,7 @@ def call(function,*args,**kwargs):
 
 def create_assessment_router(settings):
     from orgscan.web.assessment_errors import AssessmentRoute
-    router=APIRouter(route_class=AssessmentRoute);service=AssessmentService(settings);jobs=AssessmentJobs(settings);work=AssessmentWorkbench(settings)
+    router=APIRouter(route_class=AssessmentRoute);service=AssessmentService(settings);jobs=AssessmentJobs(settings);activity=DiscoveryActivity(settings);work=AssessmentWorkbench(settings)
 
     from orgscan.services.recon_tools import ReconToolsService
     from orgscan.recon.installer import ToolInstaller, require_tool_admin
@@ -247,11 +248,31 @@ def create_assessment_router(settings):
     @router.get('/assessments/{identity}/jobs')
     def progress(identity:int,limit:int=50,offset:int=0):return call(jobs.progress,identity,limit=limit,offset=offset)
 
+    @router.get('/assessments/{identity}/discovery/activity')
+    def discovery_activity(identity:int):return call(activity.view,identity)
+
+    @router.get('/dashboard/assessments/{identity}/discovery/activity',response_class=HTMLResponse)
+    def discovery_activity_fragment(identity:int):return HTMLResponse(ui.discovery_fragment(call(activity.view,identity)),headers={'Cache-Control':'no-store'})
+
     @router.post('/assessments/{identity}/pause')
     def pause(identity:int):return call(jobs.pause,identity)
 
     @router.post('/assessments/{identity}/runs/{run_id}/retry')
     def retry(identity:int,run_id:int):return call(jobs.retry,identity,run_id)
+
+    @router.post('/dashboard/assessments/{identity}/discovery/publish')
+    def publish_discovery(identity:int):
+        call(jobs.publish,identity)
+        return RedirectResponse(f'/dashboard/assessments/{identity}/discovery',303)
+
+    @router.post('/dashboard/assessments/{identity}/discovery/execute')
+    def execute_discovery(identity:int,background:BackgroundTasks):
+        call(jobs.publish,identity)
+        ids=call(jobs.queued_schedule_ids,identity)
+        if ids:
+            from orgscan.queueing import run_db_schedule_batch
+            background.add_task(run_db_schedule_batch,settings,ids)
+        return RedirectResponse(f'/dashboard/assessments/{identity}/discovery',303)
 
     @router.get('/assessments/{identity}/findings')
     def findings(identity:int,limit:int=50,offset:int=0,severity:str|None=None,confidence:str|None=None,status:str|None=None,source_tool:str|None=None,category:str|None=None,repository_id:int|None=None,lifecycle_state:str|None=None):
@@ -334,7 +355,7 @@ def create_assessment_router(settings):
         archived,fork,scanned=map(optional_bool,(archived,fork,scanned))
         assessment=call(service.detail,identity)
         if tab=='targets':return ui.targets(assessment,call(service.targets,identity,offset=offset),offset)
-        if tab=='discovery':return ui.discovery(assessment,call(jobs.progress,identity,offset=offset),provider_readiness(settings),PROFILES,call(service.profiles,assessment['tenant_key'])['saved'])
+        if tab=='discovery':return ui.discovery(assessment,call(activity.view,identity),provider_readiness(settings),PROFILES,call(service.profiles,assessment['tenant_key'])['saved'])
         if tab=='scans':return ui.scans(assessment,call(jobs.progress,identity,offset=offset),scanner_inventory(settings),SCAN_PROFILES)
         if tab in ('repositories','accounts','domains'):
             kind={'repositories':'repository','accounts':'account','domains':'domain'}[tab]
@@ -351,12 +372,7 @@ def create_assessment_router(settings):
         if tab=='reports':
             return ui.page(assessment['name']+' — Reports',''.join(f'<p><a href="/assessments/{identity}/reports/{fmt}">Export {fmt.upper()}</a> · <a href="/assessments/{identity}/reports/{fmt}?include_ai_summary=true">Include available AI Suggested summary</a></p>' for fmt in ('json','csv','html','pdf','sarif')),assessment=assessment)
         if tab=='overview':
-            body='<p>'+ui.esc(assessment['description'])+'</p><p>Status: '+ui.esc(assessment['status'])+'</p>'+ui.table([assessment['counts']],list(assessment['counts']))
-            body+=ui.edit_assessment(assessment)
-            body+=ui.job_table(f'/dashboard/assessments/{identity}',call(jobs.progress,identity))
-            body+=f'<p><a href="/dashboard/assessments/{identity}/ai">Local AI advice</a></p>'
-            body+=ui.form(f'/dashboard/assessments/{identity}/launch/ai','<input type="hidden" name="purpose" value="summary">','Generate AI Summary')
-            return ui.page(assessment['name'],body,assessment=assessment)
+            return ui.overview(assessment,call(activity.view,identity))
         raise HTTPException(404,'Unknown assessment page')
 
     @router.post('/dashboard/assessments/{identity}/targets',response_class=HTMLResponse)
@@ -395,7 +411,7 @@ def create_assessment_router(settings):
             options={'name':data.get('profile','quick-organization')}
             if data.get('saved_profile'):options={'saved_profile':data['saved_profile']}
             if data.getlist('providers'):options['providers']=data.getlist('providers')
-            options.update({key:True for key in ('expand','members','contributor_repositories','include_private','public_search','active_authorized','run_available_only') if data.get(key)=='true'})
+            options.update({key:data.get(key)=='true' for key in ('expand','members','contributor_repositories','include_private','public_search','active_authorized','run_available_only') if data.get(key) in ('true','false')})
         elif kind=='scan':
             options={'profile':data.get('profile','standard'),'scanners':data.getlist('scanners') or None,
                      'refs':[v.strip() for v in str(data.get('refs','')).split(',') if v.strip()],
@@ -419,11 +435,10 @@ def create_assessment_router(settings):
             return RedirectResponse(f'/dashboard/assessments/{identity}/discovery',303)
         if kind=='discovery' and data.get('action')!='confirmed':
             review=call(jobs.discovery_review,identity,options=options)
-            if review['active_tools']:
-                return HTMLResponse(ui.discovery_review(call(service.detail,identity),review))
+            return HTMLResponse(ui.discovery_review(call(service.detail,identity),review))
         if kind=='scan' and data.get('action')!='confirmed':
             return HTMLResponse(ui.scan_review(call(service.detail,identity),call(jobs.preview,identity,options=options)))
-        call(jobs.launch,identity,kind,options=options)
+        call(jobs.launch_and_publish,identity,kind,options=options)
         return RedirectResponse(f'/dashboard/assessments/{identity}/'+('discovery' if kind=='discovery' else 'ai' if kind=='ai' else 'scans'),303)
 
     @router.post('/dashboard/assessments/{identity}/pause')
@@ -436,5 +451,6 @@ def create_assessment_router(settings):
 
     @router.post('/dashboard/assessments/{identity}/runs/{run_id}/retry')
     def retry_post(identity:int,run_id:int):
-        call(jobs.retry,identity,run_id);return RedirectResponse(f'/dashboard/assessments/{identity}/scans',303)
+        result=call(jobs.retry,identity,run_id)
+        return RedirectResponse(f'/dashboard/assessments/{identity}/'+('discovery' if result['kind']=='discovery' else 'scans'),303)
     return router

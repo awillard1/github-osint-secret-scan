@@ -33,6 +33,97 @@ Excluding an asset from scanning does not delete its relationships or findings.
    explicitly reveal if authorized, and record analyst triage.
 8. Export JSON, CSV, HTML, PDF or SARIF, or generate optional local AI advice.
 
+### Discovery activity and local operation
+
+The Discovery page now leads with the latest durable launch. It distinguishes
+**Pending enqueue** (schedules committed, no QueueTask), **Queued** (published),
+**Running** (claimed), **Stale** (no persisted update for five minutes), and
+terminal completion/failure/paused states. Stale is a warning about missing
+persisted progress, not proof that a worker stopped. Stage rows show selected
+providers before execution and persisted stage counts/times once a worker begins.
+The overview links directly to activity, results, repository scope and scan launch.
+Queue backend reachability is checked without displaying connection diagnostics;
+it does not certify worker liveness. Page budgets and blocked downstream stages
+remain partial failures. Raw tool output and exception text are never used in this
+activity projection.
+Stage outputs are the sum of recorded stage result counts and can overlap across
+providers; linked assets are canonical assessment entities. They are not a claim
+that every output created a unique asset.
+
+The following are deployment commands for an administrator. Browser operators do
+not need a shell. For a supervised worker deployment, use the same configured
+environment and database in separate terminals:
+
+```sh
+orgscan serve-api --host 127.0.0.1 --port 8000
+```
+
+```sh
+while true; do orgscan enqueue-scheduled --limit 100; sleep 5; done
+```
+
+```sh
+orgscan run-worker
+```
+
+For a browser-driven local deployment without a separate queue service, the
+administrator starts only the web server with the database backend:
+
+```sh
+ORGSCAN_SCAN_QUEUE_BACKEND=db orgscan serve-api --host 127.0.0.1 --port 8000
+```
+
+Analysts then use only the browser. Keep database and queue backend configuration
+consistent across any web and worker processes.
+
+Open `http://127.0.0.1:8000/dashboard/assessments`, add valid targets, choose a
+profile and ready providers under **Discovery**, review scope/readiness, then select
+**Confirm and create discovery jobs**. The browser immediately attempts publication
+for that assessment and returns to live progress. If publication fails, use
+**Publish pending jobs** after the queue recovers. With
+`ORGSCAN_SCAN_QUEUE_BACKEND=db`, **Publish and execute jobs** or **Execute queued
+jobs** runs a bounded batch of that assessment's queued work from the web
+application. The operator needs no
+server shell. A web process restart can interrupt a running batch, so sustained
+deployments should run a separately supervised worker. With Redis/RQ, a deployment
+worker must be running; the browser publishes work but cannot start a remote worker.
+
+For a local one-shot queue check and status inspection:
+
+```sh
+orgscan enqueue-scheduled --limit 100 --json
+orgscan queue-status
+orgscan jobs --json
+```
+
+An authorized API client can launch and inspect the same operation after creating
+an assessment and valid targets in the UI (replace the token and ID with local
+values):
+
+```sh
+export ORGSCAN_API_TOKEN='your-local-api-token'
+export ORGSCAN_ASSESSMENT_ID=123
+curl -fsS -X POST "http://127.0.0.1:8000/assessments/${ORGSCAN_ASSESSMENT_ID}/launch/discovery" \
+  -H "X-Orgscan-Token: ${ORGSCAN_API_TOKEN}" -H 'Content-Type: application/json' \
+  --data '{"options":{"name":"domain-only"}}'
+curl -fsS "http://127.0.0.1:8000/assessments/${ORGSCAN_ASSESSMENT_ID}/discovery/activity" \
+  -H "X-Orgscan-Token: ${ORGSCAN_API_TOKEN}"
+```
+
+The tenant-scoped status endpoint is `GET /assessments/{id}/discovery/activity`;
+the browser polls an authenticated HTML fragment for active operations, pauses while
+hidden, and stops after a terminal state. For a failed target, use its **Retry
+target** action after fixing the configuration or transient condition. For an
+expired DB lease, first verify the worker has stopped, then inspect and quarantine:
+
+```sh
+orgscan recover-stale-jobs
+orgscan recover-stale-jobs --apply
+```
+
+Resume a paused assessment in the browser before retrying. Redis/RQ cleanup and
+abrupt process loss retain the recovery limits in [job reliability](job-reliability.md).
+
 Saving an assessment does not start network activity. Classification is offline.
 An ambiguous GitHub owner URL is resolved as organization/user during discovery.
 Supported typed prefixes are `org:`, `user:`, `repo:`, `domain:` and `path:`.

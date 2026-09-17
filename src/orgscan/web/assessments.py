@@ -76,26 +76,19 @@ def targets(assessment,payload,offset,result=None):
 
 
 def discovery(assessment,jobs,providers,profiles,saved=()):
-    root=f'/dashboard/assessments/{assessment["id"]}'
-    body='<p>Step 3/4: configure discovery, review saved targets, then launch. Jobs run in the configured background processing service.</p>'
-    from orgscan.web.recon import STYLE,badge
-    body=STYLE+body+'<p>Passive profiles use public data sources. Standard adds DNS resolution and HTTP probing. Comprehensive allows explicit crawler, port and template selection. Active components require authorization below.</p><p><a href="/dashboard/settings/recon-tools">Manage and install recon tools</a> · <a href="'+root+'/recon-results">View discovery results</a></p>'
-    body+=form(root+'/launch/discovery','<label>Saved profile<select name="saved_profile"><option value="">Use options below</option>'+''.join('<option>'+esc(row['name'])+'</option>' for row in saved)+'</select></label><select name="profile">'+''.join(f'<option value="{esc(p)}">{esc(p.replace("-"," " ).title())}</option>' for p in profiles)+'</select>'+
-        '<div class="recon-grid">'+''.join('<div class="recon-choice"><label><input type="checkbox" name="providers" value="'+esc(r['name'])+'"> '+esc(r.get('display_name',r['name']))+'</label>'+badge(r.get('mode','Passive'),'recon-passive' if r.get('mode','Passive')=='Passive' else 'recon-active')+' '+badge('Ready' if r['status']=='ok' else 'Needs attention','recon-ready' if r['status']=='ok' else 'recon-missing')+'</div>' for r in providers if r['name'] not in ('all','all-enriched','github-search','projectdiscovery'))+'</div>'+
-        '<label><input type="checkbox" name="active_authorized" value="true">I authorize active interaction with scoped assessment domains and their subdomains</label><label><input type="checkbox" name="run_available_only" value="true">Run available tools only; record unavailable selections</label>'+
-        '<label><input type="checkbox" name="expand" value="true">Contributors, forks, commit identities</label>'+
-        '<label><input type="checkbox" name="members" value="true">Visible organization members</label>'+
-        '<label><input type="checkbox" name="contributor_repositories" value="true">Contributor-owned public repositories</label>'+
-        '<label><input type="checkbox" name="public_search" value="true">Public GitHub search intelligence</label>'+
-        '<label><input type="checkbox" name="include_private" value="true">Include private/internal repositories (connection must permit)</label>'+input_field('profile_name','Save these options as')+'<button name="action" value="save_profile">Save recon profile</button><button name="action" value="install_missing">Install Missing</button>','Start discovery')
-    unavailable=assessment.get('discovery_profile',{}).get('unavailable_providers',[])
-    if unavailable:body+='<div class="recon-notice">Unavailable tools explicitly excluded: '+esc(', '.join(unavailable))+'</div>'
-    selected=set(assessment.get('discovery_profile',{}).get('providers',[]))
-    latest={}
-    for run in reversed(jobs['items']):latest.update(run.get('stages',{}))
-    body+=table([{'Provider':r['name'],'Mode':r.get('mode','Passive'),'Ready':r['status']=='ok','Selected':r['name'] in selected,'Status':latest.get(r['name'],{}).get('status','Not run'),'Result Count':latest.get(r['name'],{}).get('result_count','')} for r in providers if r['name'] not in ('all','all-enriched','github-search')],['Provider','Mode','Ready','Selected','Status','Result Count'])
-    body+=job_table(root,jobs)
-    return page(assessment['name']+' — Discovery',body,assessment=assessment)
+    return render('pages/assessment_discovery.html', title=assessment['name']+' — Discovery',
+                  active_section='assessments', assessment=assessment, activity=jobs,
+                  providers=[r for r in providers if r['name'] not in ('all','all-enriched','github-search','projectdiscovery')],
+                  profiles=profiles, saved=saved)
+
+
+def discovery_fragment(activity):
+    return render('components/discovery_activity.html', activity=activity)
+
+
+def overview(assessment,activity):
+    return render('pages/assessment_overview.html', title=assessment['name'], active_section='assessments',
+                  assessment=assessment, activity=activity)
 
 
 def job_table(root,jobs):
@@ -172,17 +165,8 @@ def findings(assessment,payload,filters=None):
 
 
 def graph(assessment,payload,filters=None):
-    filters={k:v for k,v in (filters or {}).items() if v is not None}
-    root=f'/dashboard/assessments/{assessment["id"]}/relationships'
-    body='<form method="get">'+''.join(input_field(k,k,filters.get(k,'')) for k in ('entity_type','entity_id','relation_type','confidence'))+'<button>Filter relationships</button></form>'
-    body+=table(payload['edges'],['from','relation_type','to','confidence','source','provenance','first_seen','last_seen'])
-    body+='<h2>Explore connected assets</h2>'
-    for node in payload['nodes']:
-        body+='<p><a href="'+esc(root+'?'+urlencode({'entity_type':node['entity_type'],'entity_id':node['entity_id']}))+'">'+esc(node['label'])+'</a> ('+esc(node['entity_type'])+')</p>'
-        if node['entity_type']=='repository':body+=f'<a href="/dashboard/assessments/{assessment["id"]}/findings?repository_id={node["entity_id"]}">Repository findings</a>'
-    body+=paging(root+'?'+urlencode(filters),payload['total'],payload['offset'],payload['limit'])
-    body+=form(f'/dashboard/assessments/{assessment["id"]}/launch/ai','<input type="hidden" name="purpose" value="correlations">','Explain relationships with Local AI')
-    return page(assessment['name']+' — Relationships',body,assessment=assessment)
+    from orgscan.web.relationships import page as relationship_page
+    return relationship_page(payload,assessment=assessment,filters=filters)
 
 
 def connections(payload,tenant):
@@ -251,15 +235,5 @@ def scan_review(assessment,preview):
 
 
 def discovery_review(assessment,review):
-    from orgscan.web.recon import STYLE,badge
-    options=review['options'];hidden=''
-    for key,value in options.items():
-        if key=='name':key='profile'
-        if isinstance(value,bool):value='true' if value else 'false'
-        for item in value if isinstance(value,list) else [value]:
-            hidden+='<input type="hidden" name="'+esc(key)+'" value="'+esc(str(item))+'">'
-    body=STYLE+'<h2>Review active validation</h2><p>Targets: '+str(review['targets'])+' · Previously observed HTTP services: '+str(review['http_endpoints'])+'</p><p>Counts can change as upstream stages finish. Tools run only against scoped, validated inputs.</p>'
-    body+='<h3>Active tools</h3>'+''.join(badge(tool,'recon-active') for tool in review['active_tools'])
-    body+='<p>Crawling, port discovery and template checks interact with targets. Nuclei uses only configured local templates. Third-party references are not authorized targets.</p>'
-    body+=form('/dashboard/assessments/'+str(assessment['id'])+'/launch/discovery',hidden+'<input type="hidden" name="action" value="confirmed">','Start Active Validation')
-    return page('Review active validation',body,assessment=assessment)
+    return render('pages/discovery_review.html', title='Review discovery launch', active_section='assessments',
+                  assessment=assessment, review=review)

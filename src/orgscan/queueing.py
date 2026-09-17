@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import time
 import uuid
+from threading import Lock
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, update, or_
-from orgscan.models import QueueTask
+from orgscan.models import QueueTask, ScheduledScan
 
 from redis import Redis
 from redis.exceptions import RedisError
@@ -22,6 +23,9 @@ from orgscan.services.job_policy import (classify_failure, retry_delay, retry_li
 
 class QueueBackendError(RuntimeError):
     pass
+
+
+_WEB_DB_WORKER_LOCK = Lock()
 
 
 class SafeWorker(SimpleWorker):
@@ -96,19 +100,21 @@ def enqueue_due_scheduled_scans(
     limit: int = 10,
     connection: Redis | None = None,
     is_async: bool = True,
+    schedule_ids: set[int] | None = None,
 ) -> list[dict[str, Any]]:
     if _queue_backend(settings) == "db":
-        return _enqueue_due_scheduled_scans_db(settings, limit=limit)
+        return _enqueue_due_scheduled_scans_db(settings, limit=limit, schedule_ids=schedule_ids)
     prepare_database(settings)
     session_factory = create_session_factory(settings.database_url)
     queue = get_scan_queue(settings, connection=connection, is_async=is_async)
-    _reserve_due(settings, backend='rq', limit=limit)
+    _reserve_due(settings, backend='rq', limit=limit, schedule_ids=schedule_ids)
     queued = []
     # Durable tasks are an outbox. A crash before publication leaves a retryable row.
     with session_factory() as session:
         tasks = list(session.scalars(select(QueueTask).where(QueueTask.backend == 'rq',
                      QueueTask.queue_name == settings.scan_queue_name, QueueTask.status == 'queued')))
-        identifiers = [task.id for task in tasks if not (task.metadata_json or {}).get('published')][:limit]
+        identifiers = [task.id for task in tasks if not (task.metadata_json or {}).get('published')
+                       and (schedule_ids is None or task.scheduled_scan_id in schedule_ids)][:limit]
     for task_id in identifiers:
         publisher = 'publish-' + uuid.uuid4().hex
         now = datetime.now(UTC)
@@ -145,11 +151,16 @@ def enqueue_due_scheduled_scans(
     return queued
 
 
-def _reserve_due(settings, *, backend, limit):
+def _reserve_due(settings, *, backend, limit, schedule_ids=None):
     queued = []
     with create_session_factory(settings.database_url)() as session:
         storage = Storage(session)
-        for scheduled in storage.list_due_scheduled_scans()[:limit]:
+        due = (list(session.scalars(select(ScheduledScan).where(
+            ScheduledScan.id.in_(schedule_ids), ScheduledScan.enabled.is_(True),
+            ScheduledScan.next_run_at <= datetime.now(UTC)).order_by(
+                ScheduledScan.next_run_at, ScheduledScan.id)))
+            if schedule_ids is not None else storage.list_due_scheduled_scans())
+        for scheduled in due[:limit]:
             task = storage.reserve_queue_execution(scheduled, backend=backend, queue_name=settings.scan_queue_name,
                                                    max_attempts=retry_limit(settings)+1)
             if task is None:
@@ -294,9 +305,10 @@ def _db_queue_status(settings: Settings) -> dict[str, Any]:
     }
 
 
-def _enqueue_due_scheduled_scans_db(settings: Settings, *, limit: int = 10) -> list[dict[str, Any]]:
+def _enqueue_due_scheduled_scans_db(settings: Settings, *, limit: int = 10,
+                                    schedule_ids: set[int] | None = None) -> list[dict[str, Any]]:
     prepare_database(settings)
-    return _reserve_due(settings, backend='db', limit=limit)
+    return _reserve_due(settings, backend='db', limit=limit, schedule_ids=schedule_ids)
 
 
 def _run_db_worker(settings: Settings, *, burst: bool = False, max_jobs: int | None = None) -> bool:
@@ -315,7 +327,8 @@ def _run_db_worker(settings: Settings, *, burst: bool = False, max_jobs: int | N
     return processed > 0
 
 
-def _process_one_db_task(settings: Settings, *, worker_id: str) -> dict[str, Any] | None:
+def _process_one_db_task(settings: Settings, *, worker_id: str,
+                         schedule_ids: set[int] | None = None) -> dict[str, Any] | None:
     session_factory = create_session_factory(settings.database_url)
     with session_factory() as session:
         storage = Storage(session)
@@ -324,6 +337,7 @@ def _process_one_db_task(settings: Settings, *, worker_id: str) -> dict[str, Any
             queue_name=settings.scan_queue_name,
             worker_id=worker_id,
             lease_until=datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=max(settings.scan_queue_lease_seconds, 30)),
+            schedule_ids=schedule_ids,
         )
         if claimed is None:
             session.commit()
@@ -345,6 +359,30 @@ def _process_one_db_task(settings: Settings, *, worker_id: str) -> dict[str, Any
         return _execute_db_queue_task(settings, claimed.id, worker_id=worker_id)
     except JobExecutionError:
         return {"queue_task_id": claimed.id, "status": "attempt_failed"}
+
+
+def run_db_schedule_batch(settings: Settings, schedule_ids: set[int], *, max_jobs: int = 500) -> int:
+    """Run only authorized, already queued schedules from a browser request.
+
+    The request adapter authorizes the IDs before scheduling this bounded task.
+    Durable queue claims remain the source of execution ownership.
+    """
+    if _queue_backend(settings) != 'db':
+        raise QueueBackendError('Browser execution requires the database queue backend')
+    if not schedule_ids or len(schedule_ids) > 500 or max_jobs < 1:
+        return 0
+    if not _WEB_DB_WORKER_LOCK.acquire(blocking=False):
+        return 0
+    worker_id = f'web-db-worker-{uuid.uuid4().hex[:12]}'
+    processed = 0
+    try:
+        while processed < min(max_jobs, len(schedule_ids)):
+            if _process_one_db_task(settings, worker_id=worker_id, schedule_ids=schedule_ids) is None:
+                break
+            processed += 1
+        return processed
+    finally:
+        _WEB_DB_WORKER_LOCK.release()
 
 
 def _execute_db_queue_task(settings: Settings, queue_task_id: int, *, worker_id: str) -> dict[str, Any]:

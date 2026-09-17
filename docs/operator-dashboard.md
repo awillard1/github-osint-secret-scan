@@ -22,10 +22,28 @@ the normal redirect. Exported HTML remains
 self-contained and omits browser session controls. Jinja2 is a runtime dependency;
 installed wheels must include the templates and static assets.
 
-This is an incremental migration. Assessment detail tabs, scan-job detail, graph,
+This is an incremental migration. Other assessment detail tabs and scan-job detail,
 settings, login and the standalone HTML report still assemble escaped HTML in
 Python. Their routes and forms remain supported. Deployment-specific visual and
 accessibility review remains needed.
+
+Assessment overview and Discovery now use the shared Jinja shell. The overview
+summarizes latest discovery state, linked assets, failures, queue backend
+reachability and next actions. Discovery places persisted target/stage progress
+before configuration, with a separate review and explicit durable-job confirmation.
+An authenticated fragment refreshes active status without navigation; hidden pages
+pause requests, failures back off, and terminal states stop polling. Service code
+owns state aggregation and safe diagnostic classifications. The browser never
+interprets raw queue errors or secret evidence. Other assessment tabs remain on
+the incremental migration path.
+
+Global and assessment Relationships now share the console shell. Assessment links
+retain filters and connected entity navigation, with source and confidence beside
+each edge. Discovery can select ready passive or all ready providers; active tools
+still require explicit scope authorization. Browser launch attempts queue publication
+for that assessment. Database queue deployments expose a bounded **Execute queued
+jobs** action; Redis/RQ deployments use their supervised worker. Readers cannot
+publish or execute jobs. Providers still run through durable worker claims.
 
 The existing server-rendered `/dashboard` now starts with an operator overview.
 `DashboardService` applies shared lifecycle/risk policy over the request's authorized

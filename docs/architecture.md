@@ -37,7 +37,21 @@ Responsibilities:
 
 Not responsible for core workflow decisions.
 
-The live [operator dashboard](operator-dashboard.md) consumes `DashboardService` queues over authorized storage; templates do not classify risk or lifecycle states. The browser layer now has `web/render.py`, autoescaped Jinja templates and shared static design tokens. The live dashboard, queue, assessment-index and finding-detail pages use those templates; legacy pages migrate incrementally. FastAPI mounts packaged static assets at `/static`. Browser POST actions continue through the existing auth, CSRF and service boundaries; exported report HTML does not depend on browser assets.
+The live [operator dashboard](operator-dashboard.md) consumes `DashboardService` queues over authorized storage; templates do not classify risk or lifecycle states. The browser layer now has `web/render.py`, autoescaped Jinja templates and shared static design tokens. The live dashboard, queue, assessment-index, assessment overview/discovery and finding-detail pages use those templates; legacy pages migrate incrementally. FastAPI mounts packaged static assets at `/static`. Browser POST actions continue through the existing auth, CSRF and service boundaries; exported report HTML does not depend on browser assets.
+
+`services/assessments/activity.py` projects the latest discovery launch from
+AssessmentRun, ScheduledScan, QueueTask and persisted ScanJob stages. The browser
+overview/discovery templates consume this tenant-authorized, sanitized DTO. The
+polling route is a thin HTML-fragment adapter; JavaScript only schedules refreshes
+and replaces markup. No queue policy, failure classification or secret handling is
+implemented in the browser.
+
+The browser Relationships views use the same Jinja shell as assessment discovery.
+Assessment launch and recovery call the shared job service, which publishes only
+that authorized assessment's due schedules through the existing queue outbox. A
+database-backed deployment can request a bounded background worker batch scoped to
+those schedule IDs. Redis/RQ workers remain deployment managed. Provider execution
+still goes through durable claims and worker services.
 
 ### 2. Application services
 

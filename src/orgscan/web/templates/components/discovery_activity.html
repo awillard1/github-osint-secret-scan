@@ -1,0 +1,66 @@
+<section class="discovery-activity" data-terminal="{{ 'true' if activity.terminal else 'false' }}" aria-label="Discovery activity">
+  <div class="activity-lead">
+    <div>
+      <p class="eyebrow">Live discovery activity</p>
+      <h2><span class="activity-state" data-state="{{ activity.status }}">{{ activity.status|replace('_', ' ')|title }}</span></h2>
+      <p>{{ activity.description }}</p>
+      <p class="muted">Assessment lifecycle: <strong>{{ activity.assessment.lifecycle|title }}</strong></p>
+    </div>
+    <div class="activity-next">
+      <strong>Next step</strong>
+      {% if activity.status == 'pending_enqueue' %}<p>Publish the durable jobs below. If the queue is unavailable, retry after an administrator restores it.</p>
+      {% elif activity.status in ('queued', 'running') %}<p>{{ 'Use Execute queued jobs to start the configured database worker.' if activity.browser_execution_available and activity.status == 'queued' else 'A worker claims queued jobs. This view refreshes while discovery is active.' }}</p>
+      {% elif activity.status == 'stale' %}<p>Inspect the worker and queue lease before attempting recovery.</p>
+      {% elif activity.status in ('failed', 'partially_failed') %}<p>Resolve the items below and retry failed targets. Results may be partial.</p>
+      {% elif activity.status == 'paused' %}<p>Resume the assessment, then retry failed targets.</p>
+      {% elif activity.status in ('completed', 'completed_with_warnings') %}<p>Review results and choose repositories to scan.</p>
+      {% else %}<p>Add targets, review provider readiness, and confirm launch.</p>{% endif %}
+      {% if auth and auth.allows_role('analyst') %}
+        {% if activity.counts.pending_enqueue %}<form method="post" action="/dashboard/assessments/{{ activity.assessment.id }}/discovery/publish">{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<button type="submit">Publish pending jobs</button></form>{% endif %}
+        {% if activity.browser_execution_available and (activity.counts.queued or activity.counts.pending_enqueue) %}<form method="post" action="/dashboard/assessments/{{ activity.assessment.id }}/discovery/execute">{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<button class="button" type="submit">{{ 'Publish and execute jobs' if activity.counts.pending_enqueue else 'Execute queued jobs' }}</button></form>{% endif %}
+      {% endif %}
+    </div>
+  </div>
+  <div class="activity-metrics" aria-label="Discovery counts">
+    {% for key, label in [('scheduled','Targets scheduled'),('completed','Completed'),('running','Running'),('queued','Queued'),('deferred','Deferred'),('pending_enqueue','Pending enqueue'),('failed','Failed'),('blocked','Blocked stages'),('skipped','Skipped stages'),('outputs','Stage outputs'),('assets','Linked assets')] %}
+      <div class="activity-metric"><strong>{{ activity.counts[key] }}</strong><span>{{ label }}</span></div>
+    {% endfor %}
+  </div>
+  <dl class="activity-times">
+    {% for key, label in [('created_at','Created'),('queued_at','Queued'),('started_at','Execution started'),('updated_at','Last persisted update'),('completed_at','Completed'),('elapsed_seconds','Elapsed seconds')] %}
+      <div><dt>{{ label }}</dt><dd>{{ activity[key] if activity[key] is not none else '—' }}</dd></div>
+    {% endfor %}
+  </dl>
+  {% if activity.attention %}
+    <section class="attention-panel" aria-labelledby="attention-title">
+      <h3 id="attention-title">Needs attention <span>{{ activity.attention|length }}</span></h3>
+      <ul>
+      {% for item in activity.attention %}<li>
+        <strong>{{ item.target }} · {{ item.stage }}</strong>
+        <span class="activity-state" data-state="{{ item.status }}">{{ item.status|replace('_',' ')|title }}</span>
+        <p>{{ item.explanation }}</p><small>{{ item.at or 'Time unavailable' }}{% if item.next_attempt_at %} · Next attempt {{ item.next_attempt_at }}{% endif %}{% if item.retryable is defined %} · {{ 'Transient class' if item.retryable else 'Permanent class; fix configuration before retry' }}{% endif %}</small>
+        {% if item.retry_run_id %}<form method="post" action="/dashboard/assessments/{{ activity.assessment.id }}/runs/{{ item.retry_run_id }}/retry">
+          {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+          <button type="submit">Retry target</button></form>{% endif %}
+      </li>{% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+  <section class="stage-list" aria-labelledby="stage-title">
+    <div class="section-heading"><h3 id="stage-title">Target and stage progress</h3><span class="muted">Latest launch · {{ activity.runs|length }} targets</span></div>
+    {% if activity.runs %}
+      {% for run in activity.runs %}<article class="target-progress">
+        <header><div><strong>{{ run.target }}</strong><small>Target run #{{ run.id }} · {{ run.retry_count }} retries</small></div>
+          <span class="activity-state" data-state="{{ run.status }}">{{ run.status|replace('_',' ')|title }}</span></header>
+        <div class="target-meta"><span>Queued {{ run.queued_at or 'not yet' }}</span><span>Started {{ run.started_at or 'not yet' }}</span><span>Last update {{ run.updated_at or '—' }}</span><span>Finished {{ run.completed_at or '—' }}</span></div>
+        {% if run.failure_code %}<p class="muted">{{ run.failure_code|replace('_',' ')|title }} · {{ 'Retryable classification' if run.retryable else 'Permanent classification' }}</p>{% endif %}
+        {% if run.next_attempt_at %}<p class="muted">Rate-limit or transient deferral: next attempt {{ run.next_attempt_at }}</p>{% endif %}
+        {% if run.stages %}<div class="stage-scroll"><table class="stage-table"><thead><tr><th scope="col">Stage / mode</th><th scope="col">Status</th><th scope="col">Inputs → outputs</th><th scope="col">Queued / started / updated / finished</th><th scope="col">Duration</th><th scope="col">Readiness / retry</th></tr></thead><tbody>
+          {% for stage in run.stages %}<tr><th scope="row">{{ stage.name }}<small>{{ stage.mode }}</small></th><td><span class="activity-state" data-state="{{ stage.status }}">{{ stage.status|replace('_',' ')|title }}</span>{% if stage.explanation %}<small>{{ stage.explanation }}</small>{% endif %}{% if stage.blocked_upstream %}<small>Blocked by empty upstream input</small>{% endif %}</td><td>{{ stage.input_count }} → {{ stage.output_count }}</td><td>Queued {{ stage.queued_at or '—' }}<small>Started {{ stage.started_at or '—' }}</small><small>Updated {{ stage.updated_at or '—' }}</small><small>Finished {{ stage.completed_at or '—' }}</small></td><td>{{ stage.duration_seconds if stage.duration_seconds is not none else '—' }} s</td><td>{{ stage.readiness }}<small>{{ stage.retry_count }} retries</small>{% if stage.failure_code %}<small>{{ stage.failure_code|replace('_',' ')|title }}</small>{% endif %}</td></tr>{% endfor %}
+        </tbody></table></div>{% else %}<p class="muted">No stage has started. {% if run.status == 'pending_enqueue' %}The enqueuer has not published this durable job yet.{% elif run.status == 'queued' %}A worker has not claimed this job yet.{% endif %}</p>{% endif %}
+        <div class="target-actions">{% if run.scan_job_id %}<a href="/dashboard/scan-jobs/{{ run.scan_job_id }}">Open job details</a>{% endif %}
+          {% if run.status == 'failed' %}<form method="post" action="/dashboard/assessments/{{ activity.assessment.id }}/runs/{{ run.id }}/retry">{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<button type="submit">Retry target</button></form>{% endif %}</div>
+      </article>{% endfor %}
+    {% else %}<div class="empty-state"><strong>No discovery operation yet</strong><p>Valid targets and a confirmed launch create durable jobs here.</p></div>{% endif %}
+  </section>
+</section>

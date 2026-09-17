@@ -1,5 +1,6 @@
 """Assessment domain pipeline over canonical observations, with explicit scope."""
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from hashlib import sha256
 import fcntl
 import time
@@ -70,7 +71,9 @@ def _run(storage,assessment,parent,options,settings,progress):
         elif tool in ('dnsx','httpx','naabu'):inputs=sorted(domains)
         else:inputs=[root]
         if not inputs:
-            progress.states[tool]={'status':'blocked','error':'No validated upstream targets','input_count':0,'result_count':0}
+            now=datetime.now(UTC).isoformat()
+            progress.states[tool]={'status':'blocked','error':'No validated upstream targets','input_count':0,'result_count':0,
+                                   'updated_at':now,'completed_at':now}
             progress.save();failures.append(tool);continue
         saved=(set(domains),set(resolved),set(http),dict(domain_entities),dict(ip_entities),dict(http_entities))
         try:

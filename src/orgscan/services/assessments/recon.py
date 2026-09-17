@@ -352,6 +352,7 @@ def discover_target(storage,assessment,target,settings,*,configuration=None,prog
     failures=[]
     progress.queued(['GitHub Organization Discovery','Relationship Correlation']+(['Contributor Expansion'] if options.get('expand') else [])+(['Public GitHub Search'] if options.get('public_search') else []))
     with progress.stage('GitHub Organization Discovery') as stage:
+        stage['input_count']=1
         count=0
         for data in records:
             private=data.get('private') is True or data.get('visibility') in ('private','internal')
@@ -368,17 +369,20 @@ def discover_target(storage,assessment,target,settings,*,configuration=None,prog
                 storage.session.commit() # Each page/item is durable; rediscovery is idempotent.
                 if options.get('repository_metadata'):
                     with progress.stage('Repository Metadata') as detail_stage:
+                        detail_stage['input_count']+=1
                         ingest.repository_metadata(repo,data,options)
                         detail_stage['result_count']+=1
                 if options.get('expand'):
                     try:
                         with progress.stage('Contributor Expansion') as expanded:
+                            expanded['input_count']+=1
                             ingest.expand(repo,data,options)
                             expanded['result_count']+=1
                     except Exception:failures.append('Contributor Expansion')
             stage['result_count']=count
     if kind=='github-org' and options.get('repository_metadata'):
         with progress.stage('Organization Metadata') as stage:
+            stage['input_count']=1
             data=client._request_json('/orgs/'+name)
             if not isinstance(data,dict) or str(data.get('login','')).lower()!=target.normalized_value.lower():raise ValueError('Organization metadata identity mismatch')
             organization=ingest.organization(target.normalized_value,{'official_owner':True})
@@ -390,12 +394,14 @@ def discover_target(storage,assessment,target,settings,*,configuration=None,prog
             stage['result_count']=1
     if kind=='github-org' and options.get('members'):
         with progress.stage('Organization Members') as stage:
+            stage['input_count']=1
             for member in client.pages('/orgs/'+name+'/members',max_pages=settings.assessment_discovery_max_pages):
                 if member.get('login'):
                     ingest.account(member['login'],source='membership',signals={'membership':True})
                     stage['result_count']+=1
     if options.get('public_search'):
         with progress.stage('Public GitHub Search') as stage:
+            stage['input_count']=1
             from orgscan.services.github_search import GitHubSearchService
             def request(path,expected=dict):
                 value=client._request_json(path)
@@ -407,6 +413,7 @@ def discover_target(storage,assessment,target,settings,*,configuration=None,prog
             if result.failure:raise ValueError('Public search was incomplete; inspect the search job and retry')
             stage['result_count']=len(result.exposures)
     with progress.stage('Relationship Correlation') as stage:
+        stage['input_count']=count
         ingest.correlate_forks()
         stage['result_count']=storage.session.scalar(select(func.count()).select_from(m.AssessmentEntity).where(m.AssessmentEntity.assessment_id==assessment.id,m.AssessmentEntity.entity_type=='relationship'))
     if failures:raise ValueError('Some contributor expansion stages failed; retry this target')

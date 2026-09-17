@@ -20,6 +20,9 @@ def test_wizard_pages_reports_and_permissions(service,client):
     for path in ['/dashboard/assessments','/dashboard/assessments/new','/dashboard/settings/github']+[f'/dashboard/assessments/{identity}/{tab}' for tab in ('overview','targets','discovery','repositories','accounts','domains','relationships','scans','findings','reports')]:
         response=client.get(path)
         assert response.status_code==200,(path,response.text)
+    for path in ('/dashboard/graph', f'/dashboard/assessments/{identity}/relationships'):
+        page=client.get(path).text
+        assert 'class="app-shell"' in page and 'Evidence map' in page
     for fmt in ('json','csv','html','pdf','sarif'):
         response=client.get(f'/assessments/{identity}/reports/{fmt}')
         assert response.status_code==200,(fmt,response.text)

@@ -55,7 +55,7 @@ def test_active_review_does_not_schedule_until_confirmed(service,monkeypatch):
     endpoint=f'/dashboard/assessments/{assessment["id"]}/launch/discovery'
     data={'profile':'custom','providers':['httpx'],'active_authorized':'true'}
     response=client.post(endpoint,data=data)
-    assert response.status_code==200 and 'Start Active Validation' in response.text
+    assert response.status_code==200 and 'Confirm and create discovery jobs' in response.text
     with service.factory() as session:assert session.scalar(select(m.AssessmentRun)) is None
     assert client.post(endpoint,data={**data,'action':'confirmed'},follow_redirects=False).status_code==303
     with service.factory() as session:

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">Assessment / Discovery</p><h1>{{ assessment.name }}</h1><p class="muted">{{ assessment.description }}</p></div><a class="button" href="/dashboard/assessments/{{ assessment.id }}/recon-results">Review results</a></div>
+<nav class="assessment-steps" aria-label="Assessment steps"><a href="/dashboard/assessments/{{ assessment.id }}/targets">1 · Targets</a><a href="#configuration">2 · Profile</a><a href="#configuration">3 · Review and launch</a><a href="#activity" aria-current="step">4 · Progress</a></nav>
+<nav class="assessment-links" aria-label="Assessment workspace"><a href="/dashboard/assessments/{{ assessment.id }}/overview">Overview</a><a href="/dashboard/assessments/{{ assessment.id }}/recon-results">Discovery results</a><a href="/dashboard/assessments/{{ assessment.id }}/relationships">Relationships</a><a href="/dashboard/assessments/{{ assessment.id }}/repositories">Repository scope</a><a href="/dashboard/assessments/{{ assessment.id }}/scans">Scan launch</a><a href="/dashboard/assessments/{{ assessment.id }}/reports">Reports</a></nav>
+<div id="activity" data-discovery-poll="/dashboard/assessments/{{ assessment.id }}/discovery/activity">
+  {% include "components/discovery_activity.html" %}
+</div>
+<p class="refresh-line" id="discovery-refresh">Last refreshed at {{ activity.refreshed_at }}. <span id="discovery-refresh-warning" role="status" aria-live="polite"></span></p>
+<span class="screen-reader-only" id="discovery-status-change" role="status" aria-live="polite"></span>
+<section class="panel discovery-config" id="configuration" aria-labelledby="config-title">
+  <div class="section-heading"><div><p class="eyebrow">Prepare the next launch</p><h2 id="config-title">Discovery profile and readiness</h2></div><a href="/dashboard/settings/recon-tools">Configure providers</a></div>
+  <p class="muted">Provider readiness is checked before launch. Active tools need explicit authorization. Review shows target scope before durable jobs are created.</p>
+  <form method="post" action="/dashboard/assessments/{{ assessment.id }}/launch/discovery" class="discovery-form">
+    {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+    <div class="discovery-fields"><label>Saved profile<select name="saved_profile"><option value="">Use options below</option>{% for row in saved %}<option value="{{ row.name }}">{{ row.name }}</option>{% endfor %}</select></label>
+    <label>Profile<select name="profile">{% for key in profiles %}<option value="{{ key }}">{{ key|replace('-', ' ')|title }}</option>{% endfor %}</select></label></div>
+    <fieldset><legend>Providers</legend><p class="muted">Select the installed tools to run. Every selected active tool requires explicit scope authorization below.</p><div class="discovery-actions"><button type="button" data-select-providers="passive">Select ready passive tools</button><button type="button" data-select-providers="all">Select all ready tools</button><button type="button" data-select-providers="none">Clear selection</button></div><div class="provider-grid">{% for provider in providers %}<label class="provider-choice"><span><input type="checkbox" name="providers" value="{{ provider.name }}" data-mode="{{ provider.mode|lower }}" data-ready="{{ 'true' if provider.status == 'ok' else 'false' }}"> <strong>{{ provider.display_name }}</strong></span><small>{{ provider.mode }} · {{ 'Ready' if provider.status == 'ok' else 'Unavailable — configure before launch' }}</small></label>{% endfor %}</div></fieldset>
+    <fieldset><legend>Scope and options</legend><div class="provider-grid">
+      <label><input type="checkbox" name="active_authorized" value="true"> I authorize active interaction with scoped assessment domains and subdomains</label>
+      <label><input type="checkbox" name="run_available_only" value="true"> Run available tools only; record unavailable selections</label>
+      <label><input type="checkbox" name="expand" value="true"> Expand contributors, forks and commit identities</label>
+      <label><input type="checkbox" name="members" value="true"> Include visible organization members</label>
+      <label><input type="checkbox" name="contributor_repositories" value="true"> Include contributor-owned public repositories</label>
+      <label><input type="checkbox" name="public_search" value="true"> Include public GitHub search</label>
+      <label><input type="checkbox" name="include_private" value="true"> Include authorized private/internal repositories</label>
+    </div></fieldset>
+    <div class="discovery-actions"><button class="button" type="submit">Review discovery launch</button><label>Save as profile <input name="profile_name" placeholder="Profile name"></label><button name="action" value="save_profile" type="submit">Save profile</button></div>
+  </form>
+  <p class="muted">After confirmation, orgscan creates durable jobs and attempts queue publication. For database queues, use <strong>Execute queued jobs</strong> above to run selected work from this browser. Redis queues require a worker managed by the deployment. No target activity starts when a profile is merely saved.</p>
+</section>
+{% endblock %}

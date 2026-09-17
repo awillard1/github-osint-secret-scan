@@ -14,19 +14,22 @@ class DiscoveryProgress:
             self.storage.session.commit()
 
     def queued(self,names):
-        for name in names:self.states.setdefault(name,{'status':'queued','result_count':0})
+        now=datetime.now(UTC).isoformat()
+        for name in names:self.states.setdefault(name,{'status':'queued','result_count':0,'queued_at':now,'updated_at':now})
         self.save()
 
     @contextmanager
     def stage(self,name):
         previous=self.states.get(name,{})
-        value={'status':'running','result_count':previous.get('result_count',0),'started_at':datetime.now(UTC).isoformat()}
+        now=datetime.now(UTC).isoformat()
+        value={'status':'running','result_count':previous.get('result_count',0),'input_count':previous.get('input_count',0),'queued_at':previous.get('queued_at'),
+               'started_at':now,'updated_at':now}
         self.states[name]=value;self.save()
         try:yield value
         except Exception:
             self.storage.session.rollback()
-            value['status']='failed';value['completed_at']=datetime.now(UTC).isoformat();value['error']='Discovery stage failed; inspect connection/provider readiness and retry the target'
+            value['status']='failed';value['completed_at']=datetime.now(UTC).isoformat();value['updated_at']=value['completed_at'];value['error']='Discovery stage failed; inspect connection/provider readiness and retry the target'
             self.states[name]=value;self.save();raise
         else:
-            value['status']='failed' if previous.get('status')=='failed' else 'completed';value['completed_at']=datetime.now(UTC).isoformat()
+            value['status']='failed' if previous.get('status')=='failed' else 'completed';value['completed_at']=datetime.now(UTC).isoformat();value['updated_at']=value['completed_at']
             self.states[name]=value;self.save()
