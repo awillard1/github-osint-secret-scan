@@ -16,6 +16,26 @@ advisory forms accept an explicit entity ID; selection
 is applied before pagination, so later pages remain addressable. Only administrators
 can configure/test; analysts can request advisory jobs; readers can view advice.
 The existing browser CSRF and tenant authorization apply.
+The assessment AI page submits launch and retry forms in place when JavaScript is
+available, with ordinary form navigation as a fallback. Active job status and saved
+advice refresh through a tenant-authorized HTML fragment every ten seconds; polling
+pauses when the page is hidden, backs off after errors and stops after terminal
+completion. A manual refresh control remains available. Missing scheduled-scan
+records are shown as unavailable with an administrator recovery message; they do
+not make the page fail or appear completed.
+
+The endpoint must be reachable **from the orgscan server process**. A browser
+displaying “Ollama is running” at `127.0.0.1:11434` does not establish server
+reachability when browser and server are on different hosts or containers. Check
+`curl http://127.0.0.1:11434/api/tags` on the orgscan host, or configure a
+server-reachable origin in Settings / Local AI. The selected model must appear in
+that inventory. A connection test is separate from job execution: with Redis/RQ,
+an enqueuer and worker must be running. With `ORGSCAN_SCAN_QUEUE_BACKEND=db`, the
+Local AI tab offers **Execute queued AI jobs**, which publishes and runs a bounded
+batch from the web server. Pending means a durable job exists but has not reached
+a worker queue; queued means it is waiting for a worker. The web execution option
+is useful for local deployment; supervised workers remain appropriate for durable
+operation across server restarts.
 
 Environment defaults:
 

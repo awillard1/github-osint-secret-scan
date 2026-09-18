@@ -71,15 +71,16 @@ class AssessmentWorkbench(AssessmentService):
                 scan_jobs[job.parameters_json.get('scheduled_scan_id')]=job
             result=[]
             for run in runs:
-                schedule=schedules[run.scheduled_scan_id];task=tasks.get(schedule.id)
-                job=scan_jobs.get(schedule.id)
+                schedule=schedules.get(run.scheduled_scan_id)
+                task=tasks.get(run.scheduled_scan_id) if schedule else None
+                job=scan_jobs.get(run.scheduled_scan_id) if schedule else None
                 stages=(job.scope_json or {}).get('stages',{}) if job else {}
                 result.append({'id':run.id,'kind':run.kind,'target_id':run.target_id,
-                    'status':task.status if task else 'pending' if schedule.enabled else 'completed',
+                    'status':'unavailable' if schedule is None else task.status if task else 'pending' if schedule.enabled else 'completed',
                     'created_at':run.created_at,'queued_at':task.created_at if task else None,
                     'started_at':task.started_at if task else None,'completed_at':task.completed_at if task else None,
-                    'failure_code':(task.metadata_json or {}).get('failure_code') if task else None,
-                    'attempts':task.attempt_count if task else 0,'scanner':job.scanner_name if job else schedule.scanner_name,
+                    'failure_code':'schedule_missing' if schedule is None else (task.metadata_json or {}).get('failure_code') if task else None,
+                    'attempts':task.attempt_count if task else 0,'scanner':job.scanner_name if job else schedule.scanner_name if schedule else None,
                     'scan_job_id':job.id if job else task.result_scan_job_id if task else None,
                     'stages':{name:{key:value.get(key) for key in ('status','mode','input_count','output_count',
                         'result_count','failure_code','retry_count','started_at','completed_at') if key in value}

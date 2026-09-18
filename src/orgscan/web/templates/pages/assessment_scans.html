@@ -5,6 +5,7 @@
 {% set queued = jobs['states'].get('queued', 0) %}
 {% set running = jobs['states'].get('running', 0) %}
 {% set failed = jobs['states'].get('failed', 0) %}
+{% set unavailable = jobs['states'].get('unavailable', 0) %}
 <div class="page-heading"><div><p class="eyebrow">Assessment / Repository scans</p><h1>{{ assessment.name }}</h1><p class="muted">Review scope, choose scanners, then monitor each durable scan run.</p></div><a class="button" href="{{ root }}/repositories">Manage repository scope</a></div>
 {% set current_tab='scans' %}{% include "components/assessment_nav.html" %}
 <div class="scan-metrics" aria-label="Scan overview">
@@ -12,7 +13,7 @@
   <div class="activity-metric"><strong>{{ jobs.repositories.completed }} / {{ jobs.repositories.total }}</strong><span>Latest repository scans completed</span></div>
   <div class="activity-metric"><strong>{{ running + queued }}</strong><span>Running or queued</span></div>
   <div class="activity-metric"><strong>{{ pending }}</strong><span>Pending publication</span></div>
-  <div class="activity-metric"><strong>{{ failed }}</strong><span>Failed runs</span></div>
+  <div class="activity-metric"><strong>{{ failed + unavailable }}</strong><span>Failed or unavailable</span></div>
 </div>
 <section class="panel scan-operations" aria-labelledby="scan-operations-title">
   <div><p class="eyebrow">Execution state</p><h2 id="scan-operations-title">Scan jobs</h2>
@@ -44,7 +45,7 @@
 <section class="panel" id="scan-history" aria-labelledby="scan-history-title"><div class="section-heading"><div><p class="eyebrow">Durable history</p><h2 id="scan-history-title">Recent scan runs</h2></div><a href="{{ root }}/scans#scan-history">Refresh status ↻</a></div>
   {% if jobs['items'] %}<div class="scan-run-list">{% for run in jobs['items'] %}<article class="scan-run"><div class="scan-run-head"><div><strong>{{ run.target or ('Repository run #' ~ run.id) }}</strong><small>Run #{{ run.id }} · {{ run.profile or 'Custom profile' }} · {{ run.scanners|join(', ') if run.scanners else 'Scanner plan unavailable' }}</small></div><span class="activity-state" data-state="{{ run.status }}">{{ 'Pending enqueue' if run.status == 'pending' else run.status|replace('_',' ')|title }}</span></div>
     <div class="scan-run-meta"><span>Created {{ run.created_at or '—' }}</span><span>Queued {{ run.queued_at or '—' }}</span><span>Started {{ run.started_at or '—' }}</span><span>Finished {{ run.completed_at or '—' }}</span><span>Attempts {{ run.attempts }}</span></div>
-    {% if run.status == 'pending' %}<p class="muted">The schedule is durable; publish it before a worker can claim it.</p>{% elif run.status == 'queued' %}<p class="muted">Waiting for a worker{% if run.next_attempt_at %}; next eligible attempt {{ run.next_attempt_at }}{% endif %}.</p>{% elif run.status == 'failed' %}<p class="scan-safe-error">This run failed ({{ run.failure_code|replace('_',' ') if run.failure_code else 'unclassified failure' }}). Review the job details and retry after resolving the cause.</p>{% elif run.status == 'cancelled' %}<p class="muted">Stopped by an operator. Earlier completed findings remain available.</p>{% endif %}
+    {% if run.status == 'pending' %}<p class="muted">The schedule is durable; publish it before a worker can claim it.</p>{% elif run.status == 'queued' %}<p class="muted">Waiting for a worker{% if run.next_attempt_at %}; next eligible attempt {{ run.next_attempt_at }}{% endif %}.</p>{% elif run.status == 'failed' %}<p class="scan-safe-error">This run failed ({{ run.failure_code|replace('_',' ') if run.failure_code else 'unclassified failure' }}). Review the job details and retry after resolving the cause.</p>{% elif run.status == 'unavailable' %}<p class="scan-safe-error">The scheduled job record is unavailable. Ask an administrator to inspect queue storage; this run cannot be retried.</p>{% elif run.status == 'cancelled' %}<p class="muted">Stopped by an operator. Earlier completed findings remain available.</p>{% endif %}
     <div class="target-actions">{% if run.scan_job_id %}<a href="/dashboard/scan-jobs/{{ run.scan_job_id }}">Open job details</a>{% endif %}
       {% if auth and auth.allows_role('analyst') %}{% if run.status == 'failed' %}<form method="post" action="{{ root }}/runs/{{ run.id }}/retry">{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<button type="submit">Retry run</button></form>{% elif run.status in ('pending','queued','running') %}<form method="post" action="{{ root }}/runs/{{ run.id }}/cancel">{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<button type="submit">Stop run</button></form>{% endif %}{% endif %}
     </div></article>{% endfor %}</div>{% else %}<div class="empty-state"><strong>No scan runs yet</strong><p>Choose repository scope and review a scan profile to create durable jobs.</p></div>{% endif %}

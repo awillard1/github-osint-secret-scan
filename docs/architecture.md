@@ -547,6 +547,11 @@ cache identity and tenant authorization. No AI path decrypts protected evidence 
 has executable tools. See [local AI](local-ai.md) for its deliberately bounded scope.
 The browser settings action calls the same service for a synthetic generation check;
 the assessment AI page reads existing durable job progress alongside saved advice.
+The AI page also uses an authenticated server-rendered HTML fragment for active
+job and advice updates. Browser JavaScript submits AI launch/retry forms in place
+and manages polling cadence; services retain queue state decisions. A run whose
+scheduled-scan row is absent projects as unavailable instead of raising during
+assessment job and advisory reads.
 Primary navigation and workspace subnavigation receive their active state from
 server-rendered adapters, without client-side route inference.
 `services/assessments/ai_projection.py` now selects bounded assessment or entity

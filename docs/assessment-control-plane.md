@@ -46,6 +46,8 @@ Excluding an asset from scanning does not delete its relationships or findings.
 7. Open an assessment finding, review observations and association provenance,
    explicitly reveal if authorized, and record analyst triage.
 8. Export JSON, CSV, HTML, PDF or SARIF, or generate optional local AI advice.
+   The AI tab submits advisory actions in place and refreshes active job status
+   through an authorized HTML fragment; forms still work without JavaScript.
 
 After passive discovery, open **Discovery Results → Domains** to launch HTTPX on
 assessment-linked names beneath saved valid domain targets. This requires an
@@ -109,6 +111,9 @@ application. The operator needs no
 server shell. A web process restart can interrupt a running batch, so sustained
 deployments should run a separately supervised worker. With Redis/RQ, a deployment
 worker must be running; the browser publishes work but cannot start a remote worker.
+The assessment Local AI tab also offers **Execute queued AI jobs** with the DB
+backend, or **Publish pending AI jobs** when Redis/RQ is configured. Ollama must
+be reachable from the web server or worker host before an AI job can complete.
 
 For a local one-shot queue check and status inspection:
 

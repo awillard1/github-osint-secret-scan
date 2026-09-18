@@ -248,8 +248,9 @@ class AssessmentJobs(AssessmentService):
             tasks={r.scheduled_scan_id:r for r in s.scalars(select(m.QueueTask).where(m.QueueTask.scheduled_scan_id.in_(schedules)).order_by(m.QueueTask.id))}
             all_schedule_ids=select(m.AssessmentRun.scheduled_scan_id).where(m.AssessmentRun.assessment_id==identity)
             latest=select(func.max(m.QueueTask.id)).where(m.QueueTask.scheduled_scan_id.in_(all_schedule_ids)).group_by(m.QueueTask.scheduled_scan_id)
-            state=func.coalesce(m.QueueTask.status,case((m.ScheduledScan.enabled.is_(True),'pending'),else_='completed'))
-            status_query=select(state,func.count()).select_from(m.AssessmentRun).join(m.ScheduledScan,m.ScheduledScan.id==m.AssessmentRun.scheduled_scan_id).outerjoin(m.QueueTask,(m.QueueTask.scheduled_scan_id==m.ScheduledScan.id)&m.QueueTask.id.in_(latest)).where(m.AssessmentRun.assessment_id==identity).group_by(state)
+            state=case((m.ScheduledScan.id.is_(None),'unavailable'),
+                else_=func.coalesce(m.QueueTask.status,case((m.ScheduledScan.enabled.is_(True),'pending'),else_='completed')))
+            status_query=select(state,func.count()).select_from(m.AssessmentRun).outerjoin(m.ScheduledScan,m.ScheduledScan.id==m.AssessmentRun.scheduled_scan_id).outerjoin(m.QueueTask,(m.QueueTask.scheduled_scan_id==m.ScheduledScan.id)&m.QueueTask.id.in_(latest)).where(m.AssessmentRun.assessment_id==identity).group_by(state)
             if kind is not None:status_query=status_query.where(m.AssessmentRun.kind==kind)
             statuses=dict(s.execute(status_query).all())
             repository_states=dict(s.execute(status_query.where(m.AssessmentRun.kind=='scan')).all())
@@ -261,13 +262,15 @@ class AssessmentJobs(AssessmentService):
             stage_jobs={j.parameters_json.get('scheduled_scan_id'):j for j in s.scalars(select(m.ScanJob).where(m.ScanJob.parameters_json['scheduled_scan_id'].as_integer().in_(schedules)).order_by(m.ScanJob.id))}
             rows=[]
             for run in runs:
-                schedule=schedules[run.scheduled_scan_id];task=tasks.get(schedule.id)
-                status=task.status if task else ('pending' if schedule.enabled else 'completed')
-                plan=((schedule.metadata_json or {}).get('scan_plan') or {}) if run.kind=='scan' else {}
-                rows.append({**fields(run),'status':status,'scan_job_id':(stage_jobs[schedule.id].id if schedule.id in stage_jobs else task.result_scan_job_id if task else None),'stages':(stage_jobs[schedule.id].scope_json or {}).get('stages',{}) if schedule.id in stage_jobs else {},
-                             'failure_code':(task.metadata_json or {}).get('failure_code') if task else None,'attempts':task.attempt_count if task else 0,'next_attempt_at':task.available_at if task and task.status in ('queued','retrying') else None,'error':task.last_error if task else (schedule.metadata_json or {}).get('last_error'),
+                schedule=schedules.get(run.scheduled_scan_id)
+                task=tasks.get(run.scheduled_scan_id) if schedule else None
+                status='unavailable' if schedule is None else task.status if task else ('pending' if schedule.enabled else 'completed')
+                plan=((schedule.metadata_json or {}).get('scan_plan') or {}) if schedule and run.kind=='scan' else {}
+                stage_job=stage_jobs.get(run.scheduled_scan_id) if schedule else None
+                rows.append({**fields(run),'status':status,'scan_job_id':stage_job.id if stage_job else task.result_scan_job_id if task else None,'stages':(stage_job.scope_json or {}).get('stages',{}) if stage_job else {},
+                             'failure_code':'schedule_missing' if schedule is None else (task.metadata_json or {}).get('failure_code') if task else None,'attempts':task.attempt_count if task else 0,'next_attempt_at':task.available_at if task and task.status in ('queued','retrying') else None,'error':'Scheduled job record is unavailable; ask an administrator to inspect queue storage.' if schedule is None else task.last_error if task else (schedule.metadata_json or {}).get('last_error'),
                              'target':plan.get('target') if isinstance(plan,dict) else None,'profile':plan.get('profile') if isinstance(plan,dict) else None,
-                             'domain_id':(schedule.metadata_json or {}).get('assessment_domain_id') if run.kind=='http_probe' else None,
+                             'domain_id':(schedule.metadata_json or {}).get('assessment_domain_id') if schedule and run.kind=='http_probe' else None,
                              'scanners':plan.get('scanners',[]) if isinstance(plan,dict) else [],
                              'created_at':run.created_at,'queued_at':task.created_at if task else None,
                              'started_at':task.started_at if task else None,'completed_at':task.completed_at if task else None})
@@ -289,6 +292,8 @@ class AssessmentJobs(AssessmentService):
             if run is None:
                 raise LookupError('Run not found')
             scheduled = s.get(m.ScheduledScan, run.scheduled_scan_id)
+            if scheduled is None:
+                raise ValueError('Scheduled job record is unavailable; this run cannot be stopped')
             task = s.scalar(select(m.QueueTask).where(
                 m.QueueTask.scheduled_scan_id == scheduled.id).order_by(m.QueueTask.id.desc()))
             if task and task.status in ('completed', 'failed', 'cancelled'):
@@ -327,6 +332,7 @@ class AssessmentJobs(AssessmentService):
             task=s.scalar(select(m.QueueTask).where(m.QueueTask.scheduled_scan_id==run.scheduled_scan_id).order_by(m.QueueTask.id.desc()))
             if task is None or task.status!='failed':raise ValueError('Only failed terminal jobs can be retried')
             old=s.get(m.ScheduledScan,run.scheduled_scan_id)
+            if old is None:raise ValueError('Scheduled job record is unavailable; this run cannot be retried')
             metadata={k:v for k,v in old.metadata_json.items() if k in ('assessment_id','assessment_action','assessment_target_id','assessment_domain_id','authorized_root','authorized_by','authorized_at','scan_plan','clone_url','connection_id','organization_id','tenant_key','ai_options','discovery_options')}
             schedule=Storage(s).create_scheduled_scan('assessment',str(identity),run.kind,datetime.now(UTC),cadence='manual',metadata_json=metadata)
             s.add(m.AssessmentRun(assessment_id=identity,target_id=run.target_id,scheduled_scan_id=schedule.id,kind=run.kind,metadata_json=run.metadata_json))

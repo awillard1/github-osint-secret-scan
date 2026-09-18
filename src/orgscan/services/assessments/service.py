@@ -43,8 +43,9 @@ class AssessmentService:
             for model,name in ((m.AssessmentTarget,'targets'),(m.AssessmentEntity,'assets'),(m.AssessmentRun,'jobs')):
                 counts[name]=dict(s.execute(select(model.assessment_id,func.count()).where(model.assessment_id.in_(ids)).group_by(model.assessment_id)).all())
             latest=select(func.max(m.QueueTask.id)).group_by(m.QueueTask.scheduled_scan_id)
-            state=func.coalesce(m.QueueTask.status,case((m.ScheduledScan.enabled.is_(True),'pending'),else_='completed'))
-            activity=s.execute(select(m.AssessmentRun.assessment_id,state,func.count()).join(m.ScheduledScan,m.ScheduledScan.id==m.AssessmentRun.scheduled_scan_id).outerjoin(m.QueueTask,(m.QueueTask.scheduled_scan_id==m.ScheduledScan.id)&m.QueueTask.id.in_(latest)).where(m.AssessmentRun.assessment_id.in_(ids)).group_by(m.AssessmentRun.assessment_id,state)).all()
+            state=case((m.ScheduledScan.id.is_(None),'unavailable'),
+                else_=func.coalesce(m.QueueTask.status,case((m.ScheduledScan.enabled.is_(True),'pending'),else_='completed')))
+            activity=s.execute(select(m.AssessmentRun.assessment_id,state,func.count()).outerjoin(m.ScheduledScan,m.ScheduledScan.id==m.AssessmentRun.scheduled_scan_id).outerjoin(m.QueueTask,(m.QueueTask.scheduled_scan_id==m.ScheduledScan.id)&m.QueueTask.id.in_(latest)).where(m.AssessmentRun.assessment_id.in_(ids)).group_by(m.AssessmentRun.assessment_id,state)).all()
             states={identity:{} for identity in ids}
             for identity,status,count in activity:states[identity][status]=count
             return st.safe({'total':total,'items':[{**fields(r),'counts':{k:v.get(r.id,0) for k,v in counts.items()},'job_states':states[r.id]} for r in rows]},tenant)

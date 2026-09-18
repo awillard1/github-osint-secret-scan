@@ -88,9 +88,20 @@ def local_ai(config,tenant,*,tested=False,saved=False):
                   config=config,tenant=tenant,tested=tested,saved=saved)
 
 
-def advice(assessment,payload,jobs=None):
+def advice(assessment,payload,jobs=None,*,db_execution=False):
+    jobs=jobs or {'items':[]}
     return render('pages/assessment_ai.html',title=assessment['name']+' — Local AI',
-                  active_section='assessments',assessment=assessment,payload=payload,jobs=jobs or {'items':[]})
+                  active_section='assessments',assessment=assessment,payload=payload,jobs=jobs,
+                  ai_active=_ai_active(jobs),db_execution=db_execution)
+
+
+def ai_activity_fragment(payload,jobs,*,assessment_id=None,db_execution=False):
+    return render('components/assessment_ai_activity.html',payload=payload,jobs=jobs,
+                  ai_active=_ai_active(jobs),assessment_id=assessment_id,db_execution=db_execution)
+
+
+def _ai_active(jobs):
+    return any(jobs.get('states',{}).get(status,0) for status in ('pending','queued','retrying','running'))
 
 
 def reports(assessment):

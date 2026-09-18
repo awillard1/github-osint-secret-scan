@@ -441,6 +441,10 @@ settings distinguish saving configuration from an end-to-end synthetic generatio
 test, with safe outcome messages; the assessment AI page explains launch and shows
 durable job states next to saved advice. This is a browser/service refinement with
 no database migration or required model at startup.
+AI launch/retry actions and active advice status now update in place through an
+authorized HTML fragment, with browser fallback and bounded polling. Assessment
+run projections show unavailable when a historical run has no schedule record,
+instead of failing the AI or scan page.
 
 Optional assessment advice now draws on a bounded, authorized safe projection of
 targets, assets, observations, relationships, finding/evidence metadata, scan status and run

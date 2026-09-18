@@ -206,6 +206,37 @@ def test_scan_console_browser_queue_controls(service,client,monkeypatch):
     assert executed==[{schedule_id}]
 
 
+def test_ai_jobs_can_execute_from_browser_with_db_queue(service,client,monkeypatch):
+    from orgscan import models as m
+    from orgscan.services.local_ai import AIService
+    from sqlalchemy import select
+
+    identity=service.create('a','Browser AI execution')['id']
+    AIService(service.settings).configure('a',enabled=True,base_url='http://127.0.0.1:11434',model='test')
+    service.settings.scan_queue_backend='db'
+    executed=[]
+    monkeypatch.setattr('orgscan.queueing.run_db_schedule_batch',lambda settings,ids:executed.append(set(ids)))
+    root=f'/dashboard/assessments/{identity}/ai'
+    launch=client.post(f'/dashboard/assessments/{identity}/launch/ai',data={'purpose':'summary'},follow_redirects=False)
+    assert launch.status_code==303
+    page=client.get(root)
+    assert page.status_code==200 and 'Execute queued AI jobs' in page.text
+    assert 'Use “Execute queued AI jobs”' in page.text
+    fragment=client.get(root+'/activity')
+    assert fragment.status_code==200 and 'Execute queued AI jobs' in fragment.text
+    response=client.post(root+'/execute',follow_redirects=False)
+    assert response.status_code==303 and response.headers['location']==root
+    with service.factory() as session:
+        schedule_id=session.scalar(select(m.AssessmentRun.scheduled_scan_id).where(
+            m.AssessmentRun.assessment_id==identity,m.AssessmentRun.kind=='ai'))
+    assert executed==[{schedule_id}]
+    client.headers['X-Orgscan-Token']='reader-token'
+    assert client.post(root+'/execute',follow_redirects=False).status_code==403
+    client.headers['X-Orgscan-Token']='admin-token'
+    foreign=service.create('b','Other tenant')['id']
+    assert client.post(f'/dashboard/assessments/{foreign}/ai/execute',follow_redirects=False).status_code in (403,404)
+
+
 def test_discovery_results_remain_readable_after_large_target_import(service,client):
     from orgscan import models as m
     identity=service.create('a','Large discovery')['id']
@@ -270,6 +301,9 @@ def test_navigation_and_local_ai_test_feedback(service,client,monkeypatch):
     assert target_launch.status_code==303 and target_launch.headers['location'].endswith('/ai')
     activity=client.get(f'/dashboard/assessments/{identity}/ai')
     assert 'Recent AI jobs' in activity.text and 'Advisory job #' in activity.text
+    assert 'data-ai-active="true"' in activity.text
+    live=client.get(f'/dashboard/assessments/{identity}/ai/activity')
+    assert live.status_code==200 and 'data-ai-active="true"' in live.text
     from orgscan import models as m
     with service.factory() as session:
         session.add(m.AIAdvice(assessment_id=identity,purpose='summary',provider='ollama',model='test',
@@ -291,6 +325,50 @@ def test_navigation_and_local_ai_test_feedback(service,client,monkeypatch):
     monkeypatch.setattr(OllamaProvider,'health',lambda self:{'status':'model-missing','models':[{'name':'other','size':1}]})
     missing=client.post('/dashboard/settings/local-ai',data=settings)
     assert 'selected model is not installed' in missing.text and 'other' in missing.text
+
+
+def test_ai_activity_fragment_and_missing_schedule_are_safe(service,client):
+    from orgscan import models as m
+    from orgscan.services.assessments.jobs import AssessmentJobs
+    assessment=service.create('a','Missing advisory schedule')
+    identity=assessment['id']
+    with service.factory() as session:
+        session.add(m.AssessmentRun(assessment_id=identity,scheduled_scan_id=999999,kind='ai'))
+        session.commit()
+    progress=AssessmentJobs(service.settings).progress(identity,kind='ai')
+    assert progress['states']['unavailable']==1
+    assert progress['items'][0]['status']=='unavailable'
+    assert progress['items'][0]['failure_code']=='schedule_missing'
+    runs=AssessmentWorkbench(service.settings).advisory_runs(identity,limit=20)
+    assert runs['items'][0]['status']=='unavailable'
+    assert service.list('a')['items'][0]['job_states']['unavailable']==1
+    page=client.get(f'/dashboard/assessments/{identity}/ai')
+    assert page.status_code==200,page.text
+    assert 'data-ai-poll=' in page.text and 'data-ai-action' in page.text
+    assert 'Ask an administrator to inspect queue storage' in page.text
+    fragment=client.get(f'/dashboard/assessments/{identity}/ai/activity')
+    assert fragment.status_code==200 and 'no-store' in fragment.headers['cache-control']
+    assert 'id="ai-activity"' in fragment.text and 'data-ai-active="false"' in fragment.text
+    assert 'app-shell' not in fragment.text
+    assert client.get(f'/assessments/{identity}/jobs').json()['items'][0]['status']=='unavailable'
+    foreign=service.create('b','Foreign advisory')
+    assert client.get(f'/dashboard/assessments/{foreign["id"]}/ai/activity').status_code in (403,404)
+
+
+@pytest.mark.parametrize('kind',('scan','http_probe'))
+def test_missing_scan_schedule_has_recovery_message(service,client,kind):
+    from orgscan import models as m
+    from orgscan.services.assessments.jobs import AssessmentJobs
+    assessment=service.create('a','Missing scan schedule')
+    with service.factory() as session:
+        session.add(m.AssessmentRun(assessment_id=assessment['id'],scheduled_scan_id=999998,kind=kind))
+        session.commit()
+    assert AssessmentJobs(service.settings).progress(assessment['id'],kind=kind)['items'][0]['status']=='unavailable'
+    if kind!='scan':return
+    page=client.get(f'/dashboard/assessments/{assessment["id"]}/scans')
+    assert page.status_code==200,page.text
+    assert 'Failed or unavailable' in page.text
+    assert 'this run cannot be retried' in page.text
 
 
 def test_findings_filter_accepts_empty_optional_form_fields(service,client):

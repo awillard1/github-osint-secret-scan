@@ -288,6 +288,27 @@ def create_assessment_router(settings):
     @router.get('/dashboard/assessments/{identity}/discovery/activity',response_class=HTMLResponse)
     def discovery_activity_fragment(identity:int):return HTMLResponse(ui.discovery_fragment(call(activity.view,identity)),headers={'Cache-Control':'no-store'})
 
+    @router.get('/dashboard/assessments/{identity}/ai/activity',response_class=HTMLResponse)
+    def ai_activity_fragment(identity:int):
+        return HTMLResponse(ui.ai_activity_fragment(call(ai.advice,identity,limit=50),
+            call(jobs.progress,identity,kind='ai',limit=20),
+            assessment_id=identity,db_execution=settings.scan_queue_backend=='db'),headers={'Cache-Control':'no-store'})
+
+    @router.post('/dashboard/assessments/{identity}/ai/execute')
+    def execute_ai(identity:int,background:BackgroundTasks):
+        if settings.scan_queue_backend!='db':raise HTTPException(409,'Browser execution requires the DB queue backend')
+        call(jobs.publish,identity,kind='ai')
+        ids=call(jobs.queued_schedule_ids,identity,kind='ai')
+        if ids:
+            from orgscan.queueing import run_db_schedule_batch
+            background.add_task(run_db_schedule_batch,settings,ids)
+        return RedirectResponse(f'/dashboard/assessments/{identity}/ai',303)
+
+    @router.post('/dashboard/assessments/{identity}/ai/publish')
+    def publish_ai(identity:int):
+        call(jobs.publish,identity,kind='ai')
+        return RedirectResponse(f'/dashboard/assessments/{identity}/ai',303)
+
     @router.post('/assessments/{identity}/pause')
     def pause(identity:int):return call(jobs.pause,identity)
 
@@ -414,7 +435,8 @@ def create_assessment_router(settings):
             filters=dict(confidence=confidence or None,severity=severity or None,status=status or None,source_tool=source_tool or None,category=category or None,repository_id=int(repository_id) if repository_id else None,lifecycle_state=lifecycle_state or None,domain_id=domain_id,account_id=account_id,organization_id=organization_id,credential_type=credential_type or None,first_seen_after=first_seen_after or None,last_seen_after=last_seen_after or None)
             return ui.findings(assessment,call(work.findings,identity,offset=offset,**filters),filters)
         if tab=='ai':return ui.advice(assessment,call(ai.advice,identity,offset=offset),
-                                    call(jobs.progress,identity,kind='ai',limit=20))
+                                     call(jobs.progress,identity,kind='ai',limit=20),
+                                     db_execution=settings.scan_queue_backend=='db')
         if tab=='reports':
             return ui.reports(assessment)
         if tab=='overview':

@@ -1,0 +1,50 @@
+<div id="ai-activity" data-ai-active="{{ 'true' if ai_active else 'false' }}">
+  <section class="panel" aria-labelledby="ai-jobs-title">
+    <div class="section-heading"><h2 id="ai-jobs-title">Recent AI jobs</h2><span>{{ jobs.total|default(0) }} total</span></div>
+    {% if auth and auth.allows_role('analyst') and (jobs.states.pending|default(0) or jobs.states.queued|default(0)) %}
+    <form method="post" action="/dashboard/assessments/{{ assessment.id if assessment is defined else assessment_id }}/ai/{{ 'execute' if db_execution else 'publish' }}" class="scan-form-actions" data-ai-action>
+      {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+      <button type="submit">{{ 'Execute queued AI jobs' if db_execution else 'Publish pending AI jobs' }}</button>
+    </form>
+    {% endif %}
+    {% if jobs['items'] %}
+    <div class="scan-run-list">
+      {% for row in jobs['items'] %}
+      <article class="scan-run">
+        <div class="section-heading"><strong>Advisory job #{{ row.id }}</strong><span class="activity-state" data-state="{{ row.status }}">{{ row.status|replace('_',' ')|title }}</span></div>
+        <p class="muted">Created {{ row.created_at }}{% if row.started_at %} · Started {{ row.started_at }}{% endif %}{% if row.completed_at %} · Finished {{ row.completed_at }}{% endif %}</p>
+        {% if row.status == 'pending' %}<p>The durable job was created but has not reached a worker queue. {% if db_execution %}Use “Execute queued AI jobs” to publish and process it.{% else %}Use “Publish pending AI jobs” after Redis is available.{% endif %}</p>
+        {% elif row.status in ('queued','retrying') %}<p>The job is queued. {% if db_execution %}Use “Execute queued AI jobs” or wait for a DB worker.{% else %}A Redis/RQ worker must be running to process it.{% endif %}</p>
+        {% elif row.status == 'running' %}<p>The worker is generating advice. Saved advice will appear below when it finishes.</p>
+        {% elif row.status == 'unavailable' %}<p class="scan-safe-error">The scheduled job record is unavailable. Ask an administrator to inspect queue storage before launching another advisory.</p>
+        {% elif row.status == 'failed' %}<p>The advisory request failed. Check the local model settings or worker, then retry.</p>
+          {% if auth and auth.allows_role('analyst') %}<form method="post" action="/dashboard/assessments/{{ row.assessment_id }}/runs/{{ row.id }}/retry" data-ai-action>
+            {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}<button type="submit">Retry advisory job</button>
+          </form>{% endif %}
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}<p class="muted">No AI jobs have been launched for this assessment.</p>{% endif %}
+  </section>
+  <section class="panel" aria-labelledby="ai-saved-title">
+    <h2 id="ai-saved-title">Saved advice</h2>
+    {% if payload['items'] %}<div class="scan-run-list">
+      {% for row in payload['items'] %}{% set advice=row.output_json %}
+      <article class="scan-run">
+        <div class="section-heading"><h3>{{ row.purpose|title }} · AI Suggested</h3><small>{{ row.created_at }}</small></div>
+        <p class="muted">{{ row.provider }} / {{ row.model }} · Policy {{ row.policy_version }}{% if advice.schema_version %} · Schema {{ advice.schema_version }}{% endif %}</p>
+        <p><strong>{{ advice.classification|default('Advisory')|replace('-',' ')|title }}</strong> · Confidence {{ advice.confidence|default('unknown') }}</p>
+        <p>{{ advice.explanation }}</p>
+        {% if advice.observed_facts %}<h4>Observed facts</h4><ul>{% for fact in advice.observed_facts %}<li>{{ fact }}</li>{% endfor %}</ul>{% endif %}
+        {% for label,key in [('Exposure','exposure_explanation'),('Possible root cause','root_cause'),('Affected assets','affected_assets'),('High-level attack surface','attack_surface'),('Mitigation','mitigation'),('Severity commentary (advisory)','severity_commentary')] %}
+          {% if advice[key] %}<h4>{{ label }}</h4>{% if advice[key] is string %}<p>{{ advice[key] }}</p>{% else %}<ul>{% for item in advice[key] %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}{% endif %}
+        {% endfor %}
+        {% if advice.limitations %}<h4>Limitations and missing information</h4><ul>{% for item in advice.limitations %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
+        {% if advice.input_coverage and advice.input_coverage.may_be_partial %}<p class="muted">Partial input selection. Omitted records: {{ advice.input_coverage.omitted|tojson }}. Review the canonical assessment data before making a decision.</p>{% endif %}
+        {% if advice.suggested_tags %}<p class="muted">Suggested tags: {{ advice.suggested_tags|join(', ') }}</p>{% endif %}
+      </article>
+      {% endfor %}
+    </div>{% else %}<div class="empty-state"><strong>No advice generated</strong><p>Configure and test a local model, then request advice above. A worker must process the job.</p><a href="/dashboard/settings/local-ai">Open AI settings</a></div>{% endif %}
+  </section>
+</div>

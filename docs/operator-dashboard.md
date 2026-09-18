@@ -5,6 +5,9 @@ assessment pages, standalone relationships, scan jobs, or connections and tools.
 Settings subnavigation and assessment steps separately mark the current page. Local
 AI settings display an explicit synthetic generation test result and link to the
 assessment AI workflow; assessment AI pages show queued job status and saved advice.
+The AI tab now updates active job status and saved advice without reloading the
+whole page. Launch and retry forms use the same in-place update with native form
+fallback. Missing schedule records appear as unavailable with a recovery message.
 
 ## Operator console presentation
 
