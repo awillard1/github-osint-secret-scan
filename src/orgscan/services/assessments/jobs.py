@@ -160,8 +160,9 @@ class AssessmentJobs(AssessmentService):
                 statement=select(m.AssessmentEntity).where(m.AssessmentEntity.assessment_id==identity,m.AssessmentEntity.entity_type=='repository',m.AssessmentEntity.included.is_(True))
             else:
                 from orgscan.services.local_ai import AIService,PURPOSES
-                if set(options)-{'purpose','entity_id'} or options.get('purpose','summary') not in PURPOSES:
+                if set(options)-{'purpose','entity_id','entity_type'} or options.get('purpose','summary') not in PURPOSES:
                     raise ValueError('Unsupported AI advisory options')
+                AIService.selection(options.get('purpose','summary'),options.get('entity_id'),options.get('entity_type'))
                 if not AIService(self.settings).configuration(a.tenant_key)['enabled']:
                     raise ValueError('Local AI is disabled; enable it in Settings first')
                 statement=select(m.Assessment).where(m.Assessment.id==identity)

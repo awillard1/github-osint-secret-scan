@@ -2,7 +2,7 @@
 {% block content %}
 {% set root = '/dashboard/assessments/' ~ assessment.id %}
 <div class="page-heading"><div><p class="eyebrow">Assessment / Discovery results</p><h1>{{ assessment.name }}</h1><p class="muted">Canonical observations from selected providers. A discovered name is evidence, not proof of ownership.</p></div><a class="button" href="{{ root }}/discovery">Configure discovery</a></div>
-<nav class="assessment-links" aria-label="Assessment workspace"><a href="{{ root }}/overview">Overview</a><a href="{{ root }}/discovery">Discovery</a><a href="{{ root }}/recon-results" aria-current="page">Results</a><a href="{{ root }}/relationships">Relationships</a><a href="{{ root }}/repositories">Repository scope</a><a href="{{ root }}/scans">Scans</a><a href="{{ root }}/findings">Findings</a><a href="{{ root }}/reports">Reports</a></nav>
+{% set current_tab='recon-results' %}{% include "components/assessment_nav.html" %}
 <nav class="recon-tabs" aria-label="Discovery result types">{% for key,label in [('overview','Overview'),('domains','Domains'),('hosts','Hosts'),('services','Services'),('web','Web')] %}<a href="{{ root }}/recon-results?tab={{ key }}" {% if tab==key %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</nav>
 {% if tab=='overview' %}
 <div class="recon-summary">{% for key,value in payload.counts.items() %}<div class="activity-metric"><strong>{{ value }}</strong><span>{{ key|replace('_',' ')|title }}</span></div>{% endfor %}</div>

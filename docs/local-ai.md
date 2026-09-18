@@ -5,8 +5,14 @@ discovery, scanning, correlation and reporting. The initial provider is Ollama;
 there are no cloud providers or model-download actions.
 
 Settings / Local AI stores a tenant's enablement, explicit endpoint and selected
-installed model. Save and test queries the model inventory and populates the model
-selector. Repository/finding advisory forms accept an explicit entity ID; selection
+installed model. Save and test queries the model inventory, then sends inert synthetic
+input through generation and validates the advisory response. The page reports
+disabled, unreachable, model-missing, generation-failed and passed outcomes without
+showing raw provider responses. A saved configuration is not presented as a passed
+test. The model selector shows inventory returned by the test. From an assessment's
+Local AI tab, analysts launch summary, correlations, triage, repository or finding
+advice; that tab shows recent durable AI job states and saved advice. Repository/finding
+advisory forms accept an explicit entity ID; selection
 is applied before pagination, so later pages remain addressable. Only administrators
 can configure/test; analysts can request advisory jobs; readers can view advice.
 The existing browser CSRF and tenant authorization apply.
@@ -43,8 +49,12 @@ incomplete or timed-out responses produce safe failures without storing prompts.
 
 ## Data and authority
 
-Purposes are summary, correlations, triage, repository and finding. These are
-bounded batch explanations over safe assessment metadata, not autonomous agents.
+Purposes are summary, correlations, triage, repository, finding and target. The
+first three always review the whole selected assessment. Repository and finding
+retain their existing batch behavior when no ID is supplied and select one record
+when an ID is supplied. Target selects an assessment target, organization,
+repository, account, domain, recon asset or finding by type and ID. These are
+bounded explanations over authorized assessment metadata, not autonomous agents.
 Inputs pass the same complete credential-context projection policy used by the
 assessment UI. No SecretEvidence row is loaded or decrypted. No reveal service is
 called. Source files, README content, raw scanner matches and arbitrary operator
@@ -60,20 +70,52 @@ credentials still apply; see projection-safety.md.
 
 Advice is labelled AI Suggested and stored separately with provider, model,
 purpose, generation time, policy version and a SHA-256 safe-input fingerprint.
-The fingerprint includes model/endpoint/policy and actual safe selected input.
+The fingerprint includes assessment and selected entity, model, endpoint, policy
+and system instruction, output schema version, projection version, and the actual
+safe selected input. Policy v3 and advisory JSON schema v2 invalidate older cached
+prompts without deleting historical advice. The JSON output keeps the schema and
+projection version plus input coverage, including omission counts.
 Identical selected inputs reuse advice; changed selected inputs invalidate it.
 Historical advice remains visible with its generation time. It is not live truth.
 
-Input samples are explicitly bounded per entity kind, with a partial-selection
-marker. After the complete credential projection, oversized advisory input is
-reduced deterministically by retaining fewer whole observations; the prompt records
-counts omitted for the character budget. Credential context is never truncated.
-Input still too large with one observation per kind fails closed. This is bounded
-advisory sampling, not an exhaustive hierarchical analysis. Changes outside the
-selected sample do not invalidate that sample's cache. Purpose-specific instructions
-explain the requested task; all source content remains untrusted data. Policy v2
-invalidates the earlier prompt cache. Analyst decisions remain in canonical triage,
-separate from AI advice.
+The input reuses the assessment workbench's tenant-authorized, fully sanitized
+reads. It includes assessment scope/profile, configured targets, the assessment
+organization, linked organizations/repositories/accounts/domains/recon assets,
+safe provider observations, relationship provenance, canonical finding and
+evidence **metadata**, deterministic severity/lifecycle/remediation fields,
+assessment-linked scan-job status metadata, and durable run/stage coverage.
+Selected entities include directly related assets and
+findings where recorded membership or relationship edges support the association.
+Assessment targets do not have a direct persisted target-to-asset membership;
+their projection includes the target and its runs and explicitly states that
+limit. Source bodies, snippets, raw scanner payloads, executable content and
+protected secret evidence are excluded. AI receives no decryption capability.
+Generated report files are not re-ingested; the advisory uses their canonical
+assessment sources and counts instead of duplicating prior narrative text.
+
+`ORGSCAN_AI_MAX_ENTITIES` limits rows per category (default 50, maximum 100).
+Finding evidence metadata and durable runs use the same bound. The
+per-asset provider observation map also uses this bound; its omitted source
+count is recorded. Discovered subdomain lists use the same bound and record
+omitted counts. Disabling finding context excludes finding records and
+finding relationship nodes before generation and marks the input partial.
+The complete tenant credential context retains its independent configured row and
+aggregate limits. Category totals record how many rows were omitted. After safe
+projection, oversized input is reduced deterministically by removing whole
+records and recording category/count and a partial-selection marker. A single
+remaining oversized record fails closed. This is bounded sampling rather than
+proof that unselected records contain no risk; changes outside the selected
+sample do not invalidate its fingerprint. A scope with no meaningful findings
+or observations receives a cached, deterministic insufficient-evidence advisory
+without invoking Ollama. Analyst decisions remain in canonical triage.
+
+The model is instructed to distinguish facts, inferences and unknowns; respect
+omission counts; and never invent vulnerabilities or claim inspection of absent
+source/history. It may return optional structured observed facts, exposure,
+root-cause, affected-asset, mitigation, severity-commentary and limitation fields.
+Strict schema validation rejects extra fields such as authoritative severity or
+lifecycle changes. Its discussion of attacker perspective remains high-level and
+defensive, without exploit code, payloads, commands or credential-use steps.
 
 A nonblocking file lock limits generation to one process per shared data directory.
 Multi-host workers need a shared lock-capable directory or an external deployment

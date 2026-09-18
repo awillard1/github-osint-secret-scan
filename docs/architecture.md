@@ -415,10 +415,30 @@ resolution and domain context; `services/scan_service.py` owns durable domain
 execution for CLI and jobs. API/CLI retain thin compatibility entry points.
 Report detail queries and aggregation live behind `Storage` in
 `storage/report_queries.py`; services map records into portable report DTOs.
-API upload orchestration, organization expansion and other command families still
-need incremental extraction. No wholesale API/CLI rewrite or public command removal
+`services/artifact_service.py` now owns bounded upload preparation, archive validation,
+asset-context resolution, ScanPlan construction and execution for artifact scans.
+`OrgscanApiService` maps service errors to HTTP; assessment upload validation and
+worker materialization reuse the same preparation context. CLI path scans and
+assessment jobs continue to use the shared `scan_service.execute_plan` runner.
+At the artifact-scan slice, organization expansion and other command families still
+needed incremental extraction. No wholesale API/CLI rewrite or public command removal
 was performed. Unused private runner/auth helpers and scheduler imports were removed;
 public scanner factories, parsers, auth helpers and documented exports remain.
+
+The next Phase 1 slice adds `services/discovery_service.py` for the trusted CLI
+`discover` and `expand` workflows. `TargetIntakeService` in `target_service.py`
+validates and persists standalone asset targets with an explicit authorization
+context. Domain discovery delegates to the existing ScanPlan/domain execution
+service; GitHub ingestion and expansion delegate to `GitHubExpansionEngine`, which
+retains relationship provenance and confidence policy. The CLI maps service
+results and errors to its existing output. Connection-bound assessment discovery,
+its API routes, and its scheduled workers continue through their existing tenant
+services. Legacy GitHub CLI discovery has no connection binding and is available
+only to the trusted local adapter; scoped callers must use assessment connections.
+Standalone GitHub discovery and expansion now use an unauthenticated public client
+and reject any private repository record returned by a test/custom client before
+persistence. The globally configured GitHub token remains available to the separate
+public-search provider, which enforces public visibility on every result.
 
 ## Controlled secret evidence (Phase 23)
 
@@ -525,6 +545,15 @@ AI operations. `ai/ollama.py` owns text transport and response validation;
 `services/local_ai.py` owns safe input selection, independent advisory persistence,
 cache identity and tenant authorization. No AI path decrypts protected evidence or
 has executable tools. See [local AI](local-ai.md) for its deliberately bounded scope.
+The browser settings action calls the same service for a synthetic generation check;
+the assessment AI page reads existing durable job progress alongside saved advice.
+Primary navigation and workspace subnavigation receive their active state from
+server-rendered adapters, without client-side route inference.
+`services/assessments/ai_projection.py` now selects bounded assessment or entity
+records from the existing authorized workbench. Workbench advisory reads include
+finding/evidence metadata, assessment-linked scan status and run coverage without source snippets or protected
+evidence. `AIService` applies complete tenant credential sanitization before
+character-budget reduction, cache identity and strict JSON output validation.
 
 
 ## Assessment continuation validation (2026-09-15)

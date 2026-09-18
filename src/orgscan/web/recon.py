@@ -4,7 +4,7 @@ from orgscan.web.render import render
 
 def tools(rows,installation=None,can_install=False):
     rows=[row for row in rows if row['tool_id'] not in ('all','all-enriched','projectdiscovery')]
-    return render('pages/recon_tools.html',title='Recon Tools',active_section='assessments',
+    return render('pages/recon_tools.html',title='Recon Tools',active_section='settings',
                   rows=rows,installation=installation,can_install=can_install,
                   ready=sum(bool(row['ready']) for row in rows))
 

@@ -4,7 +4,7 @@ This is the implementation status, reconciled against source and tests on 2026-0
 
 ## Current architecture/capability baseline
 
-The package now has `api/` (FastAPI, compatibility `OrgscanApiService`, artifact handling), `cli/` (Typer commands), `services/` (finding workflows, scanner inventory, scan planning/execution and incremental decisions), and shared modules: `runner.py`, `repositories.py` (`Storage`), `models.py`, `schemas.py`, `mirroring.py`, `scheduler.py`, `queueing.py`, `providers.py`, `discovery.py`, `expansion.py`, `auth.py`, and `reporting.py`. Finding routes and commands have been extracted into `api/routes/findings.py` and `cli/commands/findings.py`; the remaining adapters still live in the package `__init__.py` files. Shared scan execution and persistence already exist, but substantial orchestration remains in presentation code. The full layout in [architecture.md](architecture.md) remains a migration target.
+The package now has `api/` (FastAPI and compatibility `OrgscanApiService`), `cli/` (Typer commands), `services/` (finding workflows, scanner inventory, artifact preparation/scanning, scan planning/execution and incremental decisions), and shared modules: `runner.py`, `repositories.py` (`Storage`), `models.py`, `schemas.py`, `mirroring.py`, `scheduler.py`, `queueing.py`, `providers.py`, `discovery.py`, `expansion.py`, `auth.py`, and `reporting.py`. Finding routes and commands have been extracted into `api/routes/findings.py` and `cli/commands/findings.py`; the remaining adapters still live in the package `__init__.py` files. Shared scan execution and persistence already exist, but substantial orchestration remains in presentation code. The full layout in [architecture.md](architecture.md) remains a migration target.
 
 “Implemented” below means present in source with the cited test coverage; it does not imply live external-service certification or completion of every product-vision requirement.
 
@@ -196,8 +196,8 @@ No scanner, canonical hash, schema/migration, lifecycle policy or authentication
 
 Exact remaining Phase 1 decomposition items:
 
-- Extract target/asset-context resolution shared by CLI scans/intake and API uploads, and artifact preparation/execution from `OrgscanApiService`; reuse `runner.py` and `mirroring.py` rather than create a second scan engine.
-- Extract discovery/provider persistence and expansion orchestration from CLI commands into discovery/target services.
+- Finish unifying target/asset-context resolution for CLI intake and repository scans. `target_service.py` already serves CLI scans and artifact uploads; `artifact_service.py` now owns bounded upload preparation and synchronous artifact orchestration, with the API facade retaining only HTTP mapping. Assessment staging shares preparation; assessment jobs and CLI scans still use `scan_service.execute_plan`.
+- Finish target/asset-context creation in CLI `scan`, `schedule-scan`, and other intake paths; unify connection-aware GitHub discovery with standalone discovery only where authorization contracts permit. `add-target`, `discover`, and `expand` now delegate to `TargetIntakeService` and `DiscoveryService`; domain execution and relationship expansion still use their existing shared engines. Standalone GitHub discovery/expansion is public-only and no longer sends the globally configured token, so its live rate-limit allowance may be lower. Assessment connection and queue orchestration remains in its separate tenant-scoped services.
 - Extract entity/detail/risk/report/dashboard query assembly and presentation helpers from the API facade; finish separating finding serialization and browser mapping from the package root.
 - Extract remaining configuration, target, discovery, scan/mirror, report, user/session, and worker/job CLI families; separate the corresponding remaining API route families and app/dependency assembly as their service boundaries become clear.
 - Preserve existing shared scheduling, queue, mirroring and runner functions with compatibility exports when migrating them. Their retry/scanner/checkpoint behavior belongs to later phases, not this decomposition.
@@ -435,6 +435,20 @@ sections for acceptance results and safe migration conflict handling. Organizati
 Repository and Account association models are reviewed but not migrated.
 
 ## Operator console presentation — 2026-09-16
+
+The navigation now marks the current workspace and assessment/settings tab. Local AI
+settings distinguish saving configuration from an end-to-end synthetic generation
+test, with safe outcome messages; the assessment AI page explains launch and shows
+durable job states next to saved advice. This is a browser/service refinement with
+no database migration or required model at startup.
+
+Optional assessment advice now draws on a bounded, authorized safe projection of
+targets, assets, observations, relationships, finding/evidence metadata, scan status and run
+coverage. Target-scoped advice supports assessment targets and linked entity types.
+Omissions are counted, empty evidence yields a deterministic insufficient-evidence
+response, and policy/schema/projection versions invalidate old prompt cache entries.
+There is no model access to protected evidence or source bodies; this remains an
+advisory-only workflow with no schema migration.
 
 The live dashboard, operator overview cards, queue drill-down, assessment index and finding detail
 now use autoescaped Jinja templates and a shared responsive light/dark visual system.

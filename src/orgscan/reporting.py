@@ -282,7 +282,7 @@ def render_dashboard_html(
         return render(
             "pages/dashboard.html",
             title="Dashboard",
-            active_section="dashboard",
+            active_section="findings" if (filters or {}).get("high_signal_only") else "dashboard",
             summary=summary,
             findings=findings,
             trends=trends or [],
@@ -806,7 +806,7 @@ def render_finding_detail_html(
     return render(
         "pages/finding_detail.html",
         title=f"Finding {finding['id']}",
-        active_section="findings",
+        active_section="assessments" if assessment else "findings",
         finding=finding,
         evidence=payload.get("evidence", []),
         history=payload.get("history", []),

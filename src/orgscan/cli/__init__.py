@@ -44,6 +44,9 @@ from orgscan.services.scanner_service import scanner_inventory
 from orgscan.services.scan_plan import ScanPlan, resolve_scan_plan
 from orgscan.services.target_service import resolve_asset_context
 from orgscan.services.scan_service import execute_plan, result_payload
+from orgscan.services.discovery_service import DiscoveryService
+from orgscan.services.target_service import TargetIntakeService
+from orgscan.security_context import LOCAL_CONTEXT
 from orgscan.scheduler import next_run_from_cadence, run_due_reports, run_due_scans
 
 app = typer.Typer(help="OSINT Security Platform CLI foundation")
@@ -240,35 +243,14 @@ def add_target(
 ) -> None:
     settings = _settings()
     prepare_database(settings)
-    session_factory = create_session_factory(settings.database_url)
-
-    with session_factory() as session:
-        storage = Storage(session)
-        organization_id = None
-        if organization:
-            org_record, _ = storage.get_or_create_organization(organization, tenant_key=tenant_key)
-            organization_id = org_record.id
-
-        if target_type == TargetType.ORGANIZATION:
-            record, created = storage.get_or_create_organization(value, tenant_key=tenant_key)
-        elif target_type == TargetType.DOMAIN:
-            record, created = storage.get_or_create_domain(value, organization_id=organization_id)
-        elif target_type == TargetType.REPOSITORY:
-            record, created = storage.get_or_create_repository(
-                value,
-                organization_id=organization_id,
-                provider=provider,
-            )
-        else:
-            record, created = storage.get_or_create_account(
-                value,
-                organization_id=organization_id,
-                provider=provider,
-            )
-        session.commit()
-
-    action = "Created" if created else "Existing"
-    typer.echo(f"{action} {target_type.value}: {value} (id={record.id})")
+    try:
+        result = TargetIntakeService(create_session_factory(settings.database_url), auth=LOCAL_CONTEXT).add(
+            target_type.value, value, organization=organization, provider=provider, tenant_key=tenant_key,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    action = "Created" if result.created else "Existing"
+    typer.echo(f"{action} {target_type.value}: {value} (id={result.identity})")
 
 
 @app.command("create-user")
@@ -389,103 +371,41 @@ def discover(
 ) -> None:
     settings = _settings()
     prepare_database(settings)
-    client = GitHubDiscoveryClient(settings)
-    session_factory = create_session_factory(settings.database_url)
-
-    with session_factory() as session:
-        storage = Storage(session)
-        discovered_repositories: list[str] = []
-        discovered_accounts: list[str] = []
-        organization_names: set[str] = set()
-        discovered_domain_exposures: list[str] = []
-        discovered_identity_correlations: list[str] = []
-
-        if target_type == DiscoverTargetType.ORGANIZATION and provider == "github-search":
-            try:
-                search_provider = get_domain_provider(provider, settings)
-                result = search_provider.search_target(storage, value, target_type="organization", tenant_key=tenant_key)
-                session.commit()
-            except (DomainProviderError, ValueError) as exc:
-                typer.echo(f"GitHub search failed: {exc}", err=True)
-                raise typer.Exit(code=1) from exc
-            payload = {"target_type": target_type.value, "value": value,
-                       "references": result.exposures, "accounts": result.identity_correlations,
-                       "warnings": result.warnings or []}
-            if json_output:
-                typer.echo(json.dumps(payload, indent=2))
-            else:
-                typer.echo(f"Found {len(result.exposures)} public reference(s) for {value}.")
-                for warning in result.warnings or []:
-                    typer.echo(f"warning: {warning}")
-            return
-
-        if target_type == DiscoverTargetType.DOMAIN:
-            from orgscan.services.scan_service import execute_domain_plan
-            try:
-                plan = resolve_scan_plan(target=value, target_type='domain', discovery_provider=provider,
-                                         tenant_key=tenant_key, settings=settings)
-                _, provider_result = execute_domain_plan(storage, plan, settings=settings)
-            except ValueError as exc:
-                raise typer.BadParameter(str(exc)) from exc
-            except RuntimeError as exc:
-                typer.echo("Domain discovery failed; inspect the recorded job", err=True)
-                raise typer.Exit(code=1) from exc
-            discovered_domain_exposures.extend(provider_result.exposures)
-            discovered_identity_correlations.extend(provider_result.identity_correlations)
-            session.commit()
-            response_payload = {
-                "target_type": target_type.value,
-                "value": value,
-                "domain_exposures": discovered_domain_exposures,
-                "identity_correlations": discovered_identity_correlations,
-                "warnings": provider_result.warnings or [],
-            }
-            if json_output:
-                typer.echo(json.dumps(response_payload, indent=2))
-            else:
-                typer.echo(
-                    f"Correlated domain {value}: "
-                    f"{len(discovered_domain_exposures)} exposure(s), {len(discovered_identity_correlations)} identity correlation(s)."
-                )
-                for warning in provider_result.warnings or []:
-                    typer.echo(f"warning: {warning}")
-            return
-
+    service = DiscoveryService(create_session_factory(settings.database_url), settings, auth=LOCAL_CONTEXT)
     try:
-        records = (
-            [client.fetch_repository(value)]
-            if target_type == DiscoverTargetType.REPOSITORY
-            else client.fetch_organization_repositories(value, limit=limit)
-        )
+        result = service.discover(target_type.value, value, limit=limit, provider=provider, tenant_key=tenant_key).payload
+    except DomainProviderError as exc:
+        if target_type == DiscoverTargetType.ORGANIZATION and provider == 'github-search':
+            typer.echo(f"GitHub search failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        typer.echo("Domain discovery failed; inspect the recorded job", err=True)
+        raise typer.Exit(code=1) from exc
+    except ValueError as exc:
+        if target_type == DiscoverTargetType.ORGANIZATION and provider == 'github-search':
+            typer.echo(f"GitHub search failed: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        raise typer.BadParameter(str(exc)) from exc
     except DiscoveryError as exc:
         typer.echo(f"Discovery failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    except RuntimeError as exc:
+        typer.echo("Domain discovery failed; inspect the recorded job", err=True)
+        raise typer.Exit(code=1) from exc
 
-    with session_factory() as session:
-        storage = Storage(session)
-        discovered = GitHubExpansionEngine(client, storage).ingest_repository_records(
-            records,
-            endpoint=(f"/repos/{value}" if target_type == DiscoverTargetType.REPOSITORY
-                      else f"/orgs/{value}/repos?per_page={limit}"),
-            tenant_key=tenant_key,
-        )
-        discovered_repositories = discovered["repositories"]
-        discovered_accounts = discovered["accounts"]
-        organization_names = discovered["organizations"]
-        session.commit()
-
-    result = {
-        "target_type": target_type.value,
-        "value": value,
-        "repositories": discovered_repositories,
-        "accounts": discovered_accounts,
-        "organizations": sorted(organization_names),
-    }
     if json_output:
         typer.echo(json.dumps(result, indent=2))
+    elif target_type == DiscoverTargetType.ORGANIZATION and provider == 'github-search':
+        typer.echo(f"Found {len(result['references'])} public reference(s) for {value}.")
+        for warning in result['warnings']:
+            typer.echo(f"warning: {warning}")
+    elif target_type == DiscoverTargetType.DOMAIN:
+        typer.echo(f"Correlated domain {value}: {len(result['domain_exposures'])} exposure(s), "
+                   f"{len(result['identity_correlations'])} identity correlation(s).")
+        for warning in result['warnings']:
+            typer.echo(f"warning: {warning}")
     else:
-        typer.echo(f"Discovered {len(discovered_repositories)} repository record(s).")
-        for repository_name in discovered_repositories:
+        typer.echo(f"Discovered {len(result['repositories'])} repository record(s).")
+        for repository_name in result['repositories']:
             typer.echo(f"  - {repository_name}")
 
 
@@ -501,34 +421,20 @@ def expand(
 ) -> None:
     settings = _settings()
     prepare_database(settings)
-    client = GitHubDiscoveryClient(settings)
-    session_factory = create_session_factory(settings.database_url)
-    with session_factory() as session:
-        storage = Storage(session)
-        engine = GitHubExpansionEngine(client, storage)
-        try:
-            result = (
-                engine.expand_repository(value, limit=limit)
-                if target_type == ExpandTargetType.REPOSITORY
-                else engine.expand_organization(value, limit=limit)
-            )
-            session.commit()
-        except DiscoveryError as exc:
-            typer.echo(f"Expansion failed: {exc}", err=True)
-            raise typer.Exit(code=1) from exc
-    payload = {
-        "target_type": target_type.value,
-        "value": value,
-        "repositories": result.repositories,
-        "accounts": result.accounts,
-        "relationships": result.relationships,
-    }
+    service = DiscoveryService(create_session_factory(settings.database_url), settings, auth=LOCAL_CONTEXT)
+    try:
+        payload = service.expand(target_type.value, value, limit=limit)
+    except DiscoveryError as exc:
+        typer.echo(f"Expansion failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     if json_output:
         typer.echo(json.dumps(payload, indent=2))
     else:
         typer.echo(
-            f"Expanded {value}: {len(result.repositories)} repositories, "
-            f"{len(result.accounts)} accounts, {result.relationships} relationships."
+            f"Expanded {value}: {len(payload['repositories'])} repositories, "
+            f"{len(payload['accounts'])} accounts, {payload['relationships']} relationships."
         )
 
 

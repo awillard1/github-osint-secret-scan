@@ -18,5 +18,5 @@ def page(payload, *, assessment=None, filters=None):
                       'to_kind': target.get('entity_type', ''),
                       'reason': reason[:300] if reason else None})
     return render('pages/relationships.html', title='Relationships',
-                  active_section='relationships', assessment=assessment, payload=payload,
+                  active_section='assessments' if assessment else 'relationships', assessment=assessment, payload=payload,
                   nodes=list(nodes.values()), edges=edges, filters=filters or {})

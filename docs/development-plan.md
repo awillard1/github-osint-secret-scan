@@ -35,7 +35,7 @@ Exit:
 
 Goal: reduce change amplification in large presentation modules.
 
-Status: **partial**. Finding-management adapters and Phase 18 shared asset/domain services are implemented; substantial API upload and CLI discovery orchestration remains. The [roadmap](roadmap.md#phase-1--initial-finding-management-decomposition) records compatibility, validation and the exact remaining decomposition items; this does not mark the entire phase complete.
+Status: **partial**. Finding-management adapters, shared asset/domain services, artifact upload scanning, and standalone CLI discovery/intake services are implemented. Connection-bound assessment discovery remains in its existing services; other API/CLI orchestration remains. The [roadmap](roadmap.md#phase-1--initial-finding-management-decomposition) records compatibility, validation and the exact remaining decomposition items; this does not mark the entire phase complete.
 
 Deliverables:
 

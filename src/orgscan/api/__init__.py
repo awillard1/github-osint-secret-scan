@@ -2,12 +2,6 @@ from __future__ import annotations
 
 from orgscan.redaction import safe_output, redact
 from orgscan.api.limits import RequestBodyLimit, read_upload
-from orgscan.archive_limits import tar_stream, check_zip_directory
-from hashlib import sha256
-
-import tarfile
-import tempfile
-import zipfile
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -22,7 +16,6 @@ from orgscan.bootstrap import optional_tool_inventory
 from orgscan.config import Settings, get_settings
 from orgscan.db import prepare_database, create_session_factory
 from orgscan.models import ScanJob, ToolRun
-from orgscan.runner import execute_scan
 from orgscan.reporting import (
     build_summary,
     finding_rows,
@@ -54,9 +47,8 @@ from orgscan.api.routes.reports import create_report_router
 from orgscan.services.dashboard_service import DashboardService
 from orgscan.scanners import get_registry
 from orgscan.services.scanner_service import artifact_scanner_options, scanner_inventory
-from orgscan.services.scan_plan import resolve_scan_plan
 from orgscan.services.target_service import resolve_asset_context
-from orgscan.services.scan_service import execute_plan, result_payload
+from orgscan.services.artifact_service import ArtifactScanService, ArtifactInputError
 from orgscan.scanners.external import ScannerExecutionError
 
 MAX_ARTIFACT_UPLOAD_BYTES = 10_000_000
@@ -216,6 +208,7 @@ class OrgscanApiService:
         from orgscan.storage.authorization import authorized_session_factory
         self.session_factory = authorized_session_factory(create_session_factory(self.database_url))
         self.finding_service = FindingService(self.session_factory)
+        self.artifact_service = ArtifactScanService(self.session_factory, self.settings)
 
     def _access_context_note(self) -> str:
         from orgscan.security_context import current_auth
@@ -343,66 +336,18 @@ class OrgscanApiService:
         repository: str | None,
         provider: str,
     ) -> dict[str, object]:
-        artifact_name = _safe_artifact_name(filename)
-        if not content:
-            raise HTTPException(status_code=400, detail="Uploaded artifact is empty.")
-        if len(content) > MAX_ARTIFACT_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail="Uploaded artifact exceeds the allowed size limit.")
-
         try:
-            with tempfile.TemporaryDirectory(prefix="orgscan-artifact-") as temp_dir:
-                workspace = Path(temp_dir)
-                artifact_path = workspace / artifact_name
-                artifact_path.write_bytes(content)
-                archive_type = _archive_type(artifact_path)
-                scan_target = artifact_path
-                extracted = False
-
-                if archive_type is not None:
-                    extracted_root = workspace / "extracted"
-                    extracted_root.mkdir()
-                    try:
-                        extracted_files = (
-                            _extract_zip_artifact(artifact_path, extracted_root)
-                            if archive_type == "zip"
-                            else _extract_tar_artifact(artifact_path, extracted_root)
-                        )
-                    except (tarfile.TarError, zipfile.BadZipFile, ValueError) as exc:
-                        raise HTTPException(status_code=400, detail=f"Invalid uploaded archive: {exc}") from exc
-                    if extracted_files == 0:
-                        raise HTTPException(status_code=400, detail="Uploaded archive does not contain any regular files.")
-                    scan_target = extracted_root
-                    extracted = True
-
-                with self.session_factory() as session:
-                    storage = Storage(session)
-                    organization_id, repository_id = self._resolve_asset_context(
-                        storage,
-                        organization=organization,
-                        repository=repository,
-                        provider=provider,
-                    )
-                    plan = resolve_scan_plan(target=str(scan_target), target_type="artifact", profile=profile,
-                                             scanners=[scanner_name] if scanner_name else None, settings=self.settings,
-                                             organization_id=organization_id, repository_id=repository_id)
-                    results = execute_plan(
-                        storage, plan, settings=self.settings,
-                        target_label=artifact_name,
-                        canonical_root=Path("/orgscan-artifacts") / sha256(artifact_name.encode()).hexdigest(),
-                        command_line=f"api artifact scan {artifact_name} --scanners {','.join(plan.scanners)}",
-                        parameters_json={
-                            "artifact_name": artifact_name,
-                            "artifact_kind": archive_type or "file",
-                            "extracted": extracted,
-                            "scanner": plan.scanners[0],
-                        },
-                    )
+            return self.artifact_service.scan_upload(
+                filename=filename, content=content, scanner_name=scanner_name,
+                profile=profile, organization=organization, repository=repository,
+                provider=provider,
+            )
+        except ArtifactInputError as exc:
+            raise HTTPException(status_code=413 if exc.code == "too_large" else 400, detail=str(exc)) from exc
         except ScannerExecutionError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        return {**result_payload(results), "artifact_name": artifact_name, "extracted": extracted}
 
     @safe_output
     def _finding_html_payload(self, finding_id: int) -> dict[str, object] | None:

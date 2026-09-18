@@ -79,18 +79,18 @@ def graph(assessment,payload,filters=None):
 
 
 def connections(payload,tenant):
-    return render('pages/github_connections.html',title='GitHub connections',active_section='assessments',
+    return render('pages/github_connections.html',title='GitHub connections',active_section='settings',
                   payload=payload,tenant=tenant)
 
 
-def local_ai(config,tenant):
-    return render('pages/local_ai_settings.html',title='Local AI settings',active_section='assessments',
-                  config=config,tenant=tenant)
+def local_ai(config,tenant,*,tested=False,saved=False):
+    return render('pages/local_ai_settings.html',title='Local AI settings',active_section='settings',
+                  config=config,tenant=tenant,tested=tested,saved=saved)
 
 
-def advice(assessment,payload):
+def advice(assessment,payload,jobs=None):
     return render('pages/assessment_ai.html',title=assessment['name']+' — Local AI',
-                  active_section='assessments',assessment=assessment,payload=payload)
+                  active_section='assessments',assessment=assessment,payload=payload,jobs=jobs or {'items':[]})
 
 
 def reports(assessment):

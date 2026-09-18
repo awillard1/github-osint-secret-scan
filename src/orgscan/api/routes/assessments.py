@@ -187,9 +187,7 @@ def create_assessment_router(settings):
 
     @router.post('/local-ai/test')
     def ai_test(tenant:str):
-        from orgscan.storage.assessments import AssessmentStorage
-        with ai.factory() as s:AssessmentStorage(s).tenant(tenant,'admin')
-        return call(ai.health,tenant)
+        return call(ai.test_generation,tenant)
 
     @router.get('/assessments/{identity}/ai')
     def advice(identity:int,limit:int=50,offset:int=0):return call(ai.advice,identity,limit=limit,offset=offset)
@@ -202,7 +200,8 @@ def create_assessment_router(settings):
     @router.post('/dashboard/settings/local-ai',response_class=HTMLResponse)
     def ai_settings_save(tenant:str=Form(...),enabled:bool=Form(False),base_url:str=Form(...),model:str=Form(''),action:str=Form('save')):
         config=call(ai.configure,tenant,enabled=enabled,base_url=base_url,model=model)
-        return ui.local_ai(call(ai.health,tenant) if action=='test' else config,tenant)
+        return ui.local_ai(call(ai.test_generation,tenant) if action=='test' else config,tenant,
+                           tested=action=='test',saved=True)
 
     @router.post('/assessments/{identity}/artifacts')
     @router.post('/dashboard/assessments/{identity}/artifacts')
@@ -414,7 +413,8 @@ def create_assessment_router(settings):
             if repository_id and (not repository_id.isdigit() or len(repository_id)>18):raise HTTPException(422,'Repository ID must be a positive integer')
             filters=dict(confidence=confidence or None,severity=severity or None,status=status or None,source_tool=source_tool or None,category=category or None,repository_id=int(repository_id) if repository_id else None,lifecycle_state=lifecycle_state or None,domain_id=domain_id,account_id=account_id,organization_id=organization_id,credential_type=credential_type or None,first_seen_after=first_seen_after or None,last_seen_after=last_seen_after or None)
             return ui.findings(assessment,call(work.findings,identity,offset=offset,**filters),filters)
-        if tab=='ai':return ui.advice(assessment,call(ai.advice,identity,offset=offset))
+        if tab=='ai':return ui.advice(assessment,call(ai.advice,identity,offset=offset),
+                                    call(jobs.progress,identity,kind='ai',limit=20))
         if tab=='reports':
             return ui.reports(assessment)
         if tab=='overview':
@@ -473,6 +473,7 @@ def create_assessment_router(settings):
                      'branch_policy':data.get('branch_policy','default-only'),'mode':data.get('mode') or None}
         elif kind=='ai':
             options={'purpose':data.get('purpose','summary')}
+            if data.get('entity_type'):options['entity_type']=str(data['entity_type'])
             if data.get('entity_id'):
                 try:options['entity_id']=int(data['entity_id'])
                 except ValueError:raise HTTPException(422,'Entity ID must be an integer') from None
@@ -507,7 +508,8 @@ def create_assessment_router(settings):
     @router.post('/dashboard/assessments/{identity}/runs/{run_id}/retry')
     def retry_post(identity:int,run_id:int):
         result=call(jobs.retry,identity,run_id)
-        return RedirectResponse(f'/dashboard/assessments/{identity}/'+('discovery' if result['kind']=='discovery' else 'recon-results?tab=domains' if result['kind']=='http_probe' else 'scans'),303)
+        section='discovery' if result['kind']=='discovery' else 'recon-results?tab=domains' if result['kind']=='http_probe' else 'ai' if result['kind']=='ai' else 'scans'
+        return RedirectResponse(f'/dashboard/assessments/{identity}/{section}',303)
 
     @router.post('/dashboard/assessments/{identity}/runs/{run_id}/cancel')
     def cancel_run_post(identity:int,run_id:int):

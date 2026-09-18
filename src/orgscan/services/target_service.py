@@ -1,6 +1,90 @@
 """Resolve asset ownership consistently before executing or scheduling work."""
 from dataclasses import dataclass
-from orgscan.security_context import AuthorizationError, current_auth
+from contextlib import contextmanager
+import re
+from orgscan.security_context import AuthorizationError, current_auth, LOCAL_CONTEXT
+from orgscan.services.relationship_service import public_domain
+
+
+@contextmanager
+def discovery_scope(auth, tenant_key=None):
+    """Bind an explicit caller identity to storage and provider operations."""
+    if auth is None:
+        raise AuthorizationError('Discovery requires an authorization context')
+    active = current_auth.get()
+    if active is not None and active.authenticated and active != auth:
+        raise AuthorizationError('Discovery authorization context does not match caller')
+    if auth is not LOCAL_CONTEXT and (
+        not auth.authenticated or not auth.allows_role('analyst') or
+        tenant_key is None or not auth.allows_tenant(tenant_key)
+    ):
+        raise AuthorizationError('Discovery tenant scope is not authorized')
+    marker = current_auth.set(auth)
+    try:
+        yield
+    finally:
+        current_auth.reset(marker)
+
+
+def normalize_intake_target(target_type: str, value: str) -> str:
+    """Validate the legacy CLI asset identity without requiring an assessment connection."""
+    value = value.strip()
+    if not value or len(value) > 253 or any(ord(char) < 32 for char in value):
+        raise ValueError('Invalid target identity')
+    if target_type == 'domain':
+        domain = public_domain(value)
+        if domain is None:
+            raise ValueError('Invalid domain target')
+        return domain
+    segment = r'[A-Za-z0-9_.-]+'
+    pattern = segment + '/' + segment if target_type == 'repository' else segment
+    if target_type not in {'organization', 'repository', 'account'} or not re.fullmatch(pattern, value):
+        raise ValueError('Invalid target identity')
+    if any(part in {'.', '..'} for part in value.split('/')):
+        raise ValueError('Invalid target identity')
+    return value
+
+
+@dataclass(frozen=True)
+class IntakeResult:
+    target_type: str
+    value: str
+    identity: int
+    created: bool
+
+
+class TargetIntakeService:
+    def __init__(self, session_factory, *, auth):
+        self.session_factory = session_factory
+        self.auth = auth
+
+    def add(self, target_type: str, value: str, *, organization: str | None = None,
+            provider: str = 'github', tenant_key: str | None = None) -> IntakeResult:
+        from orgscan.repositories import Storage
+        normalized = normalize_intake_target(target_type, value)
+        organization = normalize_intake_target('organization', organization) if organization else None
+        if tenant_key is not None and (not tenant_key.strip() or len(tenant_key) > 253):
+            raise ValueError('Invalid tenant scope')
+        if target_type != 'organization' and tenant_key is not None and organization is None:
+            raise ValueError('Tenant-scoped assets require an organization')
+        with discovery_scope(self.auth, tenant_key):
+            with self.session_factory() as session:
+                storage = Storage(session)
+                organization_id = None
+                if organization:
+                    org, _ = storage.get_or_create_organization(organization, tenant_key=tenant_key)
+                    organization_id = org.id
+                if target_type == 'organization':
+                    record, created = storage.get_or_create_organization(normalized, tenant_key=tenant_key)
+                elif target_type == 'domain':
+                    record, created = storage.get_or_create_domain(normalized, organization_id=organization_id)
+                elif target_type == 'repository':
+                    record, created = storage.get_or_create_repository(normalized, organization_id=organization_id, provider=provider)
+                else:
+                    record, created = storage.get_or_create_account(normalized, organization_id=organization_id, provider=provider)
+                identity = record.id
+                session.commit()
+        return IntakeResult(target_type, normalized, identity, created)
 
 
 def resolve_asset_context(storage, *, organization, repository, provider, tenant_key=None):

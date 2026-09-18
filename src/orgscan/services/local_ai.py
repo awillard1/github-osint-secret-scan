@@ -3,15 +3,17 @@ import hashlib
 import json
 import os
 from contextlib import contextmanager
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from orgscan import models as m
-from orgscan.ai.ollama import OllamaProvider, AIUnavailable, POLICY, endpoint, model_name
+from orgscan.ai.ollama import OllamaProvider, AIUnavailable, POLICY, SYSTEM, Advice, endpoint, model_name
 from orgscan.services.assessments.service import AssessmentService
-from orgscan.services.assessments.workbench import AssessmentWorkbench
+from orgscan.services.assessments.ai_projection import AssessmentAIProjection, PROJECTION_VERSION, TARGET_KINDS
 from orgscan.storage.assessments import AssessmentStorage, fields
 
-PURPOSES=('summary','correlations','triage','repository','finding')
+PURPOSES=('summary','correlations','triage','repository','finding','target')
+SCHEMA_VERSION='advisory-json-v2'
 
 
 @contextmanager
@@ -29,6 +31,20 @@ def generation_slot(settings):
 
 
 class AIService(AssessmentService):
+    @staticmethod
+    def selection(purpose,entity_id=None,entity_type=None):
+        if purpose not in PURPOSES:raise ValueError('Unsupported AI advisory purpose')
+        if purpose in ('repository','finding'):
+            if entity_type not in (None,purpose):raise ValueError('Advisory entity type does not match purpose')
+            entity_type=purpose if entity_id is not None else None
+        elif purpose=='target':
+            if entity_type not in TARGET_KINDS:raise ValueError('Unsupported advisory target type')
+        elif entity_type is not None or entity_id is not None:
+            raise ValueError('Entity selection requires target, repository or finding advice')
+        if entity_type is not None and (type(entity_id) is not int or entity_id<1):
+            raise ValueError('Choose a positive advisory target ID')
+        return entity_type
+
     def configuration(self,tenant):
         with self.factory() as s:
             st=AssessmentStorage(s);st.tenant(tenant)
@@ -62,80 +78,75 @@ class AIService(AssessmentService):
         result=self.provider(config).health()
         with self.factory() as s:return AssessmentStorage(s).safe({**config,**result},tenant)
 
+    def test_generation(self,tenant):
+        """Check both model inventory and generation with inert synthetic input."""
+        with self.factory() as s:AssessmentStorage(s).tenant(tenant,'admin')
+        result=self.health(tenant)
+        if result['status']!='ready':return {**result,'generation_status':'not-run'}
+        try:
+            self.provider(result).generate(json.dumps({'purpose':'summary','assessment':'Synthetic local AI connection test.'}))
+        except AIUnavailable:
+            return {**result,'generation_status':'failed'}
+        return {**result,'generation_status':'passed'}
+
     def advice(self,identity,*,limit=50,offset=0):
         with self.factory() as s:
             st=AssessmentStorage(s);a=st.assessment(identity)
             total,rows=st.page(select(m.AIAdvice).where(m.AIAdvice.assessment_id==identity).order_by(m.AIAdvice.id.desc()),limit=limit,offset=offset)
             return st.safe({'total':total,'items':[fields(r) for r in rows]},a.tenant_key)
 
-    def analyze(self,identity,*,purpose='summary',entity_id=None):
-        if purpose not in PURPOSES:raise ValueError('Unsupported AI advisory purpose')
-        if entity_id is not None and (type(entity_id) is not int or entity_id<1 or purpose not in ('repository','finding')):
-            raise ValueError('Entity selection is supported for repository and finding advice only')
+    def analyze(self,identity,*,purpose='summary',entity_id=None,entity_type=None):
+        entity_type=self.selection(purpose,entity_id,entity_type)
         with self.factory() as s:
             st=AssessmentStorage(s);a=st.assessment(identity,'analyst');tenant=a.tenant_key
         config=self.configuration(tenant)
         if not config['enabled']:raise AIUnavailable('Local AI is disabled')
-        if purpose=='finding' and not self.settings.ai_allow_finding_context:
+        if (purpose=='finding' or entity_type=='finding') and not self.settings.ai_allow_finding_context:
             raise AIUnavailable('Finding context sharing is disabled')
-        work=AssessmentWorkbench(self.settings);limit=self.settings.ai_max_entities
-        # Every read is assessment-scoped, with complete tenant credential knowledge
-        # retained before selecting bounded metadata. No raw source files are read.
-        data={'purpose':purpose,'assessment':{k:v for k,v in work.detail(identity).items() if k in ('id','name','description','counts')}}
-        if purpose in ('summary','correlations'):
-            data['relationships']=work.graph(identity,limit=limit)
-        if purpose in ('summary','correlations','triage'):
-            rows=work.assets(identity,'recon_asset',limit=limit)['items']
-            data['recon']=[{'kind':r['entity']['kind'],'name':r['entity']['name'],
-                'sources':r['metadata_json'].get('sources',[]),'confidence':r['confidence'],
-                'observed':{key:(r['entity'].get('metadata_json') or {}).get(key) for key in ('status','title','tech','port','protocol','hostname')}} for r in rows]
-        if purpose in ('summary','finding') and self.settings.ai_allow_finding_context:
-            rows=work.findings(identity,limit=limit,**({'id':entity_id} if entity_id is not None else {}))['items']
-            if entity_id is not None:
-                rows=[r for r in rows if r['id']==entity_id]
-                if not rows:raise ValueError('Finding is outside the bounded assessment selection')
-            keys=('id','title','severity','confidence','category','repository_id','observed_by','lifecycle_state')
-            data['findings']=[{k:r.get(k) for k in keys} for r in rows]
-        if purpose in ('summary','triage','repository'):
-            kinds=('repository','account','domain') if purpose=='triage' else ('repository',)
-            for kind in kinds:
-                rows=work.assets(identity,kind,limit=limit,entity_id=entity_id)['items']
-                if entity_id is not None:
-                    rows=[r for r in rows if r['entity_id']==entity_id]
-                    if not rows:raise ValueError('Asset is outside the bounded assessment selection')
-                result=[]
-                for row in rows:
-                    entity=row['entity'];meta=entity.get('metadata_json') or {}
-                    result.append({'id':row['entity_id'],'association':row['confidence'],'reasons':row['metadata_json'].get('reasons',[]),
-                        'name':meta.get('remote_full_name') or meta.get('login') or entity.get('name'),
-                        'description':meta.get('description'),'topics':meta.get('topics'),'language':meta.get('language')})
-                data[kind]=result
+        data,meaningful=AssessmentAIProjection(self.settings).collect(
+            identity,purpose=purpose,entity_type=entity_type,entity_id=entity_id,
+            include_findings=self.settings.ai_allow_finding_context)
         with self.factory() as s:
             st=AssessmentStorage(s)
             data=st.safe(data,tenant)
-            data['selection_policy']={'max_entities_per_kind':limit,'source_code':False,'advisory_only':True,
-                'finding_context':self.settings.ai_allow_finding_context,'may_be_partial':True}
+            data['selection_policy']['advisory_only']=True
+            data['selection_policy']['finding_context']=self.settings.ai_allow_finding_context
             def serialized():return json.dumps(data,sort_keys=True,ensure_ascii=False,default=str)
             text=serialized()
             # Input selection happens only AFTER complete credential projection.
             # Reduce whole observations deterministically, never credential context.
-            omitted={}
             while len(text)>self.settings.ai_max_input_chars:
-                choices=[(key,value) for key,value in data.items() if isinstance(value,list) and len(value)>1]
+                choices=[(key,data[key]) for key in ('targets','assets','findings','runs','scan_jobs') if len(data[key])>1]
                 graph=data.get('relationships',{})
                 choices += [('relationships.'+key,value) for key,value in graph.items() if key in ('nodes','edges') and isinstance(value,list) and len(value)>1]
                 if not choices:raise AIUnavailable('AI input exceeds budget even with one observation per kind')
                 key,values=max(choices,key=lambda pair:len(json.dumps(pair[1],default=str)))
                 removed=len(values)-(len(values)+1)//2
                 del values[(len(values)+1)//2:]
-                omitted[key]=omitted.get(key,0)+removed
-                data['selection_policy']['omitted_for_budget']=omitted
+                data['selection_policy']['omitted'][key]=data['selection_policy']['omitted'].get(key,0)+removed
+                data['selection_policy']['may_be_partial']=True
                 text=serialized()
-            digest=hashlib.sha256(json.dumps([POLICY,config['base_url'],config['model'],text],ensure_ascii=False).encode()).hexdigest()
+            digest=hashlib.sha256(json.dumps([identity,entity_type,entity_id,POLICY,SYSTEM,SCHEMA_VERSION,
+                PROJECTION_VERSION,config['base_url'],config['model'],text],ensure_ascii=False).encode()).hexdigest()
             cached=s.scalar(select(m.AIAdvice).where(m.AIAdvice.assessment_id==identity,m.AIAdvice.fingerprint==digest))
             if cached:return st.safe({**fields(cached),'cached':True},tenant)
-        with generation_slot(self.settings):
-            output=self.provider(config).generate(text)
+        if meaningful:
+            with generation_slot(self.settings):
+                output=self.provider(config).generate(text)
+            try:
+                if len(json.dumps(output,ensure_ascii=False))>self.settings.ai_max_output_chars:
+                    raise AIUnavailable('Local AI returned oversized advisory output')
+                output=Advice.model_validate(output).model_dump(exclude_unset=True)
+            except (ValidationError,TypeError,ValueError) as error:
+                if isinstance(error,AIUnavailable):raise
+                raise AIUnavailable('Local AI returned malformed advisory output') from None
+        else:
+            output=Advice(classification='insufficient-evidence',confidence='unknown',
+                explanation='The selected scope has no findings or substantive observations in the supplied safe projection. No security conclusion can be drawn. Review recorded job and scan coverage before treating this as a clean result.',
+                suggested_tags=[],limitations=['No relevant findings or observations were available for this selection.']).model_dump()
+        output={**output,'schema_version':SCHEMA_VERSION,'projection_version':PROJECTION_VERSION,
+            'input_coverage':{'scope':data['scope'],'omitted':data['selection_policy']['omitted'],
+                'may_be_partial':data['selection_policy']['may_be_partial']}}
         # Treat model output as untrusted ordinary text, applying the same full
         # context again before persistence. Provider output never changes evidence.
         with self.factory() as s:

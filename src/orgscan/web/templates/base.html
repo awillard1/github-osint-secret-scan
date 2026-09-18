@@ -26,12 +26,12 @@
         <a href="/dashboard?high_signal_only=true" {% if active_section == 'findings' %}aria-current="page"{% endif %}>Findings</a>
         <a href="/dashboard/graph" {% if active_section == 'relationships' %}aria-current="page"{% endif %}>Relationships</a>
         <a href="/dashboard/queues/active-scans" {% if active_section == 'queues' %}aria-current="page"{% endif %}>Scan jobs</a>
-        <a href="/dashboard/settings/github">Connections &amp; tools</a>
+        <a href="/dashboard/settings/github" {% if active_section == 'settings' %}aria-current="page"{% endif %}>Connections &amp; tools</a>
       </nav>{% endif %}
       {% if auth %}
       <div class="identity">
         <span>{{ auth.name }}</span>
-        {% if auth.allows_role('admin') and '*' in auth.tenants %}<a href="/dashboard/users">Users</a>{% endif %}
+        {% if auth.allows_role('admin') and '*' in auth.tenants %}<a href="/dashboard/users" {% if active_section == 'users' %}aria-current="page"{% endif %}>Users</a>{% endif %}
         <form method="post" action="/logout">
           {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
           <button class="quiet-button">Sign out</button>

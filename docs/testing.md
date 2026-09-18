@@ -80,6 +80,10 @@ Maintain tests for:
 - artifact cleanup;
 - unsafe filename handling.
 
+`pytest tests/services/test_artifact_scan_service.py tests/test_api.py tests/assessments/test_artifacts.py tests/security/test_execution_and_paths.py tests/security/test_lifecycle_artifacts.py tests/api/test_scan_profiles.py` is the focused artifact boundary run. The direct service cases cover scan execution, tenant denial, invalid plans, size and archive rejection, scanner errors, workspace cleanup and safe archive diagnostics. API and assessment tests retain transport and queued-job compatibility.
+
+For standalone discovery and target intake, run `pytest tests/services/test_discovery_service.py tests/test_cli.py tests/test_discovery.py tests/services/test_relationship_service.py tests/services/test_github_search.py tests/assessments/test_recon.py tests/api/test_github_search_routes.py`. The direct service tests cover target reuse and tenant denial, bounded public GitHub ingestion, private-record rejection, domain-plan reuse, provider outcome classification, safe warnings and relationship provenance. Existing CLI, assessment and API tests retain adapter and queued-job contracts.
+
 ## Test organization
 
 Prefer test files aligned to architectural modules after decomposition:

@@ -236,6 +236,63 @@ def test_browser_csrf_and_ai_settings(service,client):
     assert browser.post('/dashboard/settings/local-ai',data={'tenant':'a','base_url':'http://localhost:11434','model':'test','csrf_token':csrf}).status_code==200
 
 
+def test_navigation_and_local_ai_test_feedback(service,client,monkeypatch):
+    from orgscan.ai.ollama import OllamaProvider, AIUnavailable
+    identity=service.create('a','AI navigation')['id']
+    def current(path,label):
+        response=client.get(path)
+        assert response.status_code==200,response.text
+        assert f'>{label}</a>' in response.text
+        assert f'aria-current="page">{label}</a>' in response.text
+        return response.text
+    current('/dashboard','Overview')
+    current('/dashboard?high_signal_only=true','Findings')
+    current('/dashboard/settings/local-ai','Connections &amp; tools')
+    current('/dashboard/settings/recon-tools','Connections &amp; tools')
+    current('/dashboard/graph','Relationships')
+    page=current(f'/dashboard/assessments/{identity}/relationships','Assessments')
+    assert 'aria-current="page">Relationships</a>' in page
+    page=current(f'/dashboard/assessments/{identity}/overview','Assessments')
+    assert 'aria-current="page">Overview</a>' in page
+    assert 'Choose an assessment' in client.get('/dashboard/settings/local-ai').text
+    settings={'tenant':'a','enabled':'true','base_url':'http://localhost:11434','model':'test','action':'test'}
+    monkeypatch.setattr(OllamaProvider,'health',lambda self:{'status':'ready','models':[{'name':'test','size':1}]})
+    monkeypatch.setattr(OllamaProvider,'generate',lambda self,text:{'classification':'review','confidence':'low','explanation':'ok','suggested_tags':[]})
+    success=client.post('/dashboard/settings/local-ai',data=settings)
+    assert success.status_code==200 and 'Test passed.' in success.text
+    assert 'Generate advice' in client.get(f'/dashboard/assessments/{identity}/ai').text
+    launch=client.post(f'/dashboard/assessments/{identity}/launch/ai',data={'purpose':'summary'},follow_redirects=False)
+    assert launch.status_code==303 and launch.headers['location'].endswith('/ai')
+    service.import_targets(identity,'example.gov')
+    target_id=service.targets(identity)['items'][0]['id']
+    target_launch=client.post(f'/dashboard/assessments/{identity}/launch/ai',data={
+        'purpose':'target','entity_type':'assessment_target','entity_id':str(target_id)},follow_redirects=False)
+    assert target_launch.status_code==303 and target_launch.headers['location'].endswith('/ai')
+    activity=client.get(f'/dashboard/assessments/{identity}/ai')
+    assert 'Recent AI jobs' in activity.text and 'Advisory job #' in activity.text
+    from orgscan import models as m
+    with service.factory() as session:
+        session.add(m.AIAdvice(assessment_id=identity,purpose='summary',provider='ollama',model='test',
+            policy_version='assessment-advice-v3',fingerprint='browser-safe-advice',output_json={
+                'classification':'review','confidence':'low','explanation':'Review the supplied evidence.',
+                'suggested_tags':['review'],'observed_facts':['A safe metadata fact'],
+                'mitigation':'Review configuration','limitations':['Coverage is partial'],
+                'input_coverage':{'may_be_partial':True,'omitted':{'findings':2}}}))
+        session.commit()
+    rendered=client.get(f'/dashboard/assessments/{identity}/ai')
+    assert rendered.status_code==200,rendered.text
+    assert 'Observed facts' in rendered.text and 'A safe metadata fact' in rendered.text
+    assert 'Partial input selection' in rendered.text and 'findings' in rendered.text
+    monkeypatch.setattr(OllamaProvider,'generate',lambda self,text:(_ for _ in ()).throw(AIUnavailable('sensitive diagnostic')))
+    failed=client.post('/dashboard/settings/local-ai',data=settings)
+    assert 'Generation test failed.' in failed.text
+    assert 'Generation failed</span>' in failed.text
+    assert 'sensitive diagnostic' not in failed.text
+    monkeypatch.setattr(OllamaProvider,'health',lambda self:{'status':'model-missing','models':[{'name':'other','size':1}]})
+    missing=client.post('/dashboard/settings/local-ai',data=settings)
+    assert 'selected model is not installed' in missing.text and 'other' in missing.text
+
+
 def test_findings_filter_accepts_empty_optional_form_fields(service,client):
     a=service.create('a','Filters')
     response=client.get(f'/dashboard/assessments/{a["id"]}/findings',params={'repository_id':'','severity':'high','confidence':'','status':'','source_tool':'','category':'','lifecycle_state':''})

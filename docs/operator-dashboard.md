@@ -1,5 +1,11 @@
 # Operator dashboard
 
+Primary navigation highlights the current workspace: overview, high-signal findings,
+assessment pages, standalone relationships, scan jobs, or connections and tools.
+Settings subnavigation and assessment steps separately mark the current page. Local
+AI settings display an explicit synthetic generation test result and link to the
+assessment AI workflow; assessment AI pages show queued job status and saved advice.
+
 ## Operator console presentation
 
 The console adds a shared autoescaped Jinja shell for the live dashboard, assessment

@@ -1,7 +1,7 @@
 """Batched scope review and canonical report/finding views for assessments."""
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from sqlalchemy import select,func
+from sqlalchemy import select,func,or_
 from orgscan import models as m
 from orgscan.storage.assessments import AssessmentStorage,ENTITY_MODELS,fields,assessment_reader
 from orgscan.services.assessments.service import AssessmentService
@@ -9,6 +9,130 @@ from orgscan.repositories import Storage
 
 
 class AssessmentWorkbench(AssessmentService):
+    def advisory_scan_jobs(self, identity, *, limit, repository_id=None):
+        """Only assessment-linked scan coverage, without raw parameters or errors."""
+        if not 1<=limit<=500:raise ValueError('Invalid advisory scan limit')
+        with self.factory() as session:
+            control=AssessmentStorage(session);assessment=control.assessment(identity)
+            query=self._asset_query(assessment,'scan_job')
+            if repository_id is not None:
+                query=query.where(m.ScanJob.parameters_json['scan_plan']['repository_id'].as_integer()==repository_id)
+            total,links=control.page(query.order_by(m.AssessmentEntity.id.desc()),limit=limit)
+            jobs={row.id:row for row in session.scalars(select(m.ScanJob).where(
+                m.ScanJob.id.in_([link.entity_id for link in links])))}
+            items=[{key:getattr(jobs[link.entity_id],key) for key in (
+                'id','target_type','scanner_name','status','created_at','updated_at','started_at','completed_at')}
+                for link in links]
+            return control.safe({'total':total,'items':items},assessment.tenant_key)
+
+    def advisory_assets_by_ids(self, identity, kind, ids):
+        if kind not in ENTITY_MODELS or len(ids)>100:
+            raise ValueError('Invalid advisory asset selection')
+        if not ids:return []
+        with self.factory() as session:
+            control=AssessmentStorage(session);assessment=control.assessment(identity)
+            model=ENTITY_MODELS[kind]
+            query=self._asset_query(assessment,kind).where(m.AssessmentEntity.entity_id.in_(ids))
+            links=list(session.scalars(query.order_by(m.AssessmentEntity.id)))
+            records={row.id:fields(row) for row in session.scalars(select(model).where(model.id.in_([r.entity_id for r in links])))}
+            return control.safe([{**fields(link),'entity':records[link.entity_id]} for link in links],assessment.tenant_key)
+
+    def advisory_organization(self, identity):
+        with self.factory() as session:
+            control=AssessmentStorage(session);assessment=control.assessment(identity)
+            row=control.entity(assessment,'organization',assessment.organization_id)
+            return control.safe({key:getattr(row,key) for key in (
+                'id','name','display_name','github_handle','description','metadata_json')},assessment.tenant_key)
+
+    def advisory_target(self, identity, target_id):
+        """Return one authorized target for a bounded advisory selection."""
+        with self.factory() as session:
+            control=AssessmentStorage(session);assessment=control.assessment(identity)
+            row=session.scalar(select(m.AssessmentTarget).where(
+                m.AssessmentTarget.assessment_id==identity,m.AssessmentTarget.id==target_id))
+            if row is None:raise LookupError('Target is outside this assessment')
+            return control.safe(fields(row),assessment.tenant_key)
+
+    def advisory_runs(self, identity, *, limit, target_id=None):
+        if not 1<=limit<=500:raise ValueError('Invalid advisory run limit')
+        with self.factory() as session:
+            control=AssessmentStorage(session);assessment=control.assessment(identity)
+            query=select(m.AssessmentRun).where(m.AssessmentRun.assessment_id==identity)
+            if target_id is not None:query=query.where(m.AssessmentRun.target_id==target_id)
+            total,runs=control.page(query.order_by(m.AssessmentRun.id.desc()),limit=limit)
+            schedule_ids=[run.scheduled_scan_id for run in runs]
+            schedules={row.id:row for row in session.scalars(select(m.ScheduledScan).where(m.ScheduledScan.id.in_(schedule_ids)))}
+            tasks={}
+            for task in session.scalars(select(m.QueueTask).where(m.QueueTask.scheduled_scan_id.in_(schedule_ids)).order_by(m.QueueTask.id)):
+                tasks[task.scheduled_scan_id]=task
+            scan_jobs={}
+            for job in session.scalars(select(m.ScanJob).where(
+                    m.ScanJob.parameters_json['scheduled_scan_id'].as_integer().in_(schedule_ids)).order_by(m.ScanJob.id)):
+                scan_jobs[job.parameters_json.get('scheduled_scan_id')]=job
+            result=[]
+            for run in runs:
+                schedule=schedules[run.scheduled_scan_id];task=tasks.get(schedule.id)
+                job=scan_jobs.get(schedule.id)
+                stages=(job.scope_json or {}).get('stages',{}) if job else {}
+                result.append({'id':run.id,'kind':run.kind,'target_id':run.target_id,
+                    'status':task.status if task else 'pending' if schedule.enabled else 'completed',
+                    'created_at':run.created_at,'queued_at':task.created_at if task else None,
+                    'started_at':task.started_at if task else None,'completed_at':task.completed_at if task else None,
+                    'failure_code':(task.metadata_json or {}).get('failure_code') if task else None,
+                    'attempts':task.attempt_count if task else 0,'scanner':job.scanner_name if job else schedule.scanner_name,
+                    'scan_job_id':job.id if job else task.result_scan_job_id if task else None,
+                    'stages':{name:{key:value.get(key) for key in ('status','mode','input_count','output_count',
+                        'result_count','failure_code','retry_count','started_at','completed_at') if key in value}
+                        for name,value in stages.items() if isinstance(value,dict)} if isinstance(stages,dict) else {}})
+            return control.safe({'total':total,'items':result},assessment.tenant_key)
+
+    def advisory_findings(self, identity, *, limit, finding_id=None, finding_ids=None,
+                          related_field=None, related_id=None, related_repositories=None):
+        """Finding and evidence metadata through the existing assessment reader."""
+        if not 1<=limit<=500:raise ValueError('Invalid advisory finding limit')
+        if related_field not in (None,'repository_id','domain_id','account_id','organization_id'):
+            raise ValueError('Unsupported finding association')
+        with self.factory() as session:
+            control=AssessmentStorage(session);assessment=control.assessment(identity)
+            with assessment_reader(Storage(session),assessment) as reader:
+                query=select(m.Finding)
+                if finding_id is not None:query=query.where(m.Finding.id==finding_id)
+                if finding_ids is not None:
+                    if len(finding_ids)>100:raise ValueError('Advisory finding selection exceeds limit')
+                    if finding_ids:predicates=[m.Finding.id.in_(finding_ids)]
+                    else:predicates=[]
+                else:predicates=[]
+                if related_repositories is not None and len(related_repositories)>100:
+                    raise ValueError('Related repository selection exceeds limit')
+                if related_field is not None:predicates.append(getattr(m.Finding,related_field)==related_id)
+                if related_repositories:predicates.append(m.Finding.repository_id.in_(related_repositories))
+                if predicates:query=query.where(or_(*predicates))
+                query=query.order_by(m.Finding.last_seen_at.desc(),m.Finding.id.desc())
+                total=reader.session.scalar(select(func.count()).select_from(query.order_by(None).subquery()))
+                rows=list(reader.session.scalars(query.limit(limit)))
+                reader.bind_finding_contexts(rows)
+                ids=[row.id for row in rows]
+                evidence_total=reader.session.scalar(select(func.count()).select_from(m.Evidence).where(m.Evidence.finding_id.in_(ids))) if ids else 0
+                evidence_columns=tuple(getattr(m.Evidence,key) for key in (
+                    'id','finding_id','source','source_url','repository_path','commit_sha','ref_name','line_start',
+                    'line_end','confidence','observed_at','related_entity_type','related_entity_id','source_class','query_used'))
+                evidence=list(reader.session.execute(select(*evidence_columns).where(m.Evidence.finding_id.in_(ids))
+                    .order_by(m.Evidence.observed_at.desc(),m.Evidence.id.desc()).limit(limit)).mappings()) if ids else []
+                evidence_by_finding={row.id:[] for row in rows}
+                for item in evidence:
+                    evidence_by_finding[item['finding_id']].append({key:value for key,value in item.items() if key!='finding_id'})
+                items=[]
+                for row in rows:
+                    item={key:getattr(row,key) for key in (
+                        'id','organization_id','repository_id','domain_id','account_id','scan_job_id','source_tool',
+                        'source_name','source_class','category','severity','confidence','title','description',
+                        'status','lifecycle_state','remediated_at','regressed_at','regression_count','triage_state',
+                        'triage_owner','remediation_due_date','remediation_hint','risk_score','detected_at',
+                        'first_seen_at','last_seen_at')}
+                    item['evidence']=evidence_by_finding[row.id]
+                    items.append(item)
+            return control.safe({'total':total,'evidence_total':evidence_total,'items':items},assessment.tenant_key)
+
     def _asset_query(self,a,kind,*,search='',visibility=None,archived=None,fork=None,confidence=None,source=None,scanned=None,updated_after=None,updated_before=None,entity_id=None):
         model=ENTITY_MODELS[kind];link=m.AssessmentEntity
         query=select(link).join(model,model.id==link.entity_id).where(link.assessment_id==a.id,link.entity_type==kind)

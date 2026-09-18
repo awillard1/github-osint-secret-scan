@@ -72,12 +72,13 @@ def test_same_domain_private_projection_and_exact_reveal(service,monkeypatch):
     captured=[]
     class Provider:
         def generate(self,payload,**kwargs):
-            captured.append(str(payload));return {'summary':'Local summary','limitations':[]}
+            captured.append(str(payload));return {'classification':'review','confidence':'low',
+                'explanation':'Local summary','suggested_tags':[],'limitations':[]}
     ai=AIService(settings)
     monkeypatch.setattr(ai,'provider',lambda config:Provider())
     ai.configure('a',enabled=True,base_url='http://127.0.0.1:11434',model='fixture')
     result=ai.analyze(assessments[0]['id'],purpose='triage')
-    assert result['output_json']['summary']=='Local summary'
+    assert result['output_json']['explanation']=='Local summary'
     assert captured
     assert all(secret not in ''.join(captured) for _,_,_,secret,_ in records)
     assert 'only-b' not in ''.join(captured)

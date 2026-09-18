@@ -3,7 +3,7 @@ import hashlib
 import os
 import re
 from pathlib import Path
-from tempfile import TemporaryDirectory,mkstemp
+from tempfile import mkstemp
 from contextlib import contextmanager
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlalchemy import select
@@ -11,7 +11,7 @@ from orgscan import models as m
 from orgscan.repositories import Storage
 from orgscan.storage.assessments import AssessmentStorage,fields
 from orgscan.services.assessments.service import AssessmentService
-from orgscan.services.artifact_service import _safe_artifact_name,_archive_type,_extract_zip_artifact,_extract_tar_artifact
+from orgscan.services.artifact_service import _safe_artifact_name, prepare_artifact
 
 
 class AssessmentArtifacts(AssessmentService):
@@ -68,14 +68,7 @@ class AssessmentArtifacts(AssessmentService):
 
     @contextmanager
     def _prepare(self,content,name):
-        with TemporaryDirectory(prefix='orgscan-assessment-upload-') as tmp:
-            root=Path(tmp);path=root/name;path.write_bytes(content)
-            kind=_archive_type(path)
-            if kind:
-                expanded=root/'expanded';expanded.mkdir()
-                count=(_extract_zip_artifact if kind=='zip' else _extract_tar_artifact)(path,expanded)
-                if not count:raise ValueError('Archive contains no regular files')
-                path=expanded
+        with prepare_artifact(content,name,prefix='orgscan-assessment-upload-') as (path,_,_):
             yield path
 
     @contextmanager
