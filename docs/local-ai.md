@@ -63,9 +63,12 @@ Per-tenant endpoints are tested in Settings. Endpoint URLs permit only HTTP(S)
 origins without credentials, queries or paths; redirects are disabled.
 
 The adapter uses Ollama's documented [model inventory](https://docs.ollama.com/api/tags)
-and [non-streaming generation](https://docs.ollama.com/api/generate) endpoints.
-Responses must validate against a small advisory JSON schema. Malformed, oversized,
-incomplete or timed-out responses produce safe failures without storing prompts.
+and [non-streaming chat](https://docs.ollama.com/api/chat) endpoints. It sends a
+compact JSON schema compatible with Ollama's grammar and validates the full
+advisory model afterward. For GPT-OSS it requests low reasoning effort and keeps
+the model's default sampling temperature; the separate thinking trace is
+discarded. Malformed, oversized, incomplete or timed-out responses produce safe
+failures without storing prompts or thinking.
 
 ## Data and authority
 

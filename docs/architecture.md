@@ -559,6 +559,9 @@ records from the existing authorized workbench. Workbench advisory reads include
 finding/evidence metadata, assessment-linked scan status and run coverage without source snippets or protected
 evidence. `AIService` applies complete tenant credential sanitization before
 character-budget reduction, cache identity and strict JSON output validation.
+The Ollama transport uses bounded chat requests with a grammar-compatible JSON
+schema, then validates the full advisory contract. Model reasoning traces are
+neither surfaced nor persisted.
 
 
 ## Assessment continuation validation (2026-09-15)

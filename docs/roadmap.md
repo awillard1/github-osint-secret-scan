@@ -445,6 +445,9 @@ AI launch/retry actions and active advice status now update in place through an
 authorized HTML fragment, with browser fallback and bounded polling. Assessment
 run projections show unavailable when a historical run has no schedule record,
 instead of failing the AI or scan page.
+The Ollama adapter now uses non-streaming chat with a compact grammar-compatible
+schema and full advisory validation. GPT-OSS uses low reasoning effort and its
+default temperature; thinking output is discarded.
 
 Optional assessment advice now draws on a bounded, authorized safe projection of
 targets, assets, observations, relationships, finding/evidence metadata, scan status and run

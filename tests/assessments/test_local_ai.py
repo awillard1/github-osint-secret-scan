@@ -65,18 +65,30 @@ def test_ollama_protocol_and_validation(service,monkeypatch):
     def request(path,payload=None):
         requests.append((path,payload))
         if path=='/api/tags':return {'models':[{'name':'local-model','size':1024}]}
-        return {'done':True,'response':json.dumps(ADVICE)}
+        return {'done':True,'message':{'role':'assistant','content':json.dumps(ADVICE),
+                                      'thinking':'private model reasoning'}}
     monkeypatch.setattr(provider,'_request',request)
     assert provider.health()['status']=='ready'
     assert provider.generate('safe data')==ADVICE
+    assert requests[-1][0]=='/api/chat'
     assert requests[-1][1]['stream'] is False
     assert 'tools' not in requests[-1][1]
+    assert [row['role'] for row in requests[-1][1]['messages']]==['system','user']
+    assert requests[-1][1]['format']['required']==['classification','confidence','explanation','suggested_tags']
+    assert all('anyOf' not in field for field in requests[-1][1]['format']['properties'].values())
+    assert 'private model reasoning' not in str(provider.generate('safe data'))
+    provider.model='gpt-oss:20b'
+    assert provider.generate('safe data')==ADVICE
+    assert requests[-1][1]['think']=='low'
+    assert 'temperature' not in requests[-1][1]['options']
     provider.model='missing'
     assert provider.health()['status']=='model-missing'
-    for response in ({'done':False,'response':'{}'},{'done':True,'response':'not json'}, {'done':True,'response':json.dumps({**ADVICE,'execute':'dangerous'})}):
+    for response in ({'done':False,'message':{'content':'{}'}},
+                     {'done':True,'message':{'content':'not json'}},
+                     {'done':True,'message':{'content':json.dumps({**ADVICE,'execute':'dangerous'})}}):
         monkeypatch.setattr(provider,'_request',lambda *args,r=response,**kw:r)
         with pytest.raises(AIUnavailable):provider.generate('safe data')
-    monkeypatch.setattr(provider,'_request',lambda *args,**kw:{'done':True,'response':'x'*(service.settings.ai_max_output_chars+1)})
+    monkeypatch.setattr(provider,'_request',lambda *args,**kw:{'done':True,'message':{'content':'x'*(service.settings.ai_max_output_chars+1)}})
     with pytest.raises(AIUnavailable,match='oversized'):provider.generate('safe data')
 
 

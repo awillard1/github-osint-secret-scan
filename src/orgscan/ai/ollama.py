@@ -44,6 +44,21 @@ class Advice(BaseModel):
     limitations: list[str] = Field(default_factory=list, max_length=20)
 
 
+def advisory_format():
+    """Use Ollama's supported schema subset; Advice remains the authority on output."""
+    schema=Advice.model_json_schema()
+    schema.pop('title',None)
+    for field in schema['properties'].values():
+        for key in ('title','default','maxLength','minLength','maxItems'):
+            field.pop(key,None)
+        variants=field.get('anyOf')
+        if variants and {v.get('type') for v in variants}=={'string','null'}:
+            field.pop('anyOf')
+            field['type']='string'
+    schema['required'].append('suggested_tags')
+    return schema
+
+
 class AIProvider(Protocol):
     def health(self) -> dict: ...
     def list_models(self) -> list[dict]: ...
@@ -125,10 +140,18 @@ class OllamaProvider:
         try:purpose=json.loads(text).get('purpose')
         except (ValueError,AttributeError):purpose=None
         instruction=tasks.get(purpose,'Explain the supplied observations and their limitations.')
-        response=self._request('/api/generate',{'model':self.model,'prompt':text,'system':SYSTEM+' Task: '+instruction,
-            'stream':False,'format':Advice.model_json_schema(),
-            'options':{'num_predict':self.settings.ai_max_output_tokens,'temperature':0}})
-        output=response.get('response')
+        options={'num_predict':self.settings.ai_max_output_tokens}
+        request={'model':self.model,'messages':[
+            {'role':'system','content':SYSTEM+' Task: '+instruction},
+            {'role':'user','content':text}],
+            'stream':False,'format':advisory_format(),'options':options}
+        if self.model.rsplit('/',1)[-1].split(':',1)[0]=='gpt-oss':
+            request['think']='low'
+        else:
+            options['temperature']=0
+        response=self._request('/api/chat',request)
+        message=response.get('message')
+        output=message.get('content') if isinstance(message,dict) else None
         if response.get('done') is not True or not isinstance(output,str) or len(output)>self.settings.ai_max_output_chars:
             raise AIUnavailable('Local AI returned incomplete or oversized output')
         try:
